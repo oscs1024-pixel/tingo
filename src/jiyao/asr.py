@@ -58,15 +58,18 @@ def _quiet():
         yield
         return
     buf = io.StringIO()
-    root = logging.getLogger()
-    level = root.level
-    logging.disable(logging.WARNING)
+    # 只压 FunASR 及其依赖的 logger。不能用 logging.disable：那是全局的，会把其他线程里 jiyao 自己的日志也吞掉
+    noisy = [logging.getLogger(n) for n in ("", "funasr", "modelscope", "modelscope_hub", "jieba", "root")]
+    levels = [lg.level for lg in noisy]
+    for lg in noisy:
+        lg.setLevel(logging.ERROR)
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             yield
     finally:
-        logging.disable(logging.NOTSET)
-        root.setLevel(level)  # FunASR 会把根 logger 调成 INFO，连带 httpx 等库开始刷日志
+        # FunASR 还会把根 logger 调成 INFO，连带 httpx 等库开始刷日志，所以一律恢复成进入前的级别
+        for lg, level in zip(noisy, levels, strict=True):
+            lg.setLevel(level)
 
 
 # 下面的 ffmpeg/ffprobe 都放进独立进程组：终端里按 Ctrl+C 时信号会发给整个前台进程组，

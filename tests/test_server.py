@@ -67,7 +67,7 @@ def test_rename_speakers_then_clear(client, root):
 def test_summarize_job_streams_and_saves(client, root, monkeypatch):
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
 
-    def fake_chat(cfg, prompt, on_token=None):
+    def fake_chat(cfg, prompt, on_token=None, think=True):
         assert "下周五（11月13日）" in prompt
         for part in ("# 新标题\n\n", "## 一句话总结\n", "改好了"):
             on_token(part)
@@ -86,7 +86,7 @@ def test_only_one_job_at_a_time(client, monkeypatch):
 
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
     gate = threading.Event()
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None: gate.wait(5) and "# T")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True: gate.wait(5) and "# T")
     assert client.post("/api/meetings/2026-11-02_1430_周会/summarize").status_code == 200
     assert client.post("/api/meetings/2026-11-02_1430_周会/summarize").status_code == 409
     gate.set()

@@ -103,3 +103,47 @@ def test_live_matches_offline_speakers_across_chunks(tmp_path, monkeypatch):
     assert turns[0].text.startswith("大家好")
     assert "二十五号上线" in tr.to_prompt_text()
     assert tr.duration_ms == pytest.approx(len(audio) / SR * 1000, abs=300)
+
+
+class _FakeModel:
+    """假的聚类后端：按第一维的正负分成两类，记录收到多少个声纹。"""
+
+    def __init__(self):
+        self.seen = []
+
+    def cb_model(self, x, oracle_num=None):
+        x = x.numpy()
+        self.seen.append(len(x))
+        return (x[:, 0] > 0).astype(int)
+
+
+def test_cluster_small_uses_backend_directly():
+    m = _FakeModel()
+    emb = np.random.default_rng(0).standard_normal((300, 192)).astype(np.float32)
+    labels = lv.cluster(m, emb)
+    assert m.seen == [300]
+    assert np.array_equal(labels, (emb[:, 0] > 0).astype(int))
+
+
+def test_cluster_large_subsamples_then_assigns_nearest():
+    rng = np.random.default_rng(0)
+    a, b = np.zeros(192), np.zeros(192)
+    a[0], b[0] = 5, -5
+    truth = rng.integers(0, 2, 6000)
+    emb = (np.where(truth[:, None] == 1, a, b) + rng.standard_normal((6000, 192))).astype(np.float32)
+    m = _FakeModel()
+    labels = lv.cluster(m, emb)
+    assert m.seen == [lv.CLUSTER_LIMIT]  # 只把抽样的那部分交给慢的聚类
+    assert np.mean(labels == truth) > 0.99
+
+
+@pytest.mark.slow
+def test_transcribe_file_chunks_long_audio(monkeypatch):
+    monkeypatch.setattr(lv, "MIN_CHUNK_S", 8.0)
+    monkeypatch.setattr(lv, "MAX_CHUNK_S", 16.0)
+    monkeypatch.setattr(lv, "SEARCH_S", 6.0)
+    progress = []
+    tr = lv.transcribe_file(FIXTURE, on_progress=progress.append)
+    assert len(progress) >= 3 and progress[-1] == pytest.approx(1.0, abs=0.01)
+    assert len(tr.speakers_in_order()) == 2
+    assert len(tr.turns()) == 7

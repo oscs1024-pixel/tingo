@@ -30,7 +30,9 @@ def test_split_chunks_respects_limit():
 
 
 def test_meta_filled_by_program(monkeypatch):
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None: "```markdown\n# 周会\n\n## 一句话总结\n好\n```")
+    monkeypatch.setattr(
+        sm, "_chat", lambda cfg, prompt, on_token=None, think=True: "```markdown\n# 周会\n\n## 一句话总结\n好\n```"
+    )
     tr = _tr()
     tr.rename(["张三"])
     out = sm.summarize(tr, LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2))
@@ -42,7 +44,7 @@ def test_meta_filled_by_program(monkeypatch):
 def test_prompt_carries_date_and_transcript(monkeypatch):
     seen = {}
 
-    def fake(cfg, prompt, on_token=None):
+    def fake(cfg, prompt, on_token=None, think=True):
         seen["prompt"] = prompt
         return "# T"
 
@@ -55,7 +57,7 @@ def test_prompt_carries_date_and_transcript(monkeypatch):
 def test_long_transcript_map_reduce(monkeypatch):
     prompts = []
 
-    def fake(cfg, prompt, on_token=None):
+    def fake(cfg, prompt, on_token=None, think=True):
         prompts.append(prompt)
         return "# 合并后" if "分段笔记" in prompt else "- 要点"
 
@@ -102,8 +104,38 @@ def test_annotate_dates_across_month_end():
 
 def test_prompt_dates_are_annotated(monkeypatch):
     seen = {}
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None: seen.setdefault("p", prompt) and "# T")
+    monkeypatch.setattr(
+        sm, "_chat", lambda cfg, prompt, on_token=None, think=True: seen.setdefault("p", prompt) and "# T"
+    )
     tr = Transcript("m.wav", 1000, [Sentence(0, 0, 900, "下周五交付。")])
     sm.summarize(tr, LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2))
     assert "下周五（11月13日）交付" in seen["p"]
     assert "下周：周一 11月9日" in seen["p"]
+
+
+def test_max_chars_follows_ollama_context(monkeypatch):
+    import httpx
+
+    class R:
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+
+    monkeypatch.setattr(
+        httpx, "post", lambda url, json, timeout: R({"parameters": "num_ctx                        16384"})
+    )
+    local = LLMConfig(base_url="http://localhost:11434/v1", model="qwen3-8b-jiyao")
+    assert sm.ollama_context(local) == 16384
+    assert sm.default_max_chars(local) == sm.LOCAL_CHUNK_CHARS  # 上下文够大也不切太大
+
+    monkeypatch.setattr(httpx, "post", lambda url, json, timeout: R({"parameters": ""}))
+    assert sm.default_max_chars(local) == 4000  # 没设 num_ctx：按保守默认
+
+    def boom(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", boom)
+    assert sm.default_max_chars(local) == 4000
+    assert sm.default_max_chars(LLMConfig(base_url="https://api.deepseek.com")) == 40000

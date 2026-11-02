@@ -123,17 +123,49 @@ def _is_local(cfg: LLMConfig) -> bool:
     return any(h in cfg.base_url for h in ("localhost", "127.0.0.1", ":11434"))
 
 
+CHARS_PER_TOKEN = 1.3  # 中文转写实测约 1.36 字/token，取保守值
+RESERVED_TOKENS = 3500  # 提示词、模型思考和输出要留的位置
+LOCAL_CHUNK_CHARS = 6000
+
+
 def default_max_chars(cfg: LLMConfig) -> int:
-    # 本地模型上下文通常只有 4k～8k token，远程模型普遍 64k 以上
-    return 6000 if _is_local(cfg) else 40000
+    """一次交给模型的转写最多多少字，超过就分段提炼再合并。
+
+    本地 Ollama 按模型实际的上下文长度（num_ctx）检查，上下文小就切得更碎：超过上下文时 Ollama 会悄悄截掉开头。
+    远程模型普遍 64k 以上。
+    """
+    if not _is_local(cfg):
+        return 40000
+    ctx = ollama_context(cfg) or 4096  # 没显式设置 num_ctx 时按 Ollama 的保守默认值
+    fits = int((ctx - RESERVED_TOKENS) * CHARS_PER_TOKEN)
+    # 上下文够大也不超过 LOCAL_CHUNK_CHARS：实测 8B 模型一次读 1.3 万字，纪要里的待办从 14 条掉到 6 条
+    return max(4000, min(LOCAL_CHUNK_CHARS, fits))
 
 
-def _chat(cfg: LLMConfig, prompt: str, on_token: Callable[[str], None] | None = None) -> str:
+def ollama_context(cfg: LLMConfig) -> int | None:
+    """问 Ollama 这个模型实际生效的上下文长度；问不到返回 None。"""
+    import httpx
+
+    root = re.sub(r"/v1/?$", "", cfg.base_url.rstrip("/"))
+    try:
+        data = httpx.post(f"{root}/api/show", json={"model": cfg.model}, timeout=5).json()
+    except Exception:  # noqa: BLE001 - 不是 Ollama 或连不上，都按默认值
+        return None
+    m = re.search(r"num_ctx\s+(\d+)", data.get("parameters") or "")
+    return int(m.group(1)) if m else None
+
+
+def _chat(cfg: LLMConfig, prompt: str, on_token: Callable[[str], None] | None = None, think: bool = True) -> str:
+    extra: dict = {}
+    if not think and _is_local(cfg):
+        # Ollama 的 OpenAI 兼容接口用 reasoning_effort=none 关掉 Qwen3 等模型的思考；只对本地生效，远程接口未必认这个值
+        extra["reasoning_effort"] = "none"
     stream = _client(cfg).chat.completions.create(
         model=cfg.model,
         messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
         temperature=0.2,
         stream=True,
+        extra_body=extra or None,
     )
     raw = ""
     shown = 0
@@ -207,7 +239,11 @@ def summarize(
                 on_stage(f"分段提炼 {i}/{len(chunks)}")
             notes.append(
                 f"### 第 {i} 段\n"
-                + _chat(cfg, CHUNK_PROMPT.format(index=i, total=len(chunks), meeting_date=dated, transcript=chunk))
+                + _chat(
+                    cfg,
+                    CHUNK_PROMPT.format(index=i, total=len(chunks), meeting_date=dated, transcript=chunk),
+                    think=False,  # 分段提炼主要是摘条目，不需要思考；最后合并时再思考
+                )
             )
         if on_stage:
             on_stage("合并成纪要")

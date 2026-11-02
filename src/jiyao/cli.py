@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from . import __version__, config
+from .log import get as get_logger
 from .meetings import (
     AUDIO,
     DEFAULT_ROOT,
@@ -32,6 +33,7 @@ app = typer.Typer(
 )
 console = Console()
 err = Console(stderr=True)
+log = get_logger()
 
 HotwordsOpt = Annotated[str | None, typer.Option("--hotwords", "-w", help="热词，逗号分隔：人名、项目代号、专有名词")]
 SpeakersOpt = Annotated[
@@ -83,7 +85,9 @@ def _process(
     summary: bool,
     push: bool,
 ) -> None:
-    from .asr import transcribe
+    import time
+
+    from .live import transcribe_file
 
     cfg = config.load()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,8 +97,12 @@ def _process(
         from .asr import _load_model
 
         _load_model()
-    with console.status(f"转写中：{audio.name}"):
-        tr = transcribe(audio, hotwords=words)
+    t = time.time()
+    with console.status(f"转写中：{audio.name}") as status:
+        tr = transcribe_file(
+            audio, hotwords=words, on_progress=lambda f: status.update(f"转写中：{audio.name}  {f:.0%}")
+        )
+    log.info("%s 文件转写完成：%.0f 秒音频，%.0f 秒", out_dir.name, tr.duration_ms / 1000, time.time() - t)
     if _interrupted:
         raise KeyboardInterrupt  # FunASR 会吞掉 Ctrl+C 并返回空结果，这里补回来
     _finish_transcript(tr, out_dir, speakers, meeting_date, summary, push)
@@ -164,6 +172,8 @@ def record(
     push: PushOpt = False,
 ) -> None:
     """开始录音，按 Ctrl+C 结束。录音时就边录边转，结束后很快出转写和纪要。"""
+    import time
+
     from .live import LiveTranscriber
     from .record import mixdown, record_until_interrupt, system_audio_supported
     from .transcript import fmt_ts
@@ -207,7 +217,16 @@ def record(
             try:
                 if live:
                     status.update("正在转写最后一段、区分说话人…")
+                    t = time.time()
                     tr = live.finish(final)
+                    log.info(
+                        "%s 结束录音后转写：%.1f 秒（%d 个声纹聚类 %.1f 秒）%s",
+                        out_dir.name,
+                        time.time() - t,
+                        live.timings.get("voiceprints", 0),
+                        live.timings.get("cluster_s", 0),
+                        f"，边录边转出错：{live.error!r}" if live.error else "",
+                    )
                 status.update("正在保存录音…")
                 mixdown(out_dir).rename(final)
             finally:

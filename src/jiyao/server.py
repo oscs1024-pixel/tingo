@@ -22,10 +22,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__, config, meetings
+from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
 from .transcript import Transcript, fmt_ts
 
 WEB_DIR = Path(__file__).with_name("web")
+log = get_logger()
 
 
 @dataclass
@@ -97,6 +99,7 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     def fail(job: Job, e: Exception) -> None:
         job.state, job.error = "error", str(e) or e.__class__.__name__
+        log.error("%s %s 失败：%s", job.kind, job.meeting, job.error, exc_info=e)
 
     # ---------- 处理流程 ----------
 
@@ -113,18 +116,28 @@ def create_app(root: Path | None = None) -> FastAPI:
             job.stage = s
             job.minutes = ""
 
+        t = time.time()
         text = summarize(tr, cfg.llm, meeting_date=meetings.meeting_date(out), on_token=on_token, on_stage=on_stage)
         (out / MINUTES).write_text(text, encoding="utf-8")
         job.minutes = text
+        log.info("%s 纪要完成：模型 %s，%.0f 秒", out.name, cfg.llm.model, time.time() - t)
 
     def run_process(job: Job, audio: Path, out: Path, hotwords: list[str]) -> None:
         from . import asr
+        from .live import transcribe_file
 
         try:
             job.state = "loading"
             asr._load_model()
             job.state = "transcribing"
-            tr = asr.transcribe(audio, hotwords=config.load().hotwords + hotwords)
+            t = time.time()
+            tr = transcribe_file(
+                audio,
+                hotwords=config.load().hotwords + hotwords,
+                on_progress=lambda f: setattr(job, "stage", f"{f:.0%}"),
+            )
+            job.stage = ""
+            log.info("%s 文件转写完成：%s，%.0f 秒", out.name, fmt_ts(tr.duration_ms), time.time() - t)
             if not tr.sentences:
                 raise RuntimeError("没有识别出任何语音")
             meetings.save_transcript(tr, out)
@@ -340,6 +353,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         live = LiveTranscriber(out, rec.sources, hotwords=config.load().hotwords + req.hotwords)
         live.start()
         state["recording"], state["hotwords"], state["live"] = rec, req.hotwords, live
+        log.info("%s 开始录音：%s", out.name, "+".join(rec.sources))
         return asdict(job)
 
     @app.post("/api/record/stop")
@@ -356,21 +370,53 @@ def create_app(root: Path | None = None) -> FastAPI:
 
             out = root / job.meeting
             final = out / AUDIO
+            stopped = time.time()
             try:
                 rec.stop_capture()
                 job.state = "finalizing"
                 tr = live.finish(final) if live else None  # 原始音轨合成前先把最后几秒转完
-                mixdown(out).rename(final)
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
                 return
+            if live:
+                log.info(
+                    "%s 结束录音后转写：%.1f 秒（剩余 %d 段 %.1f 秒，%d 个声纹聚类 %.1f 秒）%s",
+                    out.name,
+                    time.time() - stopped,
+                    live.timings.get("tail_chunks", 0),
+                    live.timings.get("tail_s", 0),
+                    live.timings.get("voiceprints", 0),
+                    live.timings.get("cluster_s", 0),
+                    f"，边录边转出错：{live.error!r}" if live.error else "",
+                )
             if tr is None or not tr.sentences:
-                # 边录边转出错（或什么都没识别到）时退回整段转写
+                # 边录边转出错（或什么都没识别到）时退回整段转写；合成音频在先，因为要用它转写
+                try:
+                    mixdown(out).rename(final)
+                except Exception as e:  # noqa: BLE001
+                    fail(job, e)
+                    return
                 run_process(job, final, out, state["hotwords"])
                 return
+            # 转写先落盘，合成音频（长会议要二三十秒）和生成纪要同时进行
+            meetings.save_transcript(tr, out)
+            mix_error: list[Exception] = []
+
+            def mix() -> None:
+                t = time.time()
+                try:
+                    mixdown(out).rename(final)
+                    log.info("%s 合成录音：%.1f 秒", out.name, time.time() - t)
+                except Exception as e:  # noqa: BLE001
+                    mix_error.append(e)
+
+            mixer = threading.Thread(target=mix, daemon=True)
+            mixer.start()
             try:
-                meetings.save_transcript(tr, out)
                 run_summarize(job, tr, out)
+                mixer.join()
+                if mix_error:
+                    raise RuntimeError(f"纪要已生成，但合成录音失败：{mix_error[0]}（原始音轨还在会议文件夹里）")
                 job.state = "done"
             except Exception as e:  # noqa: BLE001
                 fail(job, e)

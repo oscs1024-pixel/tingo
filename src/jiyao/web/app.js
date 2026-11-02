@@ -222,7 +222,7 @@ function updateHome(job, prev) {
       box.dataset.key = key;
       box.innerHTML = lines.length
         ? lines.map((l) => `<div><span class="lt">${fmt(l.start_ms)}</span>${esc(l.text)}</div>`).join("")
-        : `<div class="lw">说话内容会在这里实时出现（约半分钟一批）</div>`;
+        : `<div class="lw">说话内容会在这里实时出现（约十几秒一批）</div>`;
       box.scrollTop = box.scrollHeight;
     }
   }
@@ -273,7 +273,7 @@ function updateProcessing(job) {
     saving: "正在合成录音…",
     finalizing: "录音时已经转好了大部分，正在处理最后几秒并区分说话人",
     loading: "第一次运行要从 ModelScope 下载约 2 GB 模型，之后会快很多",
-    transcribing: "本地识别中，10 分钟的录音大约需要 3 分钟",
+    transcribing: "本地分段识别中，10 分钟的录音大约 1 分半",
     summarizing: "",
   }[job.state];
   $("#procNote").textContent = note || "";
