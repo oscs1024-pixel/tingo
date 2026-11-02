@@ -7,5 +7,6 @@ pub mod cluster;
 pub mod config;
 pub mod meetings;
 pub mod models;
+pub mod record;
 pub mod summarize;
 pub mod transcript;

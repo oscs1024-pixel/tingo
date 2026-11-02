@@ -1,8 +1,10 @@
-// jiyao-recorder：用 ScreenCaptureKit 同时录系统声音和麦克风（macOS 15+）。
+// jiyao-recorder：用 ScreenCaptureKit 录系统声音和麦克风（macOS 15+），也负责把音视频解码成 16 kHz wav。
 //
-// 用法：jiyao-recorder <输出目录> [--no-mic]
-// 输出：<目录>/system.wav、<目录>/mic.wav；收到 SIGINT/SIGTERM 后收尾退出。
-// 向 stdout 打印一行状态：READY 表示已开始录音，ERROR: … 表示失败。
+// 录音：jiyao-recorder <输出目录> [--no-mic] [--no-system]
+//   输出 <目录>/system.wav、<目录>/mic.wav；收到 SIGINT/SIGTERM 后收尾退出。
+//   向 stdout 打印一行状态：READY 表示已开始录音，ERROR: … 表示失败。
+// 解码：jiyao-recorder decode <输入文件> <输出.wav>
+//   用系统的 AVFoundation 解码 m4a/mp3/wav/aac/flac/mp4/mov 等，输出 16 kHz 单声道 16 位 wav；成功打印 OK。
 
 import AVFoundation
 import Foundation
@@ -20,14 +22,16 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let system: Track
     let mic: Track
     let withMic: Bool
+    let withSystem: Bool
     let queue = DispatchQueue(label: "jiyao.recorder")
     var stream: SCStream?
     var t0: CMTime?
 
-    init(outDir: URL, withMic: Bool) {
+    init(outDir: URL, withMic: Bool, withSystem: Bool) {
         system = Track(url: outDir.appendingPathComponent("system.wav"))
         mic = Track(url: outDir.appendingPathComponent("mic.wav"))
         self.withMic = withMic
+        self.withSystem = withSystem
     }
 
     func start() async throws {
@@ -37,7 +41,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         let cfg = SCStreamConfiguration()
-        cfg.capturesAudio = true
+        cfg.capturesAudio = withSystem
         cfg.excludesCurrentProcessAudio = true
         cfg.sampleRate = 48000
         cfg.channelCount = 1
@@ -52,7 +56,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+        if withSystem {
+            try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+        }
         if withMic {
             try s.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue)
         }
@@ -130,11 +136,53 @@ func fail(_ msg: String) -> Never {
     exit(1)
 }
 
+/// 解码任意音视频为 16 kHz 单声道 16 位 PCM wav。
+func decode(_ input: String, _ output: String) -> Never {
+    let asset = AVURLAsset(url: URL(fileURLWithPath: input))
+    let done = DispatchSemaphore(value: 0)
+    var tracks: [AVAssetTrack] = []
+    Task {
+        tracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        done.signal()
+    }
+    done.wait()
+    guard !tracks.isEmpty else { fail("文件里没有可识别的音频（支持 m4a、mp3、wav、mp4、mov 等）：\(input)") }
+    guard let reader = try? AVAssetReader(asset: asset) else { fail("无法读取：\(input)") }
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+    ]
+    let out = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: settings)
+    reader.add(out)
+    guard reader.startReading() else { fail("解码失败：\(reader.error?.localizedDescription ?? "")") }
+    var pcm = Data()
+    while let sb = out.copyNextSampleBuffer() {
+        guard let block = CMSampleBufferGetDataBuffer(sb) else { continue }
+        let len = CMBlockBufferGetDataLength(block)
+        var chunk = Data(count: len)
+        chunk.withUnsafeMutableBytes { _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: len, destination: $0.baseAddress!) }
+        pcm.append(chunk)
+    }
+    guard reader.status == .completed else { fail("解码中断：\(reader.error?.localizedDescription ?? "")") }
+    var wav = Data()
+    func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { wav.append(contentsOf: $0) } }
+    func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { wav.append(contentsOf: $0) } }
+    wav.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + pcm.count)); wav.append(contentsOf: Array("WAVEfmt ".utf8))
+    u32(16); u16(1); u16(1); u32(16000); u32(32000); u16(2); u16(16)
+    wav.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count))
+    wav.append(pcm)
+    do { try wav.write(to: URL(fileURLWithPath: output)) } catch { fail("写入失败：\(error.localizedDescription)") }
+    print("OK")
+    exit(0)
+}
+
 let args = CommandLine.arguments
-guard args.count >= 2 else { fail("用法：jiyao-recorder <输出目录> [--no-mic]") }
+if args.count >= 4 && args[1] == "decode" { decode(args[2], args[3]) }
+guard args.count >= 2 else { fail("用法：jiyao-recorder <输出目录> [--no-mic] [--no-system]，或 jiyao-recorder decode <输入> <输出.wav>") }
 let outDir = URL(fileURLWithPath: args[1])
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
-let recorder = Recorder(outDir: outDir, withMic: !args.contains("--no-mic"))
+let recorder = Recorder(outDir: outDir, withMic: !args.contains("--no-mic"), withSystem: !args.contains("--no-system"))
 
 signal(SIGINT, SIG_IGN)
 signal(SIGTERM, SIG_IGN)
