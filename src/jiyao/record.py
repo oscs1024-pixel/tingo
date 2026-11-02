@@ -156,11 +156,14 @@ def _read16k(path: Path):
     return np.frombuffer(raw, dtype=np.float32)
 
 
-def duck_mix(system, mic, sr: int, threshold_db: float = -50.0, hold_ms: int = 700, fade_ms: int = 10):
+def duck_mix(
+    system, mic, sr: int, threshold_db: float = -50.0, hold_ms: int = 700, pre_ms: int = 120, fade_ms: int = 10
+):
     """系统声音里有人说话时只用系统声音，其余时间用麦克风。
 
     外放开会时，麦克风会把扬声器里对方的声音再录一遍，直接混音会叠成回声，识别率明显下降。
-    回声总是晚于系统声音到达，所以系统声音一有信号就关麦克风，并多保持 hold_ms 盖住回声尾巴。
+    系统声音一有信号就关麦克风，并多保持 hold_ms 盖住回声尾巴。实测 ScreenCaptureKit 的系统声音轨
+    比麦克风里的回声还晚 40～55 ms，所以再提前 pre_ms 关麦克风，免得每句话开头漏进回声。
     代价是双方同时说话时，本地这一侧会被盖掉。
     """
     import numpy as np
@@ -175,8 +178,9 @@ def duck_mix(system, mic, sr: int, threshold_db: float = -50.0, hold_ms: int = 7
     rms_db = 10 * np.log10(np.mean(padded**2, axis=1) + 1e-12)
     active = rms_db > threshold_db
 
-    hold = max(1, hold_ms // 20)
-    counts = np.convolve(active.astype(np.int32), np.ones(hold + 1, dtype=np.int32))[:frames]
+    hold, pre = max(1, hold_ms // 20), pre_ms // 20
+    # counts[i] = 第 i 帧前 hold 帧到后 pre 帧之间有几帧系统声音在响
+    counts = np.convolve(active.astype(np.int32), np.ones(hold + pre + 1, dtype=np.int32))[pre : pre + frames]
     gain = np.repeat((counts == 0).astype(np.float32), frame)[:n]
 
     fade = max(1, sr * fade_ms // 1000)
@@ -218,3 +222,44 @@ def record_until_interrupt(
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
+
+
+def track_level(path: Path, window_s: float = 0.15) -> float:
+    """正在写入的 wav 文件末尾一小段的音量，0～1。图形界面录音时画电平用。"""
+    import struct
+
+    import numpy as np
+
+    try:
+        with path.open("rb") as f:
+            head = f.read(4096)
+            fmt_at, data_at = head.find(b"fmt "), head.find(b"data")
+            if fmt_at < 0 or data_at < 0:
+                return 0.0
+            tag, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH", head, fmt_at + 8)
+            if tag == 0xFFFE:  # WAVE_FORMAT_EXTENSIBLE，真实格式在子格式 GUID 的前两个字节
+                tag = struct.unpack_from("<H", head, fmt_at + 8 + 24)[0]
+            width = bits // 8
+            frame = width * channels
+            data_start = data_at + 8
+            size = f.seek(0, 2)
+            n = int(rate * window_s) * frame
+            start = max(data_start, size - n)
+            start -= (start - data_start) % frame
+            f.seek(start)
+            raw = f.read(size - start)
+    except (OSError, struct.error):
+        return 0.0
+    if not raw or width not in (2, 4):
+        return 0.0
+    raw = raw[: len(raw) - len(raw) % frame]
+    if tag == 3 and width == 4:
+        x = np.frombuffer(raw, dtype="<f4")
+    elif tag == 1 and width == 2:
+        x = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
+    else:
+        return 0.0
+    if x.size == 0:
+        return 0.0
+    db = 10 * np.log10(float(np.mean(x * x)) + 1e-12)
+    return float(min(1.0, max(0.0, (db + 60) / 50)))  # -60 dB → 0，-10 dB → 1

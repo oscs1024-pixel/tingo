@@ -14,6 +14,16 @@ import typer
 from rich.console import Console
 
 from . import __version__, config
+from .meetings import (
+    AUDIO,
+    DEFAULT_ROOT,
+    MINUTES,
+    TRANSCRIPT_JSON,
+    TRANSCRIPT_MD,
+    meeting_date,
+    new_folder,
+    save_transcript,
+)
 
 app = typer.Typer(
     help="jiyao 纪要：本地录音、中文转写、说话人区分，一键生成会议纪要。",
@@ -22,11 +32,6 @@ app = typer.Typer(
 )
 console = Console()
 err = Console(stderr=True)
-
-DEFAULT_ROOT = Path.home() / "Documents" / "jiyao"
-MINUTES = "纪要.md"
-TRANSCRIPT_MD = "转写.md"
-TRANSCRIPT_JSON = "transcript.json"
 
 HotwordsOpt = Annotated[str | None, typer.Option("--hotwords", "-w", help="热词，逗号分隔：人名、项目代号、专有名词")]
 SpeakersOpt = Annotated[
@@ -95,8 +100,7 @@ def _process(
     if not tr.sentences:
         _fail("没有识别出任何语音")
     tr.rename(speakers)
-    tr.save(out_dir / TRANSCRIPT_JSON)
-    (out_dir / TRANSCRIPT_MD).write_text(tr.to_markdown(), encoding="utf-8")
+    save_transcript(tr, out_dir)
     console.print(
         f"[green]✓[/green] 转写完成：{len(tr.turns())} 段发言，{len(tr.speakers_in_order())} 位说话人 → {out_dir / TRANSCRIPT_MD}"
     )
@@ -162,7 +166,7 @@ def record(
     if no_system and no_mic:
         _fail("系统声音和麦克风不能都关掉")
     started = datetime.now()
-    out_dir = out or DEFAULT_ROOT / f"{started:%Y-%m-%d_%H%M}_{title}"
+    out_dir = out or new_folder(DEFAULT_ROOT, title, started)
     system = not no_system
     if system and not system_audio_supported():
         console.print("[yellow]![/yellow] 录系统声音需要 macOS 15+ 和 Xcode Command Line Tools，本次只录麦克风")
@@ -181,7 +185,7 @@ def record(
             )
     except RuntimeError as e:
         _fail(str(e))
-    final = audio.with_name("录音.m4a")
+    final = audio.with_name(AUDIO)
     audio.rename(final)
     if error:
         console.print(f"[yellow]![/yellow] 录音提前中断：{error}，已保存录到的部分")
@@ -210,7 +214,7 @@ def run(
     out: Annotated[Path | None, typer.Option("--out", "-o", help="输出目录，默认与音频同名的文件夹")] = None,
     hotwords: HotwordsOpt = None,
     speakers: SpeakersOpt = None,
-    meeting_date: DateOpt = None,
+    day: DateOpt = None,
     no_summary: NoSummaryOpt = False,
     push: PushOpt = False,
 ) -> None:
@@ -224,7 +228,7 @@ def run(
         out_dir,
         _split(hotwords),
         _speaker_names(speakers),
-        _parse_date(meeting_date, file_day),
+        _parse_date(day, file_day),
         not no_summary,
         push,
     )
@@ -234,7 +238,7 @@ def run(
 def summarize(
     target: Annotated[Path, typer.Argument(help="会议文件夹，或其中的 transcript.json", exists=True)],
     speakers: SpeakersOpt = None,
-    meeting_date: DateOpt = None,
+    day: DateOpt = None,
     push: PushOpt = False,
 ) -> None:
     """重新生成纪要：改了说话人名字、换了模型之后用。"""
@@ -246,10 +250,8 @@ def summarize(
     tr = Transcript.load(path)
     if speakers:
         tr.rename(_speaker_names(speakers))
-        tr.save(path)
-        (path.parent / TRANSCRIPT_MD).write_text(tr.to_markdown(), encoding="utf-8")
-    file_day = datetime.fromtimestamp(path.stat().st_mtime).date()
-    _summarize_and_save(tr, path.parent, _parse_date(meeting_date, file_day), push)
+        save_transcript(tr, path.parent)
+    _summarize_and_save(tr, path.parent, _parse_date(day, meeting_date(path.parent)), push)
 
 
 @app.command()
@@ -316,6 +318,56 @@ def doctor() -> None:
     else:
         check("大模型", False, "未配置 API key，运行 `jiyao config`")
     raise typer.Exit(0 if ok else 1)
+
+
+@app.command()
+def ui(
+    browser: Annotated[bool, typer.Option("--browser", help="在浏览器里打开，而不是独立窗口")] = False,
+    port: Annotated[int, typer.Option("--port", help="本地端口，默认自动选")] = 0,
+) -> None:
+    """打开图形界面。"""
+    import socket
+    import threading
+    import time
+    import webbrowser
+
+    import uvicorn
+
+    from .server import create_app
+
+    if not port:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        if not thread.is_alive():
+            _fail("本地服务启动失败")
+        time.sleep(0.05)
+    url = f"http://127.0.0.1:{port}/"
+
+    window = None
+    if not browser:
+        try:
+            import webview
+        except ImportError:
+            window = None
+        else:
+            window = webview.create_window(
+                "纪要", url, width=1320, height=860, min_size=(1000, 680), background_color="#FAFAFC"
+            )
+    if window is None:
+        console.print(f"纪要已在浏览器打开：{url}  按 Ctrl+C 退出")
+        webbrowser.open(url)
+        try:
+            thread.join()
+        except KeyboardInterrupt:
+            pass
+    else:
+        webview.start()
+    server.should_exit = True
 
 
 @app.command()

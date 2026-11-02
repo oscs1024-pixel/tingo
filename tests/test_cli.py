@@ -66,3 +66,17 @@ def test_run_end_to_end_transcribes_two_speakers(tmp_path):
     # 换人处不应把下一位的开头算给上一位
     first_turn = tr.turns()[0].text
     assert first_turn.endswith("客服系统的迁移。")
+
+
+def test_hotwords_read_from_top_level_and_legacy_llm_table(tmp_path):
+    from jiyao import config
+
+    config.CONFIG_PATH.write_text('hotwords = ["星河"]\n\n[llm]\nmodel = "m"\n')
+    assert config.load().hotwords == ["星河"]
+    config.CONFIG_PATH.write_text('[llm]\nmodel = "m"\nhotwords = ["旧版"]\n')
+    assert config.load().hotwords == ["旧版"]
+    config.CONFIG_PATH.unlink()
+    config.write_example()
+    import tomllib
+
+    assert "hotwords" in tomllib.loads(config.CONFIG_PATH.read_text())  # 模板里的 hotwords 在顶层

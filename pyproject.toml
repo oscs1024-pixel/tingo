@@ -17,16 +17,20 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.162.0",
     "funasr>=1.4.19",
     "httpx>=0.28.1",
     "modelscope>=1.40.2",
     "numpy>=2.4.6",
     "openai>=3.42.1",
+    "python-multipart>=0.0.33",
+    "pywebview>=6.2.1 ; sys_platform == 'darwin'",
     "rich>=15.0.0",
     "soundfile>=0.14.0",
     "torch>=2.15.0",
     "torchaudio>=2.11.1",
     "typer>=0.27.3",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]

@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from .transcript import Sentence, Transcript
@@ -22,11 +23,18 @@ PUNC_MODEL = "ct-punc"
 SPK_MODEL = "cam++"
 
 _model = None
+_model_lock = threading.Lock()
+
+
+def model_loaded() -> bool:
+    return _model is not None
 
 
 def _load_model():
     global _model
-    if _model is None:
+    with _model_lock:  # 图形界面会在录音时提前在后台加载，避免和转写同时加载两份
+        if _model is not None:
+            return _model
         os.environ.setdefault("MODELSCOPE_LOG_LEVEL", str(logging.ERROR))
         with _quiet():
             from funasr import AutoModel

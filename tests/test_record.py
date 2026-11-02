@@ -68,3 +68,12 @@ def test_recorder_swift_compiles(tmp_path):
         ["swiftc", "-O", str(SWIFT_SRC), "-o", str(tmp_path / "rec")], check=False, capture_output=True, text=True
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_mic_muted_slightly_before_system_starts():
+    # 系统声音轨比麦克风里的回声晚到几十毫秒，开头那一小段也不能漏
+    system = np.concatenate([_silence(1.0), _tone(1.0)])
+    echo = np.concatenate([_silence(0.95), 0.5 * _tone(1.05)])  # 回声比系统轨早 50 ms
+    out = duck_mix(system, echo, SR, pre_ms=120)
+    a = slice(int(0.95 * SR), int(1.0 * SR))
+    assert np.max(np.abs(out[a])) < 1e-3

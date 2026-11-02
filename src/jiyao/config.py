@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -12,6 +13,9 @@ CONFIG_PATH = Path(os.environ.get("JIYAO_CONFIG", Path.home() / ".config" / "jiy
 EXAMPLE = """\
 # jiyao 配置。任一 OpenAI 兼容接口都可以：DeepSeek、通义千问、Kimi、智谱、本地 Ollama……
 
+# 专有名词、人名、项目代号，提高识别准确率（必须写在下面的 [llm] 之前，否则会被当成 llm 的配置）
+hotwords = []
+
 [llm]
 base_url = "https://api.deepseek.com"
 api_key = "sk-..."
@@ -20,9 +24,6 @@ model = "deepseek-chat"
 # base_url = "http://localhost:11434/v1"
 # api_key = "ollama"
 # model = "qwen2.5:7b"
-
-# 专有名词、人名、项目代号，提高识别准确率
-hotwords = []
 
 [push]
 # 飞书 / 钉钉 / 企业微信 群机器人 webhook，按域名自动识别
@@ -60,7 +61,7 @@ def load() -> Config:
             api_key=llm.get("api_key", ""),
             model=llm.get("model", LLMConfig.model),
         ),
-        hotwords=list(data.get("hotwords", [])),
+        hotwords=list(data.get("hotwords", llm.get("hotwords", []))),  # 早期模板误把 hotwords 写在 [llm] 下
         webhook=push.get("webhook", ""),
         webhook_secret=push.get("secret", ""),
     )
@@ -78,4 +79,30 @@ def write_example() -> Path:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(EXAMPLE, encoding="utf-8")
+    return CONFIG_PATH
+
+
+def _toml_str(s: str) -> str:
+    # JSON 字符串的转义规则是 TOML 基本字符串的子集
+    return json.dumps(s, ensure_ascii=False)
+
+
+def save(cfg: Config) -> Path:
+    """写回配置文件（图形界面的设置页用）。注释不保留。"""
+    words = ", ".join(_toml_str(w) for w in cfg.hotwords)
+    text = (
+        "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n"
+        "# 专有名词、人名、项目代号，提高识别准确率\n"
+        f"hotwords = [{words}]\n\n"
+        "[llm]\n"
+        f"base_url = {_toml_str(cfg.llm.base_url)}\n"
+        f"api_key = {_toml_str(cfg.llm.api_key)}\n"
+        f"model = {_toml_str(cfg.llm.model)}\n\n"
+        "[push]\n"
+        f"webhook = {_toml_str(cfg.webhook)}\n"
+        f"secret = {_toml_str(cfg.webhook_secret)}\n"
+    )
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(text, encoding="utf-8")
+    CONFIG_PATH.chmod(0o600)  # 里面有 API key
     return CONFIG_PATH
