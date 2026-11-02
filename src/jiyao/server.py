@@ -28,6 +28,51 @@ from .summarize import is_ollama
 from .transcript import Transcript, fmt_ts
 
 WEB_DIR = Path(__file__).with_name("web")
+
+# 本机常见的 OpenAI 兼容中转。recommended 是实测过、又快又好的纪要模型（76 分钟会议 51 秒出纪要）
+LOCAL_PROVIDERS = [
+    {
+        "id": "magpie",
+        "name": "Magpie",
+        "base_url": "http://127.0.0.1:3425/v1",
+        "api_key": "magpie",
+        "recommended": "deepseek/deepseek-v4-flash",
+        "hint": "Magpie 没有在运行：打开 Magpie 应用后再试",
+    },
+    {
+        "id": "ccswitch",
+        "name": "CC Switch",
+        "base_url": "http://127.0.0.1:15721/v1",
+        "api_key": "cc-switch",
+        "recommended": "",
+        "hint": "CC Switch 的本地代理没有打开：在 CC Switch 设置里开启「本地代理」（默认端口 15721）",
+    },
+    {
+        "id": "ollama",
+        "name": "本地 Ollama",
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "",
+        "recommended": "",
+        "hint": "Ollama 没有在运行，或者还没有下载模型",
+    },
+]
+
+
+def _list_models(base_url: str, api_key: str) -> list[str] | None:
+    """GET /v1/models；连不上返回 None。"""
+    import httpx
+
+    try:
+        r = httpx.get(
+            base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key or 'none'}"}, timeout=2
+        )
+        if r.status_code != 200:
+            return None
+        return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 log = get_logger()
 
 
@@ -194,6 +239,24 @@ def create_app(root: Path | None = None) -> FastAPI:
             cfg.webhook_secret = req.secret.strip()
         config.save(cfg)
         return get_config()
+
+    @app.get("/api/llm/providers")
+    def llm_providers() -> list[dict]:
+        """本机常见的模型中转是否在跑、有哪些模型。设置页用来一键选择。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(len(LOCAL_PROVIDERS)) as pool:
+            found = list(pool.map(lambda p: _list_models(p["base_url"], p["api_key"]), LOCAL_PROVIDERS))
+        return [
+            {**p, "running": models is not None, "models": models or []}
+            for p, models in zip(LOCAL_PROVIDERS, found, strict=True)
+        ]
+
+    @app.post("/api/llm/models")
+    def llm_models(req: LLMTestRequest) -> dict:
+        key = req.api_key if req.api_key is not None else config.load().llm.api_key
+        models = _list_models(req.base_url, key or "none")
+        return {"ok": models is not None, "models": models or []}
 
     @app.post("/api/config/test")
     def test_llm(req: LLMTestRequest) -> dict:

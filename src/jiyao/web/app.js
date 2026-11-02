@@ -730,33 +730,37 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal
 
 /* ---------- 设置 ---------- */
 
-const PRESETS = [
+// 本机中转（Magpie、CC Switch、Ollama）由服务端探测后补在前面；这里是远程服务
+const REMOTE_PRESETS = [
   { id: "deepseek", name: "DeepSeek", base_url: "https://api.deepseek.com", model: "deepseek-chat" },
   { id: "bailian", name: "通义千问（百炼）", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
-  { id: "ollama", name: "本地 Ollama", base_url: "http://localhost:11434/v1", model: "qwen3:8b" },
   { id: "custom", name: "自定义" },
 ];
 
 async function renderSettings() {
   main.innerHTML = `<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;
-  let c;
-  try { c = await api("/api/config"); await refreshEnv(); } catch (e) { toast(e.message, true); return; }
+  let c, local = [];
+  try {
+    [c, local] = await Promise.all([api("/api/config"), api("/api/llm/providers").catch(() => []), refreshEnv()]);
+  } catch (e) { toast(e.message, true); return; }
   const env = S.env || {};
-  const presetOf = () => (PRESETS.find((p) => p.base_url && $("#sBase").value.trim() === p.base_url) || PRESETS[3]).id;
+  const PRESETS = [...local.map((p) => ({ ...p, local: true })), ...REMOTE_PRESETS];
+  const norm = (u) => u.trim().replace(/\/+$/, "").replace("localhost", "127.0.0.1");
+  const presetOf = () => (PRESETS.find((p) => p.base_url && norm($("#sBase").value) === norm(p.base_url)) || PRESETS.at(-1)).id;
   let hot = [...c.hotwords];
 
   $("#sBody").innerHTML = `
     <div class="settings">
       <section class="card s-card">
         <h2>大模型</h2>
-        <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以；选本地 Ollama 则全程不出本机。</p>
+        <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。</p>
         <div class="s-grid">
-          <div class="seg" id="sPreset">${PRESETS.map((p) => `<button data-id="${p.id}">${p.name}</button>`).join("")}</div>
+          <div class="seg" id="sPreset">${PRESETS.map((p) => `<button data-id="${p.id}">${p.local ? `<span class="dot" style="background:${p.running ? "var(--green)" : "#c9ccd1"};display:inline-block;margin-right:6px;vertical-align:1px" title="${p.running ? "运行中" : "未启动"}"></span>` : ""}${p.name}</button>`).join("")}</div>
           <div class="s-row2">
             <div class="field"><label>接口地址 Base URL</label><input class="input" id="sBase" value="${esc(c.base_url)}"></div>
-            <div class="field"><label>模型</label><input class="input" id="sModel" value="${esc(c.model)}"></div>
+            <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label><input class="input" id="sModel" list="sModelList" value="${esc(c.model)}" placeholder="可以从列表里选"><datalist id="sModelList"></datalist></div>
           </div>
-          <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${c.api_key_set ? `已设置（${esc(c.api_key_hint)}），留空表示不修改` : "本地 Ollama 不需要"}"></div>
+          <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${c.api_key_set ? `已设置${c.api_key_hint !== "已设置" ? `（${esc(c.api_key_hint)}）` : ""}，留空表示不修改` : "本地 Ollama 不需要"}"></div>
           <div class="s-actions"><button class="btn" id="sTest">测试连接</button><span class="test-msg" id="sTestMsg"></span></div>
         </div>
       </section>
@@ -793,17 +797,43 @@ async function renderSettings() {
 
   const markPreset = () => $$("#sPreset button").forEach((b) => b.classList.toggle("on", b.dataset.id === presetOf()));
   markPreset();
+  const setModels = (models) => {
+    $("#sModelList").innerHTML = models.map((m) => `<option value="${esc(m)}">`).join("");
+    $("#sModelCount").textContent = models.length ? `（可选 ${models.length} 个）` : "";
+  };
+  const msg = (text, cls = "") => { $("#sTestMsg").className = "test-msg " + cls; $("#sTestMsg").textContent = text; };
+  const current = PRESETS.find((p) => p.id === presetOf());
+  if (current && current.local) setModels(current.models);
+
   $$("#sPreset button").forEach((b) => (b.onclick = () => {
     const p = PRESETS.find((x) => x.id === b.dataset.id);
-    if (p.base_url) {
-      const keepLocalModel = p.id === "ollama" && /11434|localhost/.test(c.base_url);
-      $("#sBase").value = p.base_url;
-      $("#sModel").value = keepLocalModel ? c.model : p.model;
+    msg("");
+    if (!p.base_url) { markPreset(); return; }
+    $("#sBase").value = p.base_url;
+    if (p.local) {
+      setModels(p.models);
+      // 本机中转的 key 是固定的，直接填上
+      $("#sKey").value = p.api_key;
+      const keep = p.models.includes($("#sModel").value);
+      if (!keep) $("#sModel").value = (p.recommended && p.models.includes(p.recommended) && p.recommended) || p.models[0] || "";
+      if (!p.running) msg(p.hint, "bad");
+      else if (p.recommended && $("#sModel").value === p.recommended) msg(`已选推荐模型 ${p.recommended}：实测 76 分钟的会 51 秒出纪要`, "ok");
+    } else {
+      setModels([]);
+      $("#sKey").value = "";
+      $("#sModel").value = p.model;
+      if (!c.api_key_set) msg("需要填写这家服务的 API Key");
     }
     markPreset();
-    $("#sTestMsg").textContent = "";
   }));
   $("#sBase").oninput = markPreset;
+  $("#sBase").onchange = async () => {
+    const key = $("#sKey").value.trim();
+    try {
+      const r = await api("/api/llm/models", { json: { base_url: $("#sBase").value.trim(), model: "", api_key: key || null } });
+      setModels(r.models);
+    } catch { setModels([]); }
+  };
 
   const drawTags = () => {
     $$("#sTags .chip").forEach((x) => x.remove());

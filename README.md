@@ -93,6 +93,8 @@ webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
 
 也可以用环境变量 `JIYAO_LLM_BASE_URL`、`JIYAO_LLM_API_KEY`、`JIYAO_LLM_MODEL`，或直接设置 `DEEPSEEK_API_KEY`。
 
+**本机中转**：装了 Magpie 或 CC Switch（开启「本地代理」，默认端口 15721）的话，设置页会自动探测，一键选用，模型从下拉列表里挑。实测一场 76 分钟的会，DeepSeek V4 Flash 51 秒出纪要，MiniMax-M3.1-Flash 160 秒（细节更多），本地 Qwen3-8B 约 8 分钟。
+
 **完全不出本机**：用 [Ollama](https://ollama.com) 跑本地模型，`base_url = "http://localhost:11434/v1"`、`model = "qwen3:8b"`，不需要 key。本地模型上下文较短，长会议会自动分段提炼再合并。
 
 ## 图形界面

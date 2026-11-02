@@ -134,3 +134,14 @@ def test_raw_tracks_are_not_meetings(client, root):
 def test_static_index_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "纪要" in r.text
+
+
+def test_llm_providers_reports_running_relays(client, monkeypatch):
+    from jiyao import server
+
+    running = {"http://127.0.0.1:3425/v1": ["deepseek/deepseek-v4-flash", "minimax-cn/MiniMax-M3.1-Flash"]}
+    monkeypatch.setattr(server, "_list_models", lambda base_url, api_key: running.get(base_url))
+    got = {p["id"]: p for p in client.get("/api/llm/providers").json()}
+    assert got["magpie"]["running"] and got["magpie"]["recommended"] in got["magpie"]["models"]
+    assert not got["ccswitch"]["running"] and "15721" in got["ccswitch"]["base_url"]
+    assert not got["ollama"]["running"]
