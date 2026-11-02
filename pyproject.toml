@@ -1,0 +1,52 @@
+[project]
+name = "jiyao"
+version = "0.1.0"
+description = "本地中文会议录音、转写、说话人区分，一键生成会议纪要（FunASR + 任意 OpenAI 兼容大模型）"
+license = "MIT"
+keywords = ["meeting-minutes", "asr", "funasr", "chinese", "speaker-diarization", "transcription", "会议纪要"]
+classifiers = [
+    "Environment :: Console",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+readme = "README.md"
+authors = [
+    { name = "stardust", email = "642720202@qq.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "funasr>=1.4.19",
+    "httpx>=0.28.1",
+    "modelscope>=1.40.2",
+    "numpy>=2.4.6",
+    "openai>=3.42.1",
+    "rich>=15.0.0",
+    "soundfile>=0.14.0",
+    "torch>=2.15.0",
+    "torchaudio>=2.11.1",
+    "typer>=0.27.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/tancheng33/jiyao"
+
+[project.scripts]
+jiyao = "jiyao.cli:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+markers = ["slow: 需要下载识别模型的端到端测试"]

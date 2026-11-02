@@ -1,0 +1,63 @@
+import base64
+import hashlib
+import hmac
+import urllib.parse
+
+import pytest
+
+from jiyao.push import build_request, detect, tables_to_lists
+
+MINUTES = """# 周会
+
+## 待办
+| 事项 | 负责人 | 截止时间 | 出处 |
+|---|---|---|---|
+| 修复支付模块 | 小王 | 11月15日 | [00:29] |
+| 出迁移方案 | 小张 |  | [00:40] |
+
+## 风险
+- 无
+"""
+
+
+def test_detect():
+    assert detect("https://open.feishu.cn/open-apis/bot/v2/hook/abc") == "feishu"
+    assert detect("https://open.larksuite.com/open-apis/bot/v2/hook/abc") == "feishu"
+    assert detect("https://oapi.dingtalk.com/robot/send?access_token=x") == "dingtalk"
+    assert detect("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x") == "wecom"
+    with pytest.raises(ValueError):
+        detect("https://example.com/hook")
+
+
+def test_tables_to_lists():
+    out = tables_to_lists(MINUTES)
+    assert "|" not in out
+    assert "- 修复支付模块（负责人：小王，截止时间：11月15日，出处：[00:29]）" in out
+    assert "- 出迁移方案（负责人：小张，出处：[00:40]）" in out
+    assert "## 风险\n- 无" in out
+
+
+def test_feishu_card_and_sign():
+    _, body = build_request("https://open.feishu.cn/open-apis/bot/v2/hook/abc", MINUTES, secret="s3", now=1700000000)
+    assert body["card"]["header"]["title"]["content"] == "周会"
+    assert body["card"]["body"]["elements"][0]["content"] == MINUTES
+    expected = base64.b64encode(hmac.new(b"1700000000\ns3", b"", hashlib.sha256).digest()).decode()
+    assert (body["timestamp"], body["sign"]) == ("1700000000", expected)
+
+
+def test_dingtalk_markdown_and_sign():
+    hook = "https://oapi.dingtalk.com/robot/send?access_token=x"
+    url, body = build_request(hook, MINUTES, secret="s3", now=1700000000.5)
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert q["timestamp"] == ["1700000000500"]
+    expected = base64.b64encode(hmac.new(b"s3", b"1700000000500\ns3", hashlib.sha256).digest()).decode()
+    assert q["sign"] == [expected]
+    assert body["markdown"]["title"] == "周会"
+    assert "|" not in body["markdown"]["text"]
+
+
+def test_wecom_truncates_to_4096_bytes():
+    _, body = build_request("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", "# 长\n" + "字" * 3000)
+    content = body["markdown"]["content"]
+    assert len(content.encode()) <= 4096
+    assert content.endswith("（内容过长已截断）")
