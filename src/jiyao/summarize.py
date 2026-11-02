@@ -183,7 +183,18 @@ def ollama_context(cfg: LLMConfig) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _chat(cfg: LLMConfig, prompt: str, on_token: Callable[[str], None] | None = None, think: bool = True) -> str:
+def _chat(
+    cfg: LLMConfig,
+    prompt: str,
+    on_token: Callable[[str], None] | None = None,
+    think: bool = True,
+    on_think: Callable[[int], None] | None = None,
+) -> str:
+    """流式调用 chat/completions，返回去掉思考过程的完整回答。
+
+    on_think(已思考字数)：推理模型先长时间思考，不报出来界面就像卡住了。
+    思考内容有的放在 reasoning_content / reasoning 字段，有的夹在正文的 <think> 里，两种都算。
+    """
     extra: dict = {}
     if not think and _is_local(cfg):
         # Ollama 的 OpenAI 兼容接口用 reasoning_effort=none 关掉 Qwen3 等模型的思考；只对本地生效，远程接口未必认这个值
@@ -197,18 +208,29 @@ def _chat(cfg: LLMConfig, prompt: str, on_token: Callable[[str], None] | None = 
     )
     raw = ""
     shown = 0
+    thought = 0
     for chunk in stream:
         if not chunk.choices:
             continue
-        delta = chunk.choices[0].delta.content or ""
+        d = chunk.choices[0].delta
+        reasoning = getattr(d, "reasoning_content", None)
+        if not isinstance(reasoning, str):
+            reasoning = getattr(d, "reasoning", None)
+        if isinstance(reasoning, str) and reasoning:
+            thought += len(reasoning)
+            if on_think:
+                on_think(thought)
+        delta = d.content or ""
         if not delta:
             continue
         raw += delta
-        if on_token:
-            visible = strip_think(raw, partial=True)
-            if len(visible) > shown:
+        visible = strip_think(raw, partial=True)
+        if len(visible) > shown:
+            if on_token:
                 on_token(visible[shown:])
-                shown = len(visible)
+            shown = len(visible)
+        elif shown == 0 and raw.lstrip().startswith("<think>") and on_think:
+            on_think(thought + len(raw))
     return strip_think(raw).strip()
 
 
@@ -250,7 +272,9 @@ def summarize(
     max_chars: int | None = None,
     on_token: Callable[[str], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_think: Callable[[int], None] | None = None,
 ) -> str:
+    """on_think(已思考字数) 只报最终成文那一次调用的思考进度；分段提炼不报。"""
     meeting_date = meeting_date or date.today()
     day = f"{meeting_date.isoformat()}（星期{WEEKDAYS[meeting_date.weekday()]}）"
     dated = f"{day}\n\n{calendar_hint(meeting_date)}"
@@ -258,7 +282,7 @@ def summarize(
     text = annotate_dates(transcript.to_prompt_text(), meeting_date)
 
     if len(text) <= max_chars:
-        body = _chat(cfg, MINUTES_PROMPT.format(meeting_date=dated, transcript=text), on_token)
+        body = _chat(cfg, MINUTES_PROMPT.format(meeting_date=dated, transcript=text), on_token, on_think=on_think)
     else:
         chunks = split_chunks(text.splitlines(), max_chars)
         notes = []
@@ -276,7 +300,12 @@ def summarize(
         if on_stage:
             on_stage("合并成纪要")
         instructions = MINUTES_PROMPT.split("转写：")[0].format(meeting_date=dated, transcript="")
-        body = _chat(cfg, REDUCE_PROMPT.format(instructions=instructions, notes="\n\n".join(notes)), on_token)
+        body = _chat(
+            cfg,
+            REDUCE_PROMPT.format(instructions=instructions, notes="\n\n".join(notes)),
+            on_token,
+            on_think=on_think,
+        )
 
     return _with_meta(body, transcript, day)
 

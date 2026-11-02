@@ -208,7 +208,7 @@ class ChunkedTranscriber:
         kwargs: dict = {"input": audio, "batch_size_s": 300}
         if self.hotwords:
             kwargs["hotword"] = " ".join(self.hotwords)
-        with asr._quiet(), _capture_embeddings(model) as got:
+        with asr.infer_lock, asr._quiet(), _capture_embeddings(model) as got:
             result = model.generate(**kwargs)
         off_ms = round(offset_s * 1000)
         sentences = [
@@ -240,8 +240,9 @@ class ChunkedTranscriber:
         t = time.time()
         if segs and embs:
             emb = np.concatenate(embs)
-            labels = cluster(model, emb)
-            diar = postprocess([[a, b] for a, b in segs], None, labels, emb)
+            with asr.infer_lock:  # 别的任务识别时 cb_model 被临时换掉了
+                labels = cluster(model, emb)
+                diar = postprocess([[a, b] for a, b in segs], None, labels, emb)
             self.timings["voiceprints"] = len(emb)
         self.timings["cluster_s"] = time.time() - t
         sentences: list[Sentence] = []

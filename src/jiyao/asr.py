@@ -24,6 +24,9 @@ SPK_MODEL = "cam++"
 
 _model = None
 _model_lock = threading.Lock()
+# 识别时会临时替换 FunASR 模块里的函数、重定向整个进程的标准输出，不能两个线程同时跑。
+# 图形界面里录音的边录边转和后台任务的转写可以同时进行，每次识别一段都要先拿到这把锁，在这里排队。
+infer_lock = threading.RLock()
 
 
 def model_loaded() -> bool:
@@ -105,7 +108,7 @@ def transcribe(path: Path, hotwords: list[str] | None = None) -> Transcript:
         kwargs = {"input": str(wav), "batch_size_s": 300}
         if hotwords:
             kwargs["hotword"] = " ".join(hotwords)
-        with _quiet(), _capture_diarization() as segments:
+        with infer_lock, _quiet(), _capture_diarization() as segments:
             result = model.generate(**kwargs)
 
     sentences: list[Sentence] = []

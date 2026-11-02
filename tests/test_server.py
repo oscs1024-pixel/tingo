@@ -67,7 +67,7 @@ def test_rename_speakers_then_clear(client, root):
 def test_summarize_job_streams_and_saves(client, root, monkeypatch):
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
 
-    def fake_chat(cfg, prompt, on_token=None, think=True):
+    def fake_chat(cfg, prompt, on_token=None, think=True, on_think=None):
         assert "下周五（11月13日）" in prompt
         for part in ("# 新标题\n\n", "## 一句话总结\n", "改好了"):
             on_token(part)
@@ -81,16 +81,209 @@ def test_summarize_job_streams_and_saves(client, root, monkeypatch):
     assert text.startswith("# 新标题\n\n- 日期：2026-11-02（星期一）")
 
 
-def test_only_one_job_at_a_time(client, monkeypatch):
+MID = "2026-11-02_1430_周会"
+MID2 = "2026-11-03_0900_站会"
+
+
+def wait_all(client, timeout=5):
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end:
+        jobs = client.get("/api/jobs").json()["jobs"]
+        if all(j["state"] in ("done", "error") for j in jobs):
+            return jobs
+        time.sleep(0.02)
+    raise AssertionError(jobs)
+
+
+@pytest.fixture
+def second(root):
+    m = root / MID2
+    m.mkdir()
+    Transcript(str(m / "录音.m4a"), 1000, [Sentence(0, 0, 900, "开始。")]).save(m / "transcript.json")
+    return m
+
+
+@pytest.fixture
+def gated_chat(monkeypatch):
+    """生成纪要卡在 gate 上，直到测试放行；放行前先报一次思考进度"""
     import threading
 
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
     gate = threading.Event()
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True: gate.wait(5) and "# T")
-    assert client.post("/api/meetings/2026-11-02_1430_周会/summarize").status_code == 200
-    assert client.post("/api/meetings/2026-11-02_1430_周会/summarize").status_code == 409
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None):
+        if on_think:
+            on_think(42)
+        gate.wait(5)
+        return "# T"
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    yield gate
     gate.set()
-    wait_job(client)
+
+
+def test_same_meeting_rejected_other_meeting_in_parallel(client, second, gated_chat):
+    a = client.post(f"/api/meetings/{MID}/summarize")
+    assert a.status_code == 200 and a.json()["id"].startswith("j")
+    r = client.post(f"/api/meetings/{MID}/summarize")
+    assert r.status_code == 409 and r.json()["detail"] == "这场会议正在处理，等它完成"
+    assert client.post(f"/api/meetings/{MID}/process").status_code == 409
+    b = client.post(f"/api/meetings/{MID2}/summarize")
+    assert b.status_code == 200 and b.json()["id"] != a.json()["id"]
+    jobs = client.get("/api/jobs").json()["jobs"]
+    assert [(j["meeting"], j["state"]) for j in jobs] == [(MID, "summarizing"), (MID2, "summarizing")]
+    gated_chat.set()
+    assert [j["state"] for j in wait_all(client)] == ["done", "done"]
+    # 结束之后同一场会议可以再来
+    assert client.post(f"/api/meetings/{MID}/summarize").status_code == 200
+    wait_all(client)
+
+
+def test_jobs_shape_thinking_and_frozen_elapsed(client, gated_chat):
+    import time
+
+    empty = client.get("/api/jobs").json()
+    assert empty["jobs"] == [] and isinstance(empty["model_loaded"], bool)  # 别的测试可能已经加载了真模型
+    assert client.get("/api/job").json() == {"state": "idle"}
+    jid = client.post(f"/api/meetings/{MID}/summarize").json()["id"]
+    for _ in range(100):
+        body = client.get("/api/jobs").json()
+        if body["jobs"][0]["thinking"]:
+            break
+        time.sleep(0.02)
+    assert set(body) == {"jobs", "model_loaded"}
+    j = body["jobs"][0]
+    assert j["id"] == jid and j["kind"] == "summarize" and j["state"] == "summarizing"
+    assert (
+        j["thinking"] == 42
+        and j["finished_at"] == 0
+        and j["elapsed"] >= 0
+        and j["model_loaded"] == empty["model_loaded"]
+    )
+    assert client.get("/api/job").json()["id"] == jid  # 旧接口返回最近一个进行中的
+    gated_chat.set()
+    done = wait_all(client)[0]
+    assert done["finished_at"] >= done["started_at"]
+    assert done["elapsed"] == pytest.approx(done["finished_at"] - done["started_at"])
+    time.sleep(0.05)
+    assert client.get("/api/jobs").json()["jobs"][0]["elapsed"] == done["elapsed"]  # 结束后用时不再增长
+    assert client.get("/api/job").json()["id"] == jid  # 没有进行中的，返回最近一个
+
+
+def test_dismiss_one_and_all(client, second, gated_chat):
+    gated_chat.set()
+    a = client.post(f"/api/meetings/{MID}/summarize").json()["id"]
+    wait_all(client)
+    b = client.post(f"/api/meetings/{MID2}/summarize").json()["id"]
+    wait_all(client)
+    c = client.post(f"/api/meetings/{MID}/summarize").json()["id"]
+    wait_all(client)
+    assert client.post(f"/api/jobs/{b}/dismiss").json() == {"ok": True}
+    assert [j["id"] for j in client.get("/api/jobs").json()["jobs"]] == [a, c]
+    assert client.post("/api/jobs/nope/dismiss").status_code == 200
+    gated_chat.clear()
+    d = client.post(f"/api/meetings/{MID2}/summarize").json()["id"]
+    # 进行中的任务收不起来
+    client.post(f"/api/jobs/{d}/dismiss")
+    client.post("/api/job/dismiss")
+    assert [j["id"] for j in client.get("/api/jobs").json()["jobs"]] == [d]
+    gated_chat.set()
+    wait_all(client)
+    client.post("/api/job/dismiss")
+    assert client.get("/api/jobs").json()["jobs"] == []
+
+
+def test_keeps_only_recent_finished_jobs(client, gated_chat):
+    gated_chat.set()
+    ids = []
+    for _ in range(8):
+        ids.append(client.post(f"/api/meetings/{MID}/summarize").json()["id"])
+        wait_all(client)
+    # 登记新任务时，结束了的超过 5 个就删掉最早的
+    assert [j["id"] for j in client.get("/api/jobs").json()["jobs"]] == ids[-6:]
+
+
+@pytest.fixture
+def fake_recorder(monkeypatch):
+    """不真的录音：录音组件、边录边转都换成假的；结束录音后的转写卡在 gate 上"""
+    import threading
+
+    from jiyao import live, record
+
+    gate = threading.Event()
+
+    class Rec:
+        def __init__(self, out, system_audio=True, mic=True):
+            self.out, self.sources = out, ["mic"]
+
+        def start(self):
+            self.out.mkdir(parents=True)
+
+        def stop_capture(self):
+            pass
+
+    class Live:
+        error = None
+
+        def __init__(self, out, sources, hotwords=None):
+            self.hotwords, self.timings = hotwords, {}
+
+        def start(self):
+            pass
+
+        def recent(self, n):
+            return [{"start_ms": 0, "text": "大家好"}]
+
+        def finish(self, final):
+            gate.wait(5)
+            return Transcript(str(final), 1000, [Sentence(0, 0, 900, "大家好。")])
+
+    def mixdown(out):
+        (out / "mix.m4a").write_bytes(b"\0")
+        return out / "mix.m4a"
+
+    monkeypatch.setattr(record, "Recording", Rec)
+    monkeypatch.setattr(record, "system_audio_supported", lambda: False)
+    monkeypatch.setattr(record, "track_level", lambda path, window_s=0.15: 0.5)
+    monkeypatch.setattr(record, "mixdown", mixdown)
+    monkeypatch.setattr(live, "LiveTranscriber", Live)
+    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 录音会")
+    yield gate
+    gate.set()
+
+
+def test_second_recording_rejected_and_stop_frees_slot(client, fake_recorder):
+    first = client.post("/api/record/start", json={"title": "评审"}).json()
+    assert first["state"] == "recording" and first["sources"] == ["mic"]
+    r = client.post("/api/record/start", json={"title": "评审"})
+    assert r.status_code == 409 and r.json()["detail"] == "已经在录音了，先结束这一场"
+    rec = client.get("/api/jobs").json()["jobs"][0]
+    assert rec["levels"] == {"mic": 0.5} and rec["live"] == [{"start_ms": 0, "text": "大家好"}]
+    assert client.get("/api/job").json()["id"] == first["id"]
+
+    stopped = client.post("/api/record/stop").json()
+    assert stopped["id"] == first["id"] and stopped["state"] == "saving"
+    assert client.post("/api/record/stop").status_code == 400
+    # 上一场还在后台转写，马上就能开下一场
+    nxt = client.post("/api/record/start", json={"title": "评审"}).json()
+    assert nxt["state"] == "recording" and nxt["meeting"] != first["meeting"]
+    jobs = {j["id"]: j for j in client.get("/api/jobs").json()["jobs"]}
+    assert jobs[first["id"]]["state"] in ("saving", "finalizing") and "levels" not in jobs[first["id"]]
+    assert client.get("/api/job").json()["id"] == nxt["id"]  # 旧接口优先返回正在录音的
+
+    fake_recorder.set()
+    import time
+
+    for _ in range(250):
+        jobs = {j["id"]: j for j in client.get("/api/jobs").json()["jobs"]}
+        if jobs[first["id"]]["state"] in ("done", "error"):
+            break
+        time.sleep(0.02)
+    assert jobs[first["id"]]["state"] == "done", jobs[first["id"]]
+    assert jobs[nxt["id"]]["state"] == "recording"
 
 
 def test_edit_minutes(client, root):
@@ -241,7 +434,7 @@ def test_summarize_auto_syncs_to_obsidian(client, root, tmp_path, monkeypatch):
     from jiyao import config
 
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True: "# 新标题\n\n正文")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 新标题\n\n正文")
     cfg = config.load()
     cfg.obsidian.vault = str(tmp_path / "没有这个库")
     config.save(cfg)

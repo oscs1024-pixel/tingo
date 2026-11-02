@@ -31,7 +31,9 @@ def test_split_chunks_respects_limit():
 
 def test_meta_filled_by_program(monkeypatch):
     monkeypatch.setattr(
-        sm, "_chat", lambda cfg, prompt, on_token=None, think=True: "```markdown\n# 周会\n\n## 一句话总结\n好\n```"
+        sm,
+        "_chat",
+        lambda cfg, prompt, on_token=None, think=True, on_think=None: "```markdown\n# 周会\n\n## 一句话总结\n好\n```",
     )
     tr = _tr()
     tr.rename(["张三"])
@@ -44,7 +46,7 @@ def test_meta_filled_by_program(monkeypatch):
 def test_prompt_carries_date_and_transcript(monkeypatch):
     seen = {}
 
-    def fake(cfg, prompt, on_token=None, think=True):
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None):
         seen["prompt"] = prompt
         return "# T"
 
@@ -57,7 +59,7 @@ def test_prompt_carries_date_and_transcript(monkeypatch):
 def test_long_transcript_map_reduce(monkeypatch):
     prompts = []
 
-    def fake(cfg, prompt, on_token=None, think=True):
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None):
         prompts.append(prompt)
         return "# 合并后" if "分段笔记" in prompt else "- 要点"
 
@@ -108,7 +110,9 @@ def test_annotate_dates_across_month_end():
 def test_prompt_dates_are_annotated(monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        sm, "_chat", lambda cfg, prompt, on_token=None, think=True: seen.setdefault("p", prompt) and "# T"
+        sm,
+        "_chat",
+        lambda cfg, prompt, on_token=None, think=True, on_think=None: seen.setdefault("p", prompt) and "# T",
     )
     tr = Transcript("m.wav", 1000, [Sentence(0, 0, 900, "下周五交付。")])
     sm.summarize(tr, LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2))
@@ -155,3 +159,58 @@ def test_max_chars_follows_ollama_context(monkeypatch):
     assert sm.default_max_chars(local) == 40000  # 连不上就不当 Ollama
     assert sm.default_max_chars(LLMConfig(base_url="https://api.deepseek.com")) == 40000
     sm.is_ollama.cache_clear()
+
+
+def _stream(monkeypatch, deltas):
+    """假的流式客户端：每个 delta 是 ChoiceDelta 的字段（reasoning_content 等是供应商加的额外字段）"""
+    from types import SimpleNamespace as NS
+
+    from openai.types.chat.chat_completion_chunk import ChoiceDelta
+
+    chunks = [NS(choices=[NS(delta=ChoiceDelta(**d))]) for d in deltas]
+    client = NS(chat=NS(completions=NS(create=lambda **kw: iter(chunks))))
+    monkeypatch.setattr(sm, "_client", lambda cfg: client)
+
+
+def test_chat_reports_thinking_from_reasoning_fields(monkeypatch):
+    _stream(
+        monkeypatch,
+        [
+            {"role": "assistant", "content": None, "reasoning_content": "先看议题"},
+            {"content": "", "reasoning_content": "再看待办"},
+            {"reasoning": "OpenRouter 风格"},
+            {"content": "# 标题"},
+            {"content": "\n正文"},
+        ],
+    )
+    thinking, tokens = [], []
+    out = sm._chat(LLMConfig(api_key="x"), "p", tokens.append, on_think=thinking.append)
+    assert thinking == [4, 8, 21]
+    assert "".join(tokens) == out == "# 标题\n正文"
+
+
+def test_chat_reports_thinking_inside_think_tag(monkeypatch):
+    _stream(
+        monkeypatch, [{"content": "<think>"}, {"content": "想一想"}, {"content": "</think>\n# T"}, {"content": "，好"}]
+    )
+    thinking, tokens = [], []
+    out = sm._chat(LLMConfig(api_key="x"), "p", tokens.append, on_think=thinking.append)
+    assert thinking == [7, 10]  # 正文出现前按 <think> 里累计的字数报
+    assert out == "# T，好" and "".join(tokens) == out
+    sm._chat(LLMConfig(api_key="x"), "p")  # 不传回调也能跑
+
+
+def test_only_final_call_reports_thinking(monkeypatch):
+    calls = []
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None):
+        calls.append(on_think)
+        if on_think:
+            on_think(7)
+        return "# 合并后" if "分段笔记" in prompt else "- 要点"
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    seen = []
+    sm.summarize(_tr(40), LLMConfig(api_key="x"), max_chars=100, on_think=seen.append)
+    assert all(c is None for c in calls[:-1]) and calls[-1] is not None
+    assert seen == [7]

@@ -1,10 +1,12 @@
 """图形界面的本地服务：只监听 127.0.0.1，前端在 web/ 目录。
 
-同一时间只跑一个任务（录音 / 转写 / 生成纪要），前端轮询 /api/job 拿进度。
+录音和后台任务（转写、生成纪要）可以同时进行：录音同时只有一场，同一场会议同时只有一个任务，
+前端轮询 /api/jobs 拿所有任务的进度。
 """
 
 from __future__ import annotations
 
+import itertools
 import os
 import platform
 import shutil
@@ -91,9 +93,19 @@ def _open(target: str, reveal: bool = False) -> None:
         _launch(["xdg-open", str(Path(target).parent) if reveal else target])
 
 
+_job_ids = itertools.count(1)
+
+
+def _next_job_id() -> str:
+    return f"j{next(_job_ids)}"
+
+
+KEEP_FINISHED = 5  # 结束了的任务只留最近几个，给界面显示结果
+
+
 @dataclass
 class Job:
-    kind: str  # record | process | summarize
+    kind: str  # record | process | summarize | models
     meeting: str
     state: str  # recording | saving | finalizing | loading | transcribing | summarizing | done | error
     started_at: float = field(default_factory=time.time)
@@ -102,6 +114,10 @@ class Job:
     stage: str = ""
     sources: list[str] = field(default_factory=list)
     notice: str = ""  # 完成后给用户的附加提示（比如"已存到 Obsidian"）
+    # 任务编号：录音和后台任务可以同时进行，界面按编号区分
+    id: str = field(default_factory=_next_job_id)
+    thinking: int = 0  # 推理模型已经思考了多少字（还没开始写纪要时显示）
+    finished_at: float = 0.0  # 结束时间；结束后用时不再增长
 
     @property
     def busy(self) -> bool:
@@ -153,8 +169,9 @@ class LLMTestRequest(BaseModel):
 def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("JIYAO_ROOT", meetings.DEFAULT_ROOT))).expanduser()
     app = FastAPI(title="jiyao", docs_url=None, redoc_url=None)
-    lock = threading.Lock()
-    state: dict = {"job": None, "recording": None, "hotwords": []}
+    lock = threading.Lock()  # 保护 jobs 列表和录音状态
+    jobs: list[Job] = []  # 进行中和刚结束（还没被界面收起）的任务，按开始先后
+    state: dict = {"recording": None, "live": None, "hotwords": []}  # 正在进行的那一场录音
 
     def folder(meeting_id: str) -> Path:
         path = (root / meeting_id).resolve()
@@ -162,18 +179,45 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(404, "找不到这场会议")
         return path
 
-    def current() -> Job | None:
-        return state["job"]
+    def conflict(new: Job, j: Job) -> str | None:
+        if new.kind == "record" and j.state == "recording":
+            return "已经在录音了，先结束这一场"
+        if new.kind == "models" and j.kind == "models":
+            return "已经在下载模型了，等它下完"
+        if new.meeting and new.kind != "models" and j.kind != "models" and j.meeting == new.meeting:
+            return "这场会议正在处理，等它完成"
+        return None
 
     def start_job(job: Job) -> None:
+        """登记一个任务。录音同时只能有一场；同一场会议、模型下载各自同时只能有一个任务；其余可以并行
+        （转写共用一个识别模型，在 asr.infer_lock 上排队；生成纪要主要等网络）。"""
         with lock:
-            if current() and current().busy:
-                raise HTTPException(409, "还有任务在进行，请稍等")
-            state["job"] = job
+            for j in jobs:
+                if j.busy and (msg := conflict(job, j)):
+                    raise HTTPException(409, msg)
+            finished = [j for j in jobs if not j.busy]
+            if len(finished) > KEEP_FINISHED:
+                drop = {j.id for j in finished[: len(finished) - KEEP_FINISHED]}
+                jobs[:] = [j for j in jobs if j.id not in drop]
+            jobs.append(job)
+
+    def finish(job: Job) -> None:
+        with lock:
+            job.finished_at = time.time()
+            job.state = "done"
 
     def fail(job: Job, e: Exception) -> None:
-        job.state, job.error = "error", str(e) or e.__class__.__name__
+        with lock:
+            job.finished_at = time.time()
+            job.error = str(e) or e.__class__.__name__
+            job.state = "error"
         log.error("%s %s 失败：%s", job.kind, job.meeting, job.error, exc_info=e)
+
+    def job_json(job: Job) -> dict:
+        """调用方持有 lock。录音中的任务另带电平和实时文字（见 snapshot）。"""
+        data = asdict(job)
+        data["elapsed"] = (job.finished_at or time.time()) - job.started_at
+        return data
 
     # ---------- 处理流程 ----------
 
@@ -189,9 +233,20 @@ def create_app(root: Path | None = None) -> FastAPI:
         def on_stage(s: str) -> None:
             job.stage = s
             job.minutes = ""
+            job.thinking = 0
+
+        def on_think(n: int) -> None:
+            job.thinking = n
 
         t = time.time()
-        text = summarize(tr, cfg.llm, meeting_date=meetings.meeting_date(out), on_token=on_token, on_stage=on_stage)
+        text = summarize(
+            tr,
+            cfg.llm,
+            meeting_date=meetings.meeting_date(out),
+            on_token=on_token,
+            on_stage=on_stage,
+            on_think=on_think,
+        )
         (out / MINUTES).write_text(text, encoding="utf-8")
         job.minutes = text
         log.info("%s 纪要完成：模型 %s，%.0f 秒", out.name, cfg.llm.model, time.time() - t)
@@ -226,7 +281,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                 raise RuntimeError("没有识别出任何语音")
             meetings.save_transcript(tr, out)
             run_summarize(job, tr, out)
-            job.state = "done"
+            finish(job)
         except Exception as e:  # noqa: BLE001 - 错误原样显示给用户
             fail(job, e)
 
@@ -389,12 +444,13 @@ def create_app(root: Path | None = None) -> FastAPI:
         def work() -> None:
             try:
                 run_summarize(job, Transcript.load(path / TRANSCRIPT_JSON), path)
-                job.state = "done"
+                finish(job)
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
 
+        reply = asdict(job)
         threading.Thread(target=work, daemon=True).start()
-        return asdict(job)
+        return reply
 
     @app.post("/api/meetings/{meeting_id}/process")
     def post_process(meeting_id: str) -> dict:
@@ -405,8 +461,9 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(400, "没有录音文件")
         job = Job("process", meeting_id, "loading")
         start_job(job)
+        reply = asdict(job)
         threading.Thread(target=run_process, args=(job, audio, path, []), daemon=True).start()
-        return asdict(job)
+        return reply
 
     @app.post("/api/meetings/{meeting_id}/push")
     def post_push(meeting_id: str) -> dict:
@@ -503,7 +560,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         try:
             rec.start()
         except Exception as e:
-            state["job"] = None
+            with lock:
+                jobs[:] = [j for j in jobs if j.id != job.id]
             shutil.rmtree(out, ignore_errors=True)
             raise HTTPException(500, str(e)) from e
         from .live import LiveTranscriber
@@ -511,18 +569,23 @@ def create_app(root: Path | None = None) -> FastAPI:
         # 边录边转：录音时就分段识别，结束后只剩最后一段和一次说话人聚类
         live = LiveTranscriber(out, rec.sources, hotwords=config.load().hotwords + req.hotwords)
         live.start()
-        state["recording"], state["hotwords"], state["live"] = rec, req.hotwords, live
+        with lock:
+            state["recording"], state["hotwords"], state["live"] = rec, req.hotwords, live
         log.info("%s 开始录音：%s", out.name, "+".join(rec.sources))
         return asdict(job)
 
     @app.post("/api/record/stop")
     def record_stop() -> dict:
-        job, rec = current(), state["recording"]
-        if not job or job.kind != "record" or job.state != "recording" or rec is None:
-            raise HTTPException(400, "没有正在进行的录音")
-        job.state = "saving"
-        state["recording"] = None
-        live = state.pop("live", None)
+        with lock:
+            job = next((j for j in jobs if j.kind == "record" and j.state == "recording"), None)
+            rec = state["recording"]
+            if job is None or rec is None:
+                raise HTTPException(400, "没有正在进行的录音")
+            # 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
+            job.state = "saving"
+            reply = asdict(job)  # 后台线程马上会改状态，回给界面的固定是 saving
+            live, hotwords = state["live"], state["hotwords"]
+            state["recording"], state["live"], state["hotwords"] = None, None, []
 
         def work() -> None:
             from .record import mixdown
@@ -555,7 +618,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                 except Exception as e:  # noqa: BLE001
                     fail(job, e)
                     return
-                run_process(job, final, out, state["hotwords"])
+                run_process(job, final, out, hotwords)
                 return
             # 转写先落盘，合成音频（长会议要二三十秒）和生成纪要同时进行
             meetings.save_transcript(tr, out)
@@ -576,12 +639,12 @@ def create_app(root: Path | None = None) -> FastAPI:
                 mixer.join()
                 if mix_error:
                     raise RuntimeError(f"纪要已生成，但合成录音失败：{mix_error[0]}（原始音轨还在会议文件夹里）")
-                job.state = "done"
+                finish(job)
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
 
         threading.Thread(target=work, daemon=True).start()
-        return asdict(job)
+        return reply
 
     @app.post("/api/import")
     def import_file(
@@ -600,32 +663,53 @@ def create_app(root: Path | None = None) -> FastAPI:
         audio = out / f"录音{name.suffix.lower()}"
         with audio.open("wb") as f:
             shutil.copyfileobj(file.file, f)
+        reply = asdict(job)
         threading.Thread(target=run_process, args=(job, audio, out, []), daemon=True).start()
-        return asdict(job)
+        return reply
 
-    @app.get("/api/job")
-    def get_job() -> dict:
+    def snapshot() -> list[dict]:
         from . import asr
         from .record import track_level
 
-        job = current()
-        if not job:
-            return {"state": "idle"}
-        data = asdict(job)
-        data["elapsed"] = time.time() - job.started_at
-        data["model_loaded"] = asr.model_loaded()
-        if job.state == "recording":
-            out = root / job.meeting
-            data["levels"] = {s: track_level(out / f"{s}.wav") for s in job.sources}
-            live = state.get("live")
-            data["live"] = live.recent(8) if live else []
+        loaded = asr.model_loaded()
+        with lock:
+            data = [job_json(j) for j in jobs]
+            live = state["live"]
+        for d in data:
+            d["model_loaded"] = loaded
+            if d["state"] == "recording":
+                out = root / d["meeting"]
+                d["levels"] = {s: track_level(out / f"{s}.wav") for s in d["sources"]}
+                d["live"] = live.recent(8) if live else []
         return data
+
+    @app.get("/api/jobs")
+    def get_jobs() -> dict:
+        """所有任务（进行中的和刚结束的），按开始时间排列"""
+        from . import asr
+
+        return {"jobs": snapshot(), "model_loaded": asr.model_loaded()}
+
+    @app.get("/api/job")
+    def get_job() -> dict:
+        """旧接口：只返回一个任务（正在录音的优先，其次最近一个进行中的，再次最近一个）"""
+        data = snapshot()
+        busy = [d for d in data if d["state"] not in ("done", "error")]
+        pick = next((d for d in data if d["state"] == "recording"), None) or (busy or data or [None])[-1]
+        return pick or {"state": "idle"}
 
     @app.post("/api/job/dismiss")
     def dismiss() -> dict:
+        """收起所有已结束的任务"""
         with lock:
-            if current() and not current().busy:
-                state["job"] = None
+            jobs[:] = [j for j in jobs if j.busy]
+        return {"ok": True}
+
+    @app.post("/api/jobs/{job_id}/dismiss")
+    def dismiss_one(job_id: str) -> dict:
+        """收起一个已结束的任务"""
+        with lock:
+            jobs[:] = [j for j in jobs if j.busy or j.id != job_id]
         return {"ok": True}
 
     from fastapi.middleware.cors import CORSMiddleware

@@ -26,7 +26,7 @@ def _meeting(tmp_path):
 
 def test_summarize_renames_speakers_and_writes_minutes(tmp_path, monkeypatch):
     monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
-    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True: "# 测试会")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 测试会")
     d = _meeting(tmp_path)
     result = runner.invoke(app, ["summarize", str(d), "-s", "张三，李四", "-d", "2026-11-02"])
     assert result.exit_code == 0, result.output
