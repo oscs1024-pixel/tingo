@@ -1,0 +1,75 @@
+/* 任务列表：侧边栏"进行中"和首页玻璃面板下方都用它。录音之外的任务都在后台跑，这里看进度、点进去看过程。 */
+
+import { api, type Job } from "./api";
+import { $maybe, esc, fmt } from "./dom";
+import { isBusy, jobDetail, jobTitle, progressOf, S } from "./state";
+
+const linkOf = (j: Job) =>
+  j.state === "recording" ? "#/" : j.kind === "models" ? "#/settings/asr" : `#/m/${encodeURIComponent(j.meeting ?? "")}`;
+
+function item(j: Job, big: boolean): string {
+  const busy = isBusy(j);
+  const rec = j.state === "recording";
+  const pct = Math.round(progressOf(j) * 100);
+  const icon = rec
+    ? `<span class="live-dot"></span>`
+    : busy
+      ? `<span class="task-spin"></span>`
+      : j.state === "done"
+        ? `<span class="task-ok">✓</span>`
+        : `<span class="task-err">!</span>`;
+  const detail = rec ? `录音中 ${fmt((j.elapsed ?? 0) * 1000)}` : jobDetail(j);
+  return `
+    <a class="task ${j.state} ${big ? "big" : ""}" href="${linkOf(j)}" data-id="${esc(j.id ?? "")}">
+      <span class="task-ico">${icon}</span>
+      <span class="task-main">
+        <span class="task-title">${esc(jobTitle(j))}</span>
+        <span class="task-detail">${esc(detail)}</span>
+        ${busy && !rec ? `<span class="task-bar"><i style="width:${Math.max(3, pct)}%"></i></span>` : ""}
+      </span>
+      ${busy && !rec && big ? `<span class="task-pct">${pct}%</span>` : ""}
+      ${!busy && j.id ? `<button class="task-x" data-dismiss="${esc(j.id)}" title="收起">×</button>` : ""}
+    </a>`;
+}
+
+export async function dismissJob(id: string): Promise<void> {
+  S.jobs = S.jobs.filter((j) => j.id !== id);
+  renderTasks();
+  await api(`/api/jobs/${encodeURIComponent(id)}/dismiss`, { method: "POST" }).catch(() => {});
+}
+
+function bind(box: HTMLElement): void {
+  box.querySelectorAll<HTMLButtonElement>("[data-dismiss]").forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissJob(b.dataset.dismiss ?? "");
+      }),
+  );
+}
+
+/** 侧边栏：所有任务的紧凑列表；首页：后台任务的大卡片（录音本身在玻璃面板里，不重复显示） */
+export function renderTasks(): void {
+  const side = $maybe("#sideTasks");
+  if (side) {
+    const list = S.jobs.filter((j) => j.state !== "idle");
+    side.hidden = !list.length;
+    const html = list.length ? `<div class="recent-head">进行中</div>${list.map((j) => item(j, false)).join("")}` : "";
+    if (side.dataset.html !== html) {
+      side.dataset.html = html;
+      side.innerHTML = html;
+      bind(side);
+    }
+  }
+  const home = $maybe("#homeTasks");
+  if (home) {
+    const list = S.jobs.filter((j) => j.state !== "recording" && j.state !== "idle" && !(j.kind === "models" && S.job === j));
+    const html = list.length ? list.map((j) => item(j, true)).join("") : "";
+    if (home.dataset.html !== html) {
+      home.dataset.html = html;
+      home.innerHTML = html;
+      bind(home);
+    }
+  }
+}

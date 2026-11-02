@@ -16,9 +16,9 @@ export function route(): void {
   } else if (h === "/meetings") {
     nav = "meetings";
     renderMeetings();
-  } else if (h === "/settings") {
+  } else if (h === "/settings" || h.startsWith("/settings/")) {
     nav = "settings";
-    renderSettings();
+    renderSettings(h.split("/")[2] || "llm");
   } else {
     renderHome();
   }

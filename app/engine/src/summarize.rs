@@ -241,11 +241,14 @@ pub fn strip_think(text: &str, partial: bool) -> String {
 }
 
 /// 流式调用 chat/completions，返回去掉思考过程的完整回答。
+/// `on_think(已思考字数)`：推理模型先长时间思考，不报出来界面就像卡住了。
+/// 思考内容有的放在 reasoning_content / reasoning 字段，有的夹在正文的 <think> 里，两种都算。
 pub fn chat(
     cfg: &LlmConfig,
     prompt: &str,
     think: bool,
     mut on_token: impl FnMut(&str),
+    mut on_think: impl FnMut(usize),
 ) -> Result<String, String> {
     let local = is_ollama(cfg);
     let key = if cfg.api_key.is_empty() && local {
@@ -290,6 +293,7 @@ pub fn chat(
     }
     let mut raw = String::new();
     let mut shown = 0;
+    let mut thought = 0usize;
     for line in BufReader::new(resp).lines() {
         let line = line.map_err(|e| format!("读取大模型输出中断：{e}"))?;
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
@@ -301,7 +305,14 @@ pub fn chat(
         let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
             continue;
         };
-        let Some(delta) = v["choices"][0]["delta"]["content"].as_str() else {
+        let d = &v["choices"][0]["delta"];
+        if let Some(r) = d["reasoning_content"].as_str().or_else(|| d["reasoning"].as_str()) {
+            if !r.is_empty() {
+                thought += r.chars().count();
+                on_think(thought);
+            }
+        }
+        let Some(delta) = d["content"].as_str() else {
             continue;
         };
         if delta.is_empty() {
@@ -312,6 +323,8 @@ pub fn chat(
         if visible.len() > shown {
             on_token(&visible[shown..]);
             shown = visible.len();
+        } else if shown == 0 && raw.trim_start().starts_with("<think>") {
+            on_think(thought + raw.chars().count());
         }
     }
     Ok(strip_think(&raw, false).trim().to_string())
@@ -340,6 +353,8 @@ pub fn split_chunks(lines: &[&str], max_chars: usize) -> Vec<String> {
 pub struct Hooks<'a> {
     pub on_token: &'a mut dyn FnMut(&str),
     pub on_stage: &'a mut dyn FnMut(&str),
+    /// 推理模型思考了多少字（还没开始写正文时用来显示进展）
+    pub on_think: &'a mut dyn FnMut(usize),
 }
 
 pub fn summarize(
@@ -368,6 +383,7 @@ pub fn summarize(
             &minutes_prompt.replace("{transcript}", &text),
             true,
             hooks.on_token,
+            hooks.on_think,
         )?
     } else {
         let lines: Vec<&str> = text.lines().collect();
@@ -385,7 +401,7 @@ pub fn summarize(
             notes.push(format!(
                 "### 第 {} 段\n{}",
                 i + 1,
-                chat(cfg, &p, false, |_| {})?
+                chat(cfg, &p, false, |_| {}, |_| {})?
             ));
         }
         (hooks.on_stage)("合并成纪要");
@@ -397,7 +413,7 @@ pub fn summarize(
         let p = REDUCE_PROMPT
             .replace("{instructions}", &instructions)
             .replace("{notes}", &notes.join("\n\n"));
-        chat(cfg, &p, true, hooks.on_token)?
+        chat(cfg, &p, true, hooks.on_token, hooks.on_think)?
     };
     Ok(with_meta(&body, tr, &day))
 }

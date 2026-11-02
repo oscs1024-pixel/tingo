@@ -6,7 +6,8 @@ import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
-import { isBusy, S } from "../state";
+import { isBusy, jobOf, minutesProgress, progressOf, S, SECTIONS } from "../state";
+import { dismissJob } from "../tasks";
 
 let audioEl: HTMLAudioElement | null = null;
 let detailTab: "minutes" | "transcript" = "minutes";
@@ -33,7 +34,9 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   }
   if (decodeURIComponent(location.hash.slice(1)) !== `/m/${id}`) return; // 加载期间已经切走
   S.detail = d;
-  const jobHere = isBusy(S.job) && S.job.meeting === id;
+  const jobHere = jobOf(id);
+  // 打开会议就算看过结果了：收起这场会议已结束的任务
+  S.jobs.filter((j) => j.meeting === id && j.kind !== "models" && !isBusy(j) && j.id).forEach((j) => dismissJob(j.id!));
   main().innerHTML = `
     <div class="page">
       ${backLink}
@@ -41,7 +44,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
         <h1>${esc(d.title)}</h1>
         <div class="detail-actions">
           ${d.minutes ? `<button class="btn" id="aCopy">${ICON.copy}复制纪要</button><button class="btn" id="aPush">${ICON.send}推送到群</button><button class="btn" id="aObsidian" title="存进 Obsidian 库并打开（在设置里选库）">${ICON.vault}Obsidian</button>` : ""}
-          ${d.has_transcript ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? "重新生成" : "生成纪要"}</button>` : ""}
+          ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? "重新生成" : "生成纪要"}</button>` : ""}
           <button class="btn ghost" id="aFolder" title="打开文件夹">${ICON.folder}</button>
         </div>
       </div>
@@ -68,8 +71,12 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
         </div>
         <div class="card" id="pane"></div>`
           : `
-        <div class="card"><div class="empty"><h3>${jobHere ? "正在处理…" : "录音还没有转写"}</h3><div>${jobHere ? "进度在首页可以看到" : "可能是上次处理被打断了"}</div>
-          ${jobHere ? `<a class="btn" href="#/">查看进度</a>` : d.audio ? `<button class="btn primary" id="aProcess">开始转写</button>` : ""}</div></div>`
+        ${
+          jobHere
+            ? `<div class="card doc" id="pane"></div>`
+            : `<div class="card"><div class="empty"><h3>录音还没有转写</h3><div>可能是上次处理被打断了</div>
+          ${d.audio ? `<button class="btn primary" id="aProcess">开始转写</button>` : ""}</div></div>`
+        }`
       }
       ${d.audio ? playerHTML : ""}
     </div>`;
@@ -94,8 +101,9 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   on("#aFolder", () => api(meetingPath(id, "/reveal"), { method: "POST" }));
   on("#aProcess", async () => {
     try {
-      S.job = await api<Job>(meetingPath(id, "/process"), { method: "POST" });
-      location.hash = "#/";
+      const job = await api<Job>(meetingPath(id, "/process"), { method: "POST" });
+      S.jobs = [...S.jobs.filter((j) => j.id !== job.id), job];
+      renderDetail(id, true);
       poll();
     } catch (e) {
       toast(errorMessage(e), true);
@@ -103,7 +111,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   });
   if (d.audio) bindPlayer(id);
   if (d.has_transcript) drawPane();
-  if (jobHere) updateDetailJob(S.job, { state: "idle" });
+  if (jobHere) updateDetailJob(jobHere, { state: "idle" });
 }
 
 function drawPane(): void {
@@ -112,7 +120,7 @@ function drawPane(): void {
   if (!d || !pane) return;
   $$<HTMLButtonElement>(".seg button").forEach((b) => b.classList.toggle("on", b.dataset.tab === detailTab));
   const edit = $maybe("#aEdit");
-  if (edit) edit.hidden = !(detailTab === "minutes" && d.minutes);
+  if (edit) edit.hidden = !(detailTab === "minutes" && d.minutes) || !!jobOf(d.id); // 生成中改了也会被新纪要覆盖
   if (detailTab === "minutes") {
     pane.className = "card doc";
     pane.innerHTML = d.minutes
@@ -159,29 +167,100 @@ function drawPane(): void {
   });
 }
 
+/* 生成过程：转写 → 生成纪要（按模板一节一节写），实时显示写到哪、写了多少、用了多久，纪要边写边显示。 */
+const genSkeleton = () => `
+  <div class="gen" id="genBox">
+    <div class="gen-head"><span class="live-dot"></span><b id="genTitle"></b><span class="grow"></span><span class="gen-meta" id="genMeta"></span></div>
+    <div class="gen-bar"><i id="genBar"></i></div>
+    <div class="gen-steps" id="genSteps"></div>
+    <div class="md gen-stream" id="genStream"></div>
+  </div>`;
+
+function stepChip(label: string, st: "done" | "now" | "todo"): string {
+  return `<span class="gen-step ${st}">${st === "done" ? "✓" : st === "now" ? "<i></i>" : ""}${esc(label)}</span>`;
+}
+
+function drawGen(job: Job): void {
+  const summarizing = job.state === "summarizing";
+  const mp = minutesProgress(job);
+  const llm = S.env?.llm_model ?? "大模型";
+  $("#genTitle").textContent = summarizing
+    ? mp.chunk
+      ? `会议较长，先分段提炼（${mp.chunk[0]}/${mp.chunk[1]}）`
+      : mp.merging
+        ? "把各段要点合并成纪要"
+        : mp.section < 0
+          ? job.thinking
+            ? `${llm} 正在思考`
+            : `${llm} 正在读转写`
+          : `${llm} 正在写纪要`
+    : job.state === "transcribing"
+      ? `正在本地转写${job.stage ? ` · ${job.stage}` : ""}`
+      : job.state === "finalizing"
+        ? "转写最后一段，区分说话人"
+        : job.state === "loading"
+          ? "加载识别模型"
+          : "正在保存录音";
+  const pct = Math.round(progressOf(job) * 100);
+  const elapsed = fmt((job.elapsed ?? 0) * 1000);
+  const wrote = summarizing && mp.chars ? ` · 已写 ${mp.chars} 字` : summarizing && job.thinking ? ` · 已思考 ${job.thinking} 字` : "";
+  $("#genMeta").textContent = `用时 ${elapsed}${wrote} · 约 ${pct}%`;
+  $("#genBar").style.width = `${Math.max(2, pct)}%`;
+
+  // 步骤：转写 → 纪要的各节
+  const transcribed = summarizing;
+  const steps = [
+    stepChip("转写", transcribed ? "done" : "now"),
+    stepChip("通读与思考", !summarizing ? "todo" : mp.section >= 0 ? "done" : "now"),
+  ];
+  SECTIONS.forEach((t, i) => {
+    const st = !summarizing || mp.chunk ? "todo" : i < mp.section ? "done" : i === mp.section ? "now" : "todo";
+    steps.push(stepChip(t, st));
+  });
+  const html = steps.join(`<span class="gen-arrow"></span>`);
+  const box = $("#genSteps");
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+  }
+
+  const gs = $("#genStream");
+  const minutes = summarizing && !mp.chunk ? (job.minutes ?? "") : "";
+  const key = `${job.state}:${minutes.length}:${minutes ? 0 : (job.thinking ?? 0)}`;
+  if (gs.dataset.key !== key) {
+    gs.dataset.key = key;
+    gs.innerHTML = minutes
+      ? renderMarkdown(minutes) + `<span class="gen-caret"></span>`
+      : `<p class="gen-wait">${
+          summarizing
+            ? mp.chunk
+              ? "长会议分成几段，每段先提炼要点，最后合并成一份纪要。"
+              : job.thinking
+                ? `大模型在动笔前先思考（已思考 ${job.thinking} 字），长会议这一步可能要一两分钟，开始写后内容会一节一节出现在这里。`
+                : "大模型先通读整场转写，开始动笔后内容会一节一节出现在这里。"
+            : "识别在这台电脑上进行，录音不会上传。转写完成后接着生成纪要，不用守着，可以去开下一场会。"
+        }</p>`;
+    const near = main().scrollHeight - main().scrollTop - main().clientHeight < 160;
+    if (near && minutes) main().scrollTop = main().scrollHeight; // 停在底部时跟着往下滚
+  }
+}
+
 export function updateDetailJob(job: Job, prev: Job): void {
-  if (job.kind !== "summarize" || !S.detail) return;
-  const pane = $maybe("#pane");
-  if (isBusy(job) && pane) {
+  if (!S.detail || job.meeting !== S.detail.id) return;
+  if (isBusy(job)) {
+    const pane = $maybe("#pane");
+    if (!pane) return;
     detailTab = "minutes";
     $$<HTMLButtonElement>(".seg button").forEach((b) => b.classList.toggle("on", b.dataset.tab === "minutes"));
     pane.className = "card doc";
-    if (!$maybe("#genBox")) {
-      pane.innerHTML = `<div id="genBox"><div class="live-head" style="color:var(--blue);margin-bottom:18px"><span class="live-dot" style="background:var(--cyan)"></span><span id="genTitle">正在生成纪要</span></div><div class="md" id="genStream"></div></div>`;
-    }
-    $("#genTitle").textContent = job.stage
-      ? `正在生成纪要 · ${job.stage}`
-      : `正在用 ${S.env ? S.env.llm_model : "大模型"} 生成纪要`;
-    const gs = $("#genStream");
-    const minutes = job.minutes ?? "";
-    if (gs.dataset.len !== String(minutes.length)) {
-      gs.dataset.len = String(minutes.length);
-      gs.innerHTML = minutes ? renderMarkdown(minutes) : `<p style="color:var(--muted)">正在阅读转写…</p>`;
-    }
-  } else if (prev.state !== job.state && (job.state === "done" || job.state === "error")) {
-    if (job.state === "done") toast("纪要已更新");
-    else toast(job.error ?? "生成失败", true);
-    api("/api/job/dismiss", { method: "POST" });
+    if (!$maybe("#genBox")) pane.innerHTML = genSkeleton();
+    const edit = $maybe("#aEdit");
+    if (edit) edit.hidden = true;
+    drawGen(job);
+  } else if (isBusy(prev) && (job.state === "done" || job.state === "error")) {
+    if (job.state === "done") toast("纪要已生成");
+    else toast(job.error || "生成失败", true);
+    if (job.id) dismissJob(job.id);
     renderDetail(S.detail.id, true);
   }
 }
@@ -189,8 +268,9 @@ export function updateDetailJob(job: Job, prev: Job): void {
 async function regenerate(): Promise<void> {
   if (!S.detail) return;
   try {
-    S.job = await api<Job>(meetingPath(S.detail.id, "/summarize"), { method: "POST" });
-    updateDetailJob(S.job, { state: "idle" });
+    const job = await api<Job>(meetingPath(S.detail.id, "/summarize"), { method: "POST" });
+    S.jobs = [...S.jobs.filter((j) => j.id !== job.id), job];
+    updateDetailJob(job, { state: "idle" });
     poll();
   } catch (e) {
     toast(errorMessage(e), true);

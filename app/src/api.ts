@@ -12,6 +12,8 @@ export interface Env {
   /** 桌面版（Rust 后端）：模型在界面里下载 */
   models_downloadable?: boolean;
   models_size_mb?: number;
+  /** 当前识别模型的名字（桌面版） */
+  asr_model?: string;
 }
 
 export interface MeetingSummary {
@@ -61,6 +63,8 @@ export type JobState =
   | "error";
 
 export interface Job {
+  /** 任务编号（桌面版和新版 Python 后端都有；旧接口只有一个任务时为空） */
+  id?: string;
   state: JobState;
   kind?: "record" | "process" | "summarize" | "models";
   meeting?: string;
@@ -73,6 +77,8 @@ export interface Job {
   levels?: Record<string, number>;
   live?: { start_ms: number; text: string }[];
   notice?: string;
+  /** 推理模型已经思考了多少字 */
+  thinking?: number;
 }
 
 export interface Config {

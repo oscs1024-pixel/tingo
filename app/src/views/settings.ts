@@ -1,4 +1,5 @@
-/* 设置：识别模型（桌面版可下载切换）、大模型（本机中转一键选择 + 远程服务 + 自定义）、热词、推送到群、Obsidian、运行环境。 */
+/* 设置：左边二级菜单，右边一次只显示一项——大模型（本机中转一键选择 + 远程服务 + 自定义）、识别模型（桌面版可下载切换）、
+   热词、推送到群、Obsidian、运行环境。每一项单独保存。 */
 
 import { api, type Config, type Job, type LocalProvider } from "../api";
 import { $, $$, $maybe, errorMessage, esc, ICON, main, toast } from "../dom";
@@ -203,29 +204,131 @@ export function updateSettingsJob(job: Job, prev: Job): void {
   } else updateAsrProgress(job);
 }
 
-export async function renderSettings(): Promise<void> {
-  main().innerHTML = `<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;
-  let c: Config;
-  let local: LocalProvider[];
-  let vaults: { name: string; path: string }[];
+type Tab = "llm" | "asr" | "hotwords" | "push" | "obsidian" | "about";
+
+interface Ctx {
+  c: Config;
+  local: LocalProvider[];
+  vaults: { name: string; path: string }[];
+  hasAsr: boolean;
+}
+
+const TABS: { id: Tab; name: string; icon: keyof typeof ICON }[] = [
+  { id: "llm", name: "大模型", icon: "bot" },
+  { id: "asr", name: "识别模型", icon: "mic" },
+  { id: "hotwords", name: "热词", icon: "spark" },
+  { id: "push", name: "推送到群", icon: "send" },
+  { id: "obsidian", name: "Obsidian", icon: "vault" },
+  { id: "about", name: "运行环境", icon: "monitor" },
+];
+
+const platformOf = (url: string) =>
+  /feishu|larksuite/.test(url) ? "飞书" : /dingtalk/.test(url) ? "钉钉" : /weixin\.qq\.com/.test(url) ? "企业微信" : "已设置";
+
+function subtitle(t: Tab, x: Ctx): string {
+  const c = x.c;
+  switch (t) {
+    case "llm":
+      return c.model || "未设置";
+    case "asr":
+      return S.env?.asr_model ?? "Paraformer-large";
+    case "hotwords":
+      return c.hotwords.length ? `${c.hotwords.length} 个` : "未添加";
+    case "push":
+      return c.webhook ? platformOf(c.webhook) : "未设置";
+    case "obsidian":
+      return c.obsidian.vault ? c.obsidian.vault.split("/").filter(Boolean).pop() + (c.obsidian.auto ? " · 自动存" : "") : "未设置";
+    case "about":
+      return S.env ? `v${S.env.version}` : "";
+  }
+}
+
+/** 保存：接口要完整的配置，没改的项照原样带上（API Key、加签密钥传 null 表示不改） */
+async function save(x: Ctx, patch: Record<string, unknown>, tab: Tab): Promise<void> {
+  const c = x.c;
   try {
-    [c, local, vaults] = await Promise.all([
+    await api<Config>("/api/config", {
+      method: "PUT",
+      json: {
+        base_url: c.base_url,
+        model: c.model,
+        api_key: null,
+        hotwords: c.hotwords,
+        webhook: c.webhook,
+        secret: null,
+        obsidian: c.obsidian,
+        ...patch,
+      },
+    });
+    toast("已保存");
+    refreshEnv();
+    renderSettings(tab);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
+const panelFoot = (extra = "") => `<div class="panel-foot">${extra}<span class="grow"></span><button class="btn primary" id="sSave">保存</button></div>`;
+
+export async function renderSettings(tab: string = "llm"): Promise<void> {
+  main().innerHTML = `<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;
+  let x: Ctx;
+  try {
+    const [c, local, vaults, hasAsr] = await Promise.all([
       api<Config>("/api/config"),
       api<LocalProvider[]>("/api/llm/providers").catch(() => []),
       api<{ name: string; path: string }[]>("/api/obsidian/vaults").catch(() => []),
+      api("/api/models").then(
+        () => true,
+        () => false, // Python 版没有可切换的识别模型
+      ),
       refreshEnv(),
     ]);
+    x = { c, local, vaults, hasAsr };
   } catch (e) {
     toast(errorMessage(e), true);
     return;
   }
-  const env = S.env;
-  const presets: Preset[] = [...local.map((p) => ({ id: p.id, name: p.name, base_url: p.base_url, local: p })), ...REMOTE_PRESETS];
+  if (!location.hash.startsWith("#/settings")) return; // 加载期间已经切走
+  const tabs = TABS.filter((t) => t.id !== "asr" || x.hasAsr);
+  const cur = (tabs.find((t) => t.id === tab) ?? tabs[0]).id;
+  $("#sBody").innerHTML = `
+    <div class="set-layout">
+      <nav class="set-nav">
+        ${tabs
+          .map(
+            (t) => `<a href="#/settings/${t.id}" class="${t.id === cur ? "on" : ""}"><span class="set-ico">${ICON[t.icon]}</span><span class="set-txt"><b>${t.name}</b><small>${esc(subtitle(t.id, x))}</small></span></a>`,
+          )
+          .join("")}
+      </nav>
+      <section class="card s-card set-panel" id="sPanel"></section>
+    </div>`;
+  PANELS[cur](x);
+}
+
+const PANELS: Record<Tab, (x: Ctx) => void> = {
+  llm: panelLlm,
+  asr: () => {
+    $("#sPanel").id = "sAsr";
+    $("#sAsr").innerHTML = `
+      <h2>识别模型</h2>
+      <p class="hint">把录音变成文字的模型，都在本机运行，录音不会上传。默认的 Paraformer 适合大多数中文会议；会上中英文混着说可以换 SenseVoice，要更准、想让热词在识别时就生效可以换 Fun-ASR-Nano。切换后从下一次转写起生效。</p>
+      <div class="asr-list" id="sAsrList"></div>`;
+    drawAsr();
+  },
+  hotwords: panelHotwords,
+  push: panelPush,
+  obsidian: panelObsidian,
+  about: panelAbout,
+};
+
+function panelLlm(x: Ctx): void {
+  const c = x.c;
+  const presets: Preset[] = [...x.local.map((p) => ({ id: p.id, name: p.name, base_url: p.base_url, local: p })), ...REMOTE_PRESETS];
   const norm = (u: string) => u.trim().replace(/\/+$/, "").replace("localhost", "127.0.0.1");
   const baseInput = () => $<HTMLInputElement>("#sBase");
   const presetOf = () =>
     (presets.find((p) => p.base_url && norm(baseInput().value) === norm(p.base_url)) ?? presets[presets.length - 1]).id;
-  const hot = [...c.hotwords];
   const dot = (p: Preset) =>
     p.local
       ? `<span class="dot" style="background:${p.local.running ? "var(--green)" : "#c9ccd1"};display:inline-block;margin-right:6px;vertical-align:1px" title="${p.local.running ? "运行中" : "未启动"}"></span>`
@@ -233,87 +336,20 @@ export async function renderSettings(): Promise<void> {
   const keyHint = c.api_key_set
     ? `已设置${c.api_key_hint !== "已设置" ? `（${esc(c.api_key_hint)}）` : ""}，留空表示不修改`
     : "本地 Ollama 不需要";
-  const checks: [boolean, string, string][] = [
-    [!!env?.ffmpeg, "ffmpeg", env?.ffmpeg ? "已安装" : "brew install ffmpeg"],
-    [
-      !!env?.system_audio,
-      "录系统声音",
-      env?.system_audio ? "可以录腾讯会议、飞书里对方的声音" : "需要 macOS 15+ 和 Xcode 命令行工具；不影响导入录音",
-    ],
-    [!!env?.model_cached, "识别模型", env?.model_loaded ? "已加载" : env?.model_cached ? "已下载" : "首次转写时自动下载约 2 GB"],
-  ];
+  $("#sPanel").innerHTML = `
+    <h2>大模型</h2>
+    <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。</p>
+    <div class="s-grid">
+      <div class="seg" id="sPreset">${presets.map((p) => `<button data-id="${p.id}">${dot(p)}${p.name}</button>`).join("")}</div>
+      <div class="s-row2">
+        <div class="field"><label>接口地址 Base URL</label><input class="input" id="sBase" value="${esc(c.base_url)}"></div>
+        <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label>
+          <div class="combo"><input class="input" id="sModel" value="${esc(c.model)}" placeholder="点这里从列表里选，也可以直接输入" autocomplete="off" spellcheck="false"><span class="combo-arrow">${ICON.chevron}</span><div class="combo-pop" id="sModelPop" hidden></div></div></div>
+      </div>
+      <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${keyHint}"></div>
+    </div>
+    ${panelFoot(`<button class="btn" id="sTest">测试连接</button><span class="test-msg" id="sTestMsg"></span>`)}`;
 
-  $("#sBody").innerHTML = `
-    <div class="settings">
-      <section class="card s-card" id="sAsr" hidden>
-        <h2>识别模型</h2>
-        <p class="hint">把录音变成文字的模型，都在本机运行。默认的 Paraformer 适合大多数中文会议；需要更快或更准时可以下载别的换着用，切换后从下一次转写起生效。</p>
-        <div class="asr-list" id="sAsrList"></div>
-      </section>
-
-      <section class="card s-card">
-        <h2>大模型</h2>
-        <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。</p>
-        <div class="s-grid">
-          <div class="seg" id="sPreset">${presets.map((p) => `<button data-id="${p.id}">${dot(p)}${p.name}</button>`).join("")}</div>
-          <div class="s-row2">
-            <div class="field"><label>接口地址 Base URL</label><input class="input" id="sBase" value="${esc(c.base_url)}"></div>
-            <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label>
-              <div class="combo"><input class="input" id="sModel" value="${esc(c.model)}" placeholder="点这里从列表里选，也可以直接输入" autocomplete="off" spellcheck="false"><span class="combo-arrow">${ICON.chevron}</span><div class="combo-pop" id="sModelPop" hidden></div></div></div>
-          </div>
-          <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${keyHint}"></div>
-          <div class="s-actions"><button class="btn" id="sTest">测试连接</button><span class="test-msg" id="sTestMsg"></span></div>
-        </div>
-      </section>
-
-      <section class="card s-card">
-        <h2>热词</h2>
-        <p class="hint">人名、项目代号、内部系统名。识别时优先识别成这些词，每场会议都生效。</p>
-        <div class="tags" id="sTags"><input id="sTagInput" placeholder="输入后回车添加"></div>
-      </section>
-
-      <section class="card s-card">
-        <h2>推送到群</h2>
-        <p class="hint">在群里添加"自定义机器人"，把 webhook 地址贴过来，按域名自动识别飞书、钉钉或企业微信。</p>
-        <div class="s-grid">
-          <div class="field"><label>Webhook 地址</label><input class="input" id="sHook" value="${esc(c.webhook)}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"></div>
-          <div class="field"><label>加签密钥（机器人开启了"加签"才需要）</label><input class="input" id="sSecret" type="password" autocomplete="off" placeholder="${c.secret_set ? "已设置，留空表示不修改" : "可选"}"></div>
-        </div>
-      </section>
-
-      <section class="card s-card">
-        <h2>Obsidian</h2>
-        <p class="hint">把纪要存进 Obsidian 库：一场会一篇笔记，日期、时长、参会人写在属性里；鱼骨图存成 Excalidraw 画板嵌进笔记（装了 Excalidraw 插件就能直接改），每个分支下面列着引用的原话。</p>
-        <div class="s-grid">
-          ${vaults.length ? `<div class="field"><label>本机 Obsidian 里的库</label><div class="seg fit" id="sVaults">${vaults.map((v) => `<button data-path="${esc(v.path)}" title="${esc(v.path)}">${esc(v.name)}</button>`).join("")}</div></div>` : ""}
-          <div class="s-row2">
-            <div class="field"><label>库的位置</label><input class="input" id="sVault" value="${esc(c.obsidian.vault)}" placeholder="${vaults.length ? "点上面选一个，或者填库的文件夹路径" : "Obsidian 库的文件夹路径，比如 ~/Documents/笔记"}"></div>
-            <div class="field"><label>存到库里的哪个文件夹</label><input class="input" id="sObFolder" value="${esc(c.obsidian.folder)}" placeholder="留空表示库的根目录"></div>
-          </div>
-          <div class="s-toggles">
-            <button class="toggle ${c.obsidian.auto ? "on" : ""}" id="sObAuto">${ICON.redo}生成纪要后自动存</button>
-            <button class="toggle ${c.obsidian.transcript ? "on" : ""}" id="sObTr">${ICON.file}附带转写全文</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card s-card">
-        <h2>运行环境</h2>
-        <p class="hint">会议保存在 ${esc(env?.root ?? "")}，配置文件在 ${esc(c.path)}</p>
-        <div class="checks">
-          ${checks
-            .map(
-              ([ok, name, note]) =>
-                `<div class="check"><span class="dot" style="background:${ok ? "var(--green)" : "var(--amber)"}"></span>${name}<small>${esc(note)}</small></div>`,
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <div class="save-bar"><button class="btn primary lg" id="sSave">保存设置</button></div>
-    </div>`;
-
-  drawAsr();
   const model = $<HTMLInputElement>("#sModel");
   const key = $<HTMLInputElement>("#sKey");
   const markPreset = () => $$<HTMLButtonElement>("#sPreset button").forEach((b) => b.classList.toggle("on", b.dataset.id === presetOf()));
@@ -390,16 +426,37 @@ export async function renderSettings(): Promise<void> {
   baseInput().oninput = markPreset;
   baseInput().onchange = fetchModels;
 
-  const vault = $<HTMLInputElement>("#sVault");
-  const markVault = () => $$<HTMLButtonElement>("#sVaults button").forEach((b) => b.classList.toggle("on", b.dataset.path === vault.value.trim()));
-  markVault();
-  $$<HTMLButtonElement>("#sVaults button").forEach((b) => (b.onclick = () => ((vault.value = b.dataset.path ?? ""), markVault())));
-  vault.oninput = markVault;
-  $$<HTMLButtonElement>("#sObAuto, #sObTr").forEach((b) => (b.onclick = () => b.classList.toggle("on")));
+  $("#sTest").onclick = async () => {
+    msg("连接中…");
+    try {
+      const r = await api<{ ok: boolean; message: string }>("/api/config/test", {
+        json: { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null },
+      });
+      msg(r.message, r.ok ? "ok" : "bad");
+    } catch (e) {
+      msg(errorMessage(e), "bad");
+    }
+  };
+  $("#sSave").onclick = () =>
+    save(x, { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null }, "llm");
+}
 
+function panelHotwords(x: Ctx): void {
+  const hot = [...x.c.hotwords];
+  const nano = S.env?.asr_model === "Fun-ASR-Nano";
+  $("#sPanel").innerHTML = `
+    <h2>热词</h2>
+    <p class="hint">人名、项目代号、内部系统名、行业术语。每场会议都生效，录音时也可以给单场会议临时加几个。</p>
+    <div class="tags" id="sTags"><input id="sTagInput" placeholder="输入后回车添加，可以一次粘贴多个（用逗号或空格隔开）"></div>
+    <div class="note-box">${
+      nano
+        ? "当前识别模型 Fun-ASR-Nano 会在识别时直接用上这些词；生成纪要时也会交给大模型核对同音字。"
+        : "当前识别模型不支持热词，这些词会作为术语表交给大模型，在写纪要时纠正同音字（比如“历史中单”→“历史工单”）。想在识别时就用上，可以在「识别模型」里换成 Fun-ASR-Nano。"
+    }</div>
+    ${panelFoot()}`;
   const tagInput = $<HTMLInputElement>("#sTagInput");
   const drawTags = () => {
-    $$("#sTags .chip").forEach((x) => x.remove());
+    $$("#sTags .chip").forEach((el) => el.remove());
     hot.forEach((w, i) => {
       const chip = document.createElement("span");
       chip.className = "chip";
@@ -412,58 +469,109 @@ export async function renderSettings(): Promise<void> {
     });
   };
   drawTags();
+  const addPending = () => {
+    for (const w of tagInput.value.split(/[,，、\s]+/)) if (w && !hot.includes(w)) hot.push(w);
+    tagInput.value = "";
+  };
   tagInput.onkeydown = (e) => {
     const v = tagInput.value.trim();
     if ((e.key === "Enter" || e.key === "," || e.key === "，") && v) {
       e.preventDefault();
-      for (const w of v.split(/[,，、\s]+/)) if (w && !hot.includes(w)) hot.push(w);
-      tagInput.value = "";
+      addPending();
       drawTags();
     } else if (e.key === "Backspace" && !v && hot.length) {
       hot.pop();
       drawTags();
     }
   };
-
-  $("#sTest").onclick = async () => {
-    msg("连接中…");
-    try {
-      const r = await api<{ ok: boolean; message: string }>("/api/config/test", {
-        json: { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null },
-      });
-      msg(r.message, r.ok ? "ok" : "bad");
-    } catch (e) {
-      msg(errorMessage(e), "bad");
-    }
+  $("#sSave").onclick = () => {
+    addPending();
+    save(x, { hotwords: hot }, "hotwords");
   };
+}
 
-  $("#sSave").onclick = async () => {
-    const pending = tagInput.value.trim();
-    if (pending) hot.push(...pending.split(/[,，、\s]+/).filter(Boolean));
-    const secret = $<HTMLInputElement>("#sSecret").value.trim();
-    try {
-      await api<Config>("/api/config", {
-        method: "PUT",
-        json: {
-          base_url: baseInput().value.trim(),
-          model: model.value.trim(),
-          api_key: key.value.trim() || null,
-          hotwords: hot,
-          webhook: $<HTMLInputElement>("#sHook").value.trim(),
-          secret: secret || null,
-          obsidian: {
-            vault: vault.value.trim(),
-            folder: $<HTMLInputElement>("#sObFolder").value.trim(),
-            auto: $("#sObAuto").classList.contains("on"),
-            transcript: $("#sObTr").classList.contains("on"),
-          },
+function panelPush(x: Ctx): void {
+  const c = x.c;
+  $("#sPanel").innerHTML = `
+    <h2>推送到群</h2>
+    <p class="hint">在群里添加"自定义机器人"，把 webhook 地址贴过来，按域名自动识别飞书、钉钉或企业微信。会议详情页点「推送到群」就会发过去。</p>
+    <div class="s-grid">
+      <div class="field"><label>Webhook 地址</label><input class="input" id="sHook" value="${esc(c.webhook)}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"></div>
+      <div class="field"><label>加签密钥（机器人开启了"加签"才需要）</label><input class="input" id="sSecret" type="password" autocomplete="off" placeholder="${c.secret_set ? "已设置，留空表示不修改" : "可选"}"></div>
+    </div>
+    ${panelFoot()}`;
+  $("#sSave").onclick = () =>
+    save(x, { webhook: $<HTMLInputElement>("#sHook").value.trim(), secret: $<HTMLInputElement>("#sSecret").value.trim() || null }, "push");
+}
+
+function panelObsidian(x: Ctx): void {
+  const c = x.c;
+  const vaults = x.vaults;
+  $("#sPanel").innerHTML = `
+    <h2>Obsidian</h2>
+    <p class="hint">把纪要存进 Obsidian 库：一场会一篇笔记，日期、时长、参会人写在属性里；鱼骨图存成 Excalidraw 画板嵌进笔记（装了 Excalidraw 插件就能直接改），每个分支下面列着引用的原话。</p>
+    <div class="s-grid">
+      ${vaults.length ? `<div class="field"><label>本机 Obsidian 里的库</label><div class="seg fit" id="sVaults">${vaults.map((v) => `<button data-path="${esc(v.path)}" title="${esc(v.path)}">${esc(v.name)}</button>`).join("")}</div></div>` : ""}
+      <div class="s-row2">
+        <div class="field"><label>库的位置</label><input class="input" id="sVault" value="${esc(c.obsidian.vault)}" placeholder="${vaults.length ? "点上面选一个，或者填库的文件夹路径" : "Obsidian 库的文件夹路径，比如 ~/Documents/笔记"}"></div>
+        <div class="field"><label>存到库里的哪个文件夹</label><input class="input" id="sObFolder" value="${esc(c.obsidian.folder)}" placeholder="留空表示库的根目录"></div>
+      </div>
+      <div class="s-toggles">
+        <button class="toggle ${c.obsidian.auto ? "on" : ""}" id="sObAuto">${ICON.redo}生成纪要后自动存</button>
+        <button class="toggle ${c.obsidian.transcript ? "on" : ""}" id="sObTr">${ICON.file}附带转写全文</button>
+      </div>
+    </div>
+    ${panelFoot()}`;
+  const vault = $<HTMLInputElement>("#sVault");
+  const markVault = () => $$<HTMLButtonElement>("#sVaults button").forEach((b) => b.classList.toggle("on", b.dataset.path === vault.value.trim()));
+  markVault();
+  $$<HTMLButtonElement>("#sVaults button").forEach((b) => (b.onclick = () => ((vault.value = b.dataset.path ?? ""), markVault())));
+  vault.oninput = markVault;
+  $$<HTMLButtonElement>("#sObAuto, #sObTr").forEach((b) => (b.onclick = () => b.classList.toggle("on")));
+  $("#sSave").onclick = () =>
+    save(
+      x,
+      {
+        obsidian: {
+          vault: vault.value.trim(),
+          folder: $<HTMLInputElement>("#sObFolder").value.trim(),
+          auto: $("#sObAuto").classList.contains("on"),
+          transcript: $("#sObTr").classList.contains("on"),
         },
-      });
-      toast("设置已保存");
-      refreshEnv();
-      renderSettings();
-    } catch (e) {
-      toast(errorMessage(e), true);
-    }
-  };
+      },
+      "obsidian",
+    );
+}
+
+function panelAbout(x: Ctx): void {
+  const env = S.env;
+  const checks: [boolean, string, string][] = [
+    ...(env?.models_downloadable ? [] : ([[!!env?.ffmpeg, "ffmpeg", env?.ffmpeg ? "已安装" : "brew install ffmpeg"]] as [boolean, string, string][])),
+    [
+      !!env?.system_audio,
+      "录系统声音",
+      env?.system_audio ? "可以录腾讯会议、飞书里对方的声音" : "需要 macOS 15+ 和 Xcode 命令行工具；不影响导入录音",
+    ],
+    [
+      !!env?.model_cached,
+      "识别模型",
+      `${env?.asr_model ?? ""}${env?.model_loaded ? " 已加载" : env?.model_cached ? " 已下载" : " 未下载"}`.trim(),
+    ],
+    [!!env?.llm_ready, "大模型", env?.llm_ready ? env.llm_model : "还没有配置"],
+  ];
+  $("#sPanel").innerHTML = `
+    <h2>运行环境</h2>
+    <div class="kv">
+      <div><span>会议保存在</span><code>${esc(env?.root ?? "")}</code></div>
+      <div><span>配置文件</span><code>${esc(x.c.path)}</code></div>
+      <div><span>版本</span><code>${esc(env?.version ?? "")}</code></div>
+    </div>
+    <div class="checks">
+      ${checks
+        .map(
+          ([ok, name, note]) =>
+            `<div class="check"><span class="dot" style="background:${ok ? "var(--green)" : "var(--amber)"}"></span>${name}<small>${esc(note)}</small></div>`,
+        )
+        .join("")}
+    </div>`;
 }

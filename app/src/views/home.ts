@@ -1,25 +1,17 @@
-/* 首页：录音表单 → 录音中（计时、电平、实时文字）→ 处理进度 → 完成 / 出错。另含拖拽导入。 */
+/* 首页：录音表单 → 录音中（计时、电平、实时文字）→ 结束后立刻回到录音表单，转写和生成纪要在后台进行，
+   进度显示在玻璃面板下方和侧边栏。第一次使用时玻璃面板里下载识别模型。另含拖拽导入。 */
 
 import { api, type Job } from "../api";
 import { $, $$, $maybe, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
-import { renderMarkdown } from "../markdown";
 import { poll } from "../poll";
-import { isBusy, needsModels, S, stateLabel } from "../state";
-import { refreshEnv } from "../sidebar";
+import { isBusy, needsModels, S } from "../state";
+import { dismissJob, renderTasks } from "../tasks";
 
-type Phase = "idle" | "recording" | "processing" | "done" | "error" | "__init";
+type Phase = "idle" | "recording" | "downloading" | "error";
 
 const INIT: Job = { state: "idle" };
-const phaseOf = (j: Job, init = false): Phase =>
-  init
-    ? "__init"
-    : j.state === "recording"
-      ? "recording"
-      : isBusy(j)
-        ? "processing"
-        : j.state === "done" || j.state === "error"
-          ? j.state
-          : "idle";
+const phaseOf = (j: Job): Phase =>
+  j.state === "recording" ? "recording" : j.kind === "models" && isBusy(j) ? "downloading" : j.kind === "models" && j.state === "error" ? "error" : "idle";
 
 export function renderHome(): void {
   main().innerHTML = `
@@ -33,17 +25,19 @@ export function renderHome(): void {
         <i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i><i class="blob b4"></i><i class="grain"></i>
         <div class="glass-ring"><div class="glass" id="glass"></div></div>
       </section>
+      <div class="home-tasks" id="homeTasks"></div>
       <div class="quick">
         <div class="quick-item" id="qImport"><span class="ico">${ICON.upload}</span><span><b>导入录音</b><small>拖进窗口，或点这里选文件</small></span>${ICON.chevron}</div>
         <a class="quick-item" href="#/meetings"><span class="ico">${ICON.file}</span><span><b>会议记录</b><small id="qCount">查看全部会议</small></span>${ICON.chevron}</a>
-        <a class="quick-item" href="#/settings"><span class="ico">${ICON.bot}</span><span><b>大模型</b><small id="qModel">设置纪要用的模型</small></span>${ICON.chevron}</a>
-        <a class="quick-item" href="#/settings"><span class="ico">${ICON.send}</span><span><b>推送到群</b><small>飞书 · 钉钉 · 企业微信</small></span>${ICON.chevron}</a>
+        <a class="quick-item" href="#/settings/llm"><span class="ico">${ICON.bot}</span><span><b>大模型</b><small id="qModel">设置纪要用的模型</small></span>${ICON.chevron}</a>
+        <a class="quick-item" href="#/settings/push"><span class="ico">${ICON.send}</span><span><b>推送到群</b><small>飞书 · 钉钉 · 企业微信</small></span>${ICON.chevron}</a>
       </div>
     </div>`;
   $("#qImport").onclick = () => $("#fileInput").click();
   if (S.meetings.length) $("#qCount").textContent = `共 ${S.meetings.length} 场会议`;
   if (S.env) $("#qModel").textContent = S.env.llm_ready ? `当前：${S.env.llm_model}` : "还没有配置";
   updateHome(S.job, INIT, true);
+  renderTasks();
 }
 
 export function updateHome(job: Job, prev: Job, forceRender = false): void {
@@ -52,20 +46,13 @@ export function updateHome(job: Job, prev: Job, forceRender = false): void {
   const aurora = $("#aurora");
   const phase = phaseOf(job);
   aurora.classList.toggle("live", phase === "recording");
-  if (job.kind === "models" && job.state === "done") {
-    api("/api/job/dismiss", { method: "POST" });
-    S.job = { state: "idle" };
-    refreshEnv().then(() => updateHome(S.job, INIT, true));
-    return;
-  }
-
   if (forceRender || phase !== phaseOf(prev) || glass.dataset.phase !== phase) {
     glass.dataset.phase = phase;
-    glass.innerHTML = VIEWS[phase as Exclude<Phase, "__init">](job);
+    glass.innerHTML = VIEWS[phase](job);
     bindHome(phase);
   }
   if (phase === "recording") updateRecording(job, aurora);
-  if (phase === "processing") updateProcessing(job);
+  if (phase === "downloading") updateDownloading(job);
 }
 
 function updateRecording(job: Job, aurora: HTMLElement): void {
@@ -139,70 +126,19 @@ const recordingView = (job: Job) => `
     <button class="rec-btn stop" id="stopBtn" title="结束录音"><span class="core"></span></button>
   </div>`;
 
-const STEPS: [Job["state"][], string][] = [
-  [["saving"], "保存录音"],
-  [["finalizing", "loading", "transcribing"], "转写"],
-  [["summarizing"], "生成纪要"],
-];
-
 const downloadingView = () => `
   <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span>下载识别模型</div>
   <div class="timer" id="dlText" style="font-size:22px;margin:12px 0 10px">0 MB</div>
   <div class="steps" style="grid-template-columns:1fr"><div class="step now"><div class="bar"><div id="dlBar" style="position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,var(--cyan),var(--blue));border-radius:99px"></div></div></div></div>
   <div class="proc-note">识别模型来自 ModelScope，标点和声纹模型来自 GitHub；网络中断会自动续传</div>`;
 
-const processingView = (job: Job) => (job.kind === "models" ? downloadingView() : processingSteps(job));
-
-const processingSteps = (job: Job) => `
-  <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span><span id="procTitle">${esc(stateLabel(job.state))}</span></div>
-  <div class="steps" id="steps" style="margin-top:16px">${STEPS.map(([, l]) => `<div class="step"><div class="bar"></div><span>${l}</span></div>`).join("")}</div>
-  <div class="proc-note" id="procNote"></div>
-  <div class="stream md" id="stream"></div>`;
-
-const NOTES: Partial<Record<Job["state"], string>> = {
-  saving: "正在合成录音…",
-  finalizing: "录音时已经转好了大部分，正在处理最后几秒并区分说话人",
-  loading: "正在加载识别模型",
-  transcribing: "本地分段识别中，10 分钟的录音大约 1 分半",
-};
-
-function updateProcessing(job: Job): void {
-  if (job.kind === "models") {
-    const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(job.stage ?? "");
-    $("#dlText").textContent = job.stage || "准备下载…";
-    if (m) $("#dlBar").style.width = `${Math.min(100, (Number(m[1]) / Number(m[2])) * 100).toFixed(1)}%`;
-    return;
-  }
-  const idx = job.kind === "summarize" ? 2 : STEPS.findIndex(([states]) => states.includes(job.state));
-  $$("#steps .step").forEach((el, i) => {
-    el.className = "step " + (i < idx ? "done" : i === idx ? "now" : "");
-  });
-  $("#procTitle").textContent = job.stage ? `${stateLabel(job.state)} · ${job.stage}` : stateLabel(job.state);
-  $("#procNote").textContent = NOTES[job.state] ?? "";
-  const st = $("#stream");
-  const text = job.state === "summarizing" && !job.minutes ? "__thinking" : (job.minutes ?? "");
-  if (st.dataset.text !== text) {
-    st.dataset.text = text;
-    st.innerHTML = text === "__thinking" ? `<p style="color:var(--muted);margin:0">正在阅读转写…</p>` : text ? renderMarkdown(text) : "";
-    st.scrollTop = st.scrollHeight;
-  }
+function updateDownloading(job: Job): void {
+  const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(job.stage ?? "");
+  $("#dlText").textContent = job.stage || "准备下载…";
+  if (m) $("#dlBar").style.width = `${Math.min(100, (Number(m[1]) / Number(m[2])) * 100).toFixed(1)}%`;
 }
 
-const meetingLink = (job: Job) => `#/m/${encodeURIComponent(job.meeting ?? "")}`;
-
-const doneView = (job: Job) => `
-  <div class="live-head" style="color:var(--green)">✓ 纪要已生成</div>
-  <div class="timer" style="font-size:22px;margin:12px 0 4px;font-family:var(--font)">${esc((job.meeting ?? "").replace(/^\d{4}-\d{2}-\d{2}_\d{4}_/, ""))}</div>
-  <div class="proc-note">已保存在会议记录里，可以回听、改说话人名字、推送到群</div>
-  <div class="glass-foot">
-    <button class="btn" id="againBtn">再开一场</button>
-    <span class="spacer"></span>
-    <a class="btn primary" href="${meetingLink(job)}">查看纪要 ${ICON.chevron}</a>
-  </div>`;
-
-const errorView = (job: Job) =>
-  job.kind === "models"
-    ? `
+const errorView = (job: Job) => `
   <div class="live-head">模型下载没有完成</div>
   <div class="err-box" style="margin-top:12px">${esc(job.error)}</div>
   <div class="proc-note">已下载的部分会保留，重试时接着下</div>
@@ -210,22 +146,12 @@ const errorView = (job: Job) =>
     <button class="btn" id="againBtn">关闭</button>
     <span class="spacer"></span>
     <button class="btn primary" id="dlBtn">重试</button>
-  </div>`
-    : `
-  <div class="live-head">处理没有完成</div>
-  <div class="err-box" style="margin-top:12px">${esc(job.error)}</div>
-  <div class="proc-note">录音和已完成的部分都保存在会议记录里，可以稍后重试</div>
-  <div class="glass-foot">
-    <button class="btn" id="againBtn">关闭</button>
-    <span class="spacer"></span>
-    <a class="btn primary" href="${meetingLink(job)}">打开这场会议</a>
   </div>`;
 
-const VIEWS: Record<Exclude<Phase, "__init">, (job: Job) => string> = {
+const VIEWS: Record<Phase, (job: Job) => string> = {
   idle: idleForm,
   recording: recordingView,
-  processing: processingView,
-  done: doneView,
+  downloading: downloadingView,
   error: errorView,
 };
 
@@ -262,11 +188,12 @@ function bindHome(phase: Phase): void {
     $("#recBtn").onclick = startRecording;
   } else if (phase === "recording") {
     $("#stopBtn").onclick = stopRecording;
-  } else if (phase === "done" || phase === "error") {
+  } else if (phase === "error") {
     $("#againBtn").onclick = async () => {
-      await api("/api/job/dismiss", { method: "POST" });
+      const id = S.job.id;
       S.job = { state: "idle" };
       updateHome(S.job, INIT, true);
+      if (id) await dismissJob(id);
     };
   }
 }
@@ -297,6 +224,9 @@ async function stopRecording(): Promise<void> {
   $<HTMLButtonElement>("#stopBtn").disabled = true;
   try {
     await api("/api/record/stop", { method: "POST" });
+    toast("录音已保存，转写和纪要在后台进行，可以开始下一场");
+    S.job = { state: "idle" };
+    updateHome(S.job, INIT, true);
     poll();
   } catch (e) {
     toast(errorMessage(e), true);
@@ -307,16 +237,14 @@ async function stopRecording(): Promise<void> {
 
 export async function importFile(file: File | undefined): Promise<void> {
   if (!file) return;
-  if (isBusy(S.job)) return toast("还有任务在进行，请稍等", true);
   const fd = new FormData();
   fd.append("file", file);
   fd.append("title", file.name.replace(/\.[^.]+$/, ""));
   fd.append("modified", String(file.lastModified || 0));
   toast(`正在导入 ${file.name}`);
   try {
-    S.job = await api<Job>("/api/import", { method: "POST", body: fd });
-    if (location.hash && location.hash !== "#/") location.hash = "#/";
-    else updateHome(S.job, INIT, true);
+    await api<Job>("/api/import", { method: "POST", body: fd });
+    toast(`已导入 ${file.name}，转写和纪要在后台进行`);
     poll();
   } catch (e) {
     toast(errorMessage(e), true);

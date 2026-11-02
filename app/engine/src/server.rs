@@ -40,6 +40,8 @@ pub struct Options {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Job {
+    /// 任务编号：录音和后台任务（转写、生成纪要、下载模型）可以同时进行，界面按编号区分
+    pub id: String,
     pub kind: String,
     pub meeting: String,
     pub state: String,
@@ -50,11 +52,17 @@ pub struct Job {
     pub sources: Vec<String>,
     /// 完成后给用户的附加提示（比如"已存到 Obsidian"）
     pub notice: String,
+    /// 推理模型已经思考了多少字（还没开始写纪要时显示）
+    pub thinking: u64,
+    /// 结束时间；结束后用时不再增长
+    pub finished_at: f64,
 }
 
 impl Job {
     fn new(kind: &str, meeting: &str, state: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            id: format!("j{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
             kind: kind.into(),
             meeting: meeting.into(),
             state: state.into(),
@@ -78,7 +86,8 @@ pub struct AppState {
     /// 当前加载的识别引擎；切换模型（或 Fun-ASR-Nano 的热词变了）时换掉
     engine: Mutex<Option<Arc<Engine>>>,
     engine_lock: Mutex<()>,
-    job: Mutex<Option<Job>>,
+    /// 进行中和刚结束（还没被界面收起）的任务
+    jobs: Mutex<Vec<Job>>,
     recording: Mutex<Option<Live>>,
 }
 
@@ -115,7 +124,7 @@ impl AppState {
             opt,
             engine: Mutex::new(None),
             engine_lock: Mutex::new(()),
-            job: Mutex::new(None),
+            jobs: Mutex::new(Vec::new()),
             recording: Mutex::new(None),
         })
     }
@@ -169,35 +178,52 @@ impl AppState {
         Ok(path)
     }
 
+    /// 登记一个任务。录音同时只能有一场；同一场会议、模型下载各自同时只能有一个任务；其余可以并行
+    /// （转写共用一个识别引擎，在引擎里排队；生成纪要主要等网络）。
     fn start_job(&self, job: Job) -> ApiResult<()> {
-        let mut slot = self.job.lock().unwrap();
-        if slot.as_ref().is_some_and(Job::busy) {
-            return Err(ApiError(
-                StatusCode::CONFLICT,
-                "还有任务在进行，请稍等".into(),
-            ));
+        let mut jobs = self.jobs.lock().unwrap();
+        let conflict = jobs.iter().filter(|j| j.busy()).find_map(|j| {
+            if job.kind == "record" && j.state == "recording" {
+                Some("已经在录音了，先结束这一场")
+            } else if job.kind == "models" && j.kind == "models" {
+                Some("已经在下载模型了，等它下完")
+            } else if !job.meeting.is_empty() && job.kind != "models" && j.kind != "models" && j.meeting == job.meeting {
+                Some("这场会议正在处理，等它完成")
+            } else {
+                None
+            }
+        });
+        if let Some(msg) = conflict {
+            return Err(ApiError(StatusCode::CONFLICT, msg.into()));
         }
-        *slot = Some(job);
+        // 结束了的任务只留最近几个，给界面显示结果
+        let finished: Vec<String> = jobs.iter().filter(|j| !j.busy()).map(|j| j.id.clone()).collect();
+        if finished.len() >= 6 {
+            let drop = &finished[..finished.len() - 5];
+            jobs.retain(|j| !drop.contains(&j.id));
+        }
+        jobs.push(job);
         Ok(())
     }
 
-    fn update(&self, f: impl FnOnce(&mut Job)) {
-        if let Some(j) = self.job.lock().unwrap().as_mut() {
+    fn update(&self, id: &str, f: impl FnOnce(&mut Job)) {
+        if let Some(j) = self.jobs.lock().unwrap().iter_mut().find(|j| j.id == id) {
             f(j);
         }
     }
 
-    fn fail(&self, e: impl Into<String>) {
+    fn fail(&self, id: &str, e: impl Into<String>) {
         let e = e.into();
         eprintln!("任务失败：{e}");
-        self.update(|j| {
+        self.update(id, |j| {
             j.state = "error".into();
+            j.finished_at = now();
             j.error = e;
         });
     }
 
     /// 生成纪要：流式写进 job.minutes，写完存到会议文件夹。`extra` 是这场会议额外填的热词。
-    fn run_summarize(&self, tr: &Transcript, dir: &Path, extra: &[String]) -> Result<(), String> {
+    fn run_summarize(&self, id: &str, tr: &Transcript, dir: &Path, extra: &[String]) -> Result<(), String> {
         let cfg = self.config();
         let mut hotwords = cfg.hotwords.clone();
         hotwords.extend(
@@ -207,58 +233,64 @@ impl AppState {
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-        self.update(|j| j.state = "summarizing".into());
+        self.update(id, |j| j.state = "summarizing".into());
         let text = summarize::summarize(
             tr,
             &cfg.llm,
             meetings::meeting_date(dir),
             &hotwords,
             Hooks {
-                on_token: &mut |t| self.update(|j| j.minutes.push_str(t)),
+                on_token: &mut |t| self.update(id, |j| j.minutes.push_str(t)),
                 on_stage: &mut |s| {
-                    self.update(|j| {
+                    self.update(id, |j| {
                         j.stage = s.into();
                         j.minutes.clear();
+                        j.thinking = 0;
                     })
                 },
+                on_think: &mut |n| self.update(id, |j| j.thinking = n as u64),
             },
         )?;
         std::fs::write(dir.join(MINUTES), &text).map_err(|e| e.to_string())?;
-        self.update(|j| j.minutes = text);
+        self.update(id, |j| j.minutes = text);
         if cfg.obsidian.auto && !cfg.obsidian.vault.trim().is_empty() {
             // 自动存进 Obsidian；失败不影响纪要本身，只提示一下
             let notice = match obsidian::export(&cfg.obsidian, dir) {
                 Ok(_) => "纪要已同步到 Obsidian".to_string(),
                 Err(e) => format!("没能同步到 Obsidian：{e}"),
             };
-            self.update(|j| j.notice = notice);
+            self.update(id, |j| j.notice = notice);
         }
         Ok(())
     }
 
     /// 处理录音文件：解码 → 分段转写 → 存转写 → 生成纪要。
-    fn run_process(&self, audio_path: &Path, dir: &Path, extra: &[String]) -> Result<(), String> {
-        self.update(|j| j.state = "loading".into());
+    fn run_process(&self, id: &str, audio_path: &Path, dir: &Path, extra: &[String]) -> Result<(), String> {
+        self.update(id, |j| j.state = "loading".into());
         let engine = self.engine()?;
-        self.update(|j| j.state = "transcribing".into());
+        self.update(id, |j| j.state = "transcribing".into());
         let samples = record::decode(&self.opt.recorder_bin, audio_path)?;
         let tr = transcribe_samples(&engine, &samples, audio_path, |f| {
-            self.update(|j| j.stage = format!("{:.0}%", f * 100.0))
+            self.update(id, |j| j.stage = format!("{:.0}%", f * 100.0))
         });
-        self.update(|j| j.stage.clear());
+        self.update(id, |j| j.stage.clear());
         if tr.sentences.is_empty() {
             return Err("没有识别出任何语音".into());
         }
         meetings::save_transcript(&tr, dir).map_err(|e| e.to_string())?;
-        self.run_summarize(&tr, dir, extra)
+        self.run_summarize(id, &tr, dir, extra)
     }
 }
 
-fn spawn_job(state: &Shared, work: impl FnOnce(&AppState) -> Result<(), String> + Send + 'static) {
+fn spawn_job(state: &Shared, id: &str, work: impl FnOnce(&AppState, &str) -> Result<(), String> + Send + 'static) {
     let s = state.clone();
-    std::thread::spawn(move || match work(&s) {
-        Ok(()) => s.update(|j| j.state = "done".into()),
-        Err(e) => s.fail(e),
+    let id = id.to_string();
+    std::thread::spawn(move || match work(&s, &id) {
+        Ok(()) => s.update(&id, |j| {
+            j.state = "done".into();
+            j.finished_at = now();
+        }),
+        Err(e) => s.fail(&id, e),
     });
 }
 
@@ -605,7 +637,7 @@ async fn post_summarize(
         .map_err(|_| bad("还没有转写，不能生成纪要"))?;
     let job = Job::new("summarize", &id, "summarizing");
     s.start_job(job.clone())?;
-    spawn_job(&s, move |st| st.run_summarize(&tr, &dir, &[]));
+    spawn_job(&s, &job.id, move |st, id| st.run_summarize(id, &tr, &dir, &[]));
     Ok(Json(job))
 }
 
@@ -617,7 +649,7 @@ async fn post_process(
     let audio = meetings::find_audio(&dir).ok_or_else(|| bad("没有录音文件"))?;
     let job = Job::new("process", &id, "loading");
     s.start_job(job.clone())?;
-    spawn_job(&s, move |st| st.run_process(&audio, &dir, &[]));
+    spawn_job(&s, &job.id, move |st, id| st.run_process(id, &audio, &dir, &[]));
     Ok(Json(job))
 }
 
@@ -738,14 +770,14 @@ async fn record_start(State(s): State<Shared>, Json(r): Json<RecordReq>) -> ApiR
     let recorder = match Recorder::start(&s.opt.recorder_bin, &dir, system, r.mic) {
         Ok(rec) => rec,
         Err(e) => {
-            *s.job.lock().unwrap() = None;
+            s.jobs.lock().unwrap().retain(|j| j.id != job.id);
             let _ = std::fs::remove_dir_all(&dir);
             return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e));
         }
     };
     let live = LiveTranscriber::start(engine, &dir, &recorder.sources);
     job.sources = recorder.sources.clone();
-    s.update(|j| j.sources = job.sources.clone());
+    s.update(&job.id, |j| j.sources = job.sources.clone());
     *s.recording.lock().unwrap() = Some(Live {
         recorder,
         live: Some(live),
@@ -756,22 +788,24 @@ async fn record_start(State(s): State<Shared>, Json(r): Json<RecordReq>) -> ApiR
 
 async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     let job = s
-        .job
+        .jobs
         .lock()
         .unwrap()
-        .clone()
-        .filter(|j| j.kind == "record" && j.state == "recording");
+        .iter()
+        .find(|j| j.kind == "record" && j.state == "recording")
+        .cloned();
     let Some(job) = job else {
         return Err(bad("没有正在进行的录音"));
     };
     let Some(mut live) = s.recording.lock().unwrap().take() else {
         return Err(bad("没有正在进行的录音"));
     };
-    s.update(|j| j.state = "saving".into());
+    // 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
+    s.update(&job.id, |j| j.state = "saving".into());
     let dir = s.opt.root.join(&job.meeting);
-    spawn_job(&s, move |st| {
+    spawn_job(&s, &job.id, move |st, id| {
         live.recorder.stop();
-        st.update(|j| j.state = "finalizing".into());
+        st.update(id, |j| j.state = "finalizing".into());
         let engine = st.engine()?;
         let final_audio = dir.join(AUDIO);
         // 原始音轨合成前先把最后几秒转完
@@ -787,7 +821,7 @@ async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
                 let mix_dir = dir.clone();
                 let mixer =
                     std::thread::spawn(move || record::mixdown(&mix_dir, &mix_dir.join(AUDIO)));
-                let summary = st.run_summarize(&tr, &dir, &live.hotwords);
+                let summary = st.run_summarize(id, &tr, &dir, &live.hotwords);
                 let mixed = mixer.join().map_err(|_| "合成录音线程异常".to_string())?;
                 summary?;
                 mixed.map_err(|e| {
@@ -797,7 +831,7 @@ async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
             // 边录边转出错或什么都没识别到：合成录音后整段重转
             _ => {
                 record::mixdown(&dir, &final_audio)?;
-                st.run_process(&final_audio, &dir, &live.hotwords)
+                st.run_process(id, &final_audio, &dir, &live.hotwords)
             }
         }
     });
@@ -859,16 +893,36 @@ async fn import_file(State(s): State<Shared>, mut form: Multipart) -> ApiResult<
     std::fs::create_dir_all(&dir).map_err(|e| bad(e.to_string()))?;
     let audio = dir.join(format!("录音.{ext}"));
     std::fs::write(&audio, &data).map_err(|e| bad(e.to_string()))?;
-    spawn_job(&s, move |st| st.run_process(&audio, &dir, &[]));
+    spawn_job(&s, &job.id, move |st, id| st.run_process(id, &audio, &dir, &[]));
     Ok(Json(job))
 }
 
+/// 所有任务（进行中的和刚结束的），按开始时间排列
+async fn get_jobs(State(s): State<Shared>) -> Json<Value> {
+    let jobs = s.jobs.lock().unwrap().clone();
+    let list: Vec<Value> = jobs.iter().map(|j| job_json(&s, j)).collect();
+    Json(json!({"jobs": list, "model_loaded": s.engine_loaded()}))
+}
+
+/// 旧接口：只返回一个任务（正在录音的优先，其次最近一个进行中的，再次最近一个）
 async fn get_job(State(s): State<Shared>) -> Json<Value> {
-    let Some(job) = s.job.lock().unwrap().clone() else {
-        return Json(json!({"state": "idle"}));
-    };
+    let jobs = s.jobs.lock().unwrap().clone();
+    let pick = jobs
+        .iter()
+        .find(|j| j.state == "recording")
+        .or_else(|| jobs.iter().rev().find(|j| j.busy()))
+        .or_else(|| jobs.last());
+    match pick {
+        Some(j) => Json(job_json(&s, j)),
+        None => Json(json!({"state": "idle"})),
+    }
+}
+
+fn job_json(s: &AppState, job: &Job) -> Value {
+    let job = job.clone();
     let mut data = serde_json::to_value(&job).unwrap();
-    data["elapsed"] = (now() - job.started_at).into();
+    let end = if job.finished_at > 0.0 { job.finished_at } else { now() };
+    data["elapsed"] = (end - job.started_at).into();
     data["model_loaded"] = s.engine_loaded().into();
     if job.state == "recording" {
         let dir = s.opt.root.join(&job.meeting);
@@ -901,14 +955,18 @@ async fn get_job(State(s): State<Shared>) -> Json<Value> {
             }
         }
     }
-    Json(data)
+    data
 }
 
+/// 收起所有已结束的任务
 async fn dismiss(State(s): State<Shared>) -> Json<Value> {
-    let mut slot = s.job.lock().unwrap();
-    if slot.as_ref().is_some_and(|j| !j.busy()) {
-        *slot = None;
-    }
+    s.jobs.lock().unwrap().retain(Job::busy);
+    Json(json!({"ok": true}))
+}
+
+/// 收起一个已结束的任务
+async fn dismiss_one(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Json<Value> {
+    s.jobs.lock().unwrap().retain(|j| j.busy() || j.id != id);
     Json(json!({"ok": true}))
 }
 
@@ -947,10 +1005,10 @@ async fn download_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -
     }
     let job = Job::new("models", kind.id(), "downloading");
     s.start_job(job.clone())?;
-    spawn_job(&s, move |st| {
+    spawn_job(&s, &job.id, move |st, id| {
         let paths = st.model_paths();
         models::ensure_model(&paths, kind, |done, total| {
-            st.update(|j| {
+            st.update(id, |j| {
                 j.stage = format!("{:.0} / {:.0} MB", done as f64 / 1e6, total as f64 / 1e6)
             })
         })?;
@@ -980,7 +1038,7 @@ async fn delete_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> 
     if paths.active() == kind {
         return Err(bad("正在使用这个模型，先切换到别的模型再删除"));
     }
-    if s.job.lock().unwrap().as_ref().is_some_and(|j| j.busy() && j.kind == "models" && j.meeting == kind.id()) {
+    if s.jobs.lock().unwrap().iter().any(|j| j.busy() && j.kind == "models" && j.meeting == kind.id()) {
         return Err(bad("这个模型正在下载"));
     }
     models::remove_model(&paths, kind).map_err(bad)?;
@@ -993,9 +1051,9 @@ async fn download_models(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     }
     let job = Job::new("models", "", "downloading");
     s.start_job(job.clone())?;
-    spawn_job(&s, |st| {
+    spawn_job(&s, &job.id, |st, id| {
         models::ensure(&st.model_paths(), |done, total| {
-            st.update(|j| {
+            st.update(id, |j| {
                 j.stage = format!("{:.0} / {:.0} MB", done as f64 / 1e6, total as f64 / 1e6)
             })
         })?;
@@ -1040,6 +1098,8 @@ pub fn router(state: Shared) -> Router {
         .route("/api/import", post(import_file))
         .route("/api/job", get(get_job))
         .route("/api/job/dismiss", post(dismiss))
+        .route("/api/jobs", get(get_jobs))
+        .route("/api/jobs/{id}/dismiss", post(dismiss_one))
         .route("/api/models/download", post(download_models))
         .route("/api/models", get(list_asr_models))
         .route("/api/models/{id}/download", post(download_model))
