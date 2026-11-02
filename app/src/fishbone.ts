@@ -88,6 +88,7 @@ export function renderFishbone(spec: FishboneSpec, resolve?: Resolver): string {
       <div class="fb-head">
         <svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2.5"/><path d="M7 7l9.5 4M7 17l9.5-4"/></svg>
         <span class="fb-problem">${esc(spec.problem)}</span>
+        <button class="fb-draw" title="导出成 .excalidraw 文件，可以在 excalidraw.com 或 Obsidian 里继续改">在 Excalidraw 中编辑</button>
         <span class="fb-kind">鱼骨图</span>
       </div>
       <div class="fb-summary">${summary}</div>

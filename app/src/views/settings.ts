@@ -1,9 +1,9 @@
-/* 设置：大模型（本机中转一键选择 + 远程服务 + 自定义）、热词、推送到群、运行环境。 */
+/* 设置：识别模型（桌面版可下载切换）、大模型（本机中转一键选择 + 远程服务 + 自定义）、热词、推送到群、Obsidian、运行环境。 */
 
-import { api, type Config, type LocalProvider } from "../api";
+import { api, type Config, type Job, type LocalProvider } from "../api";
 import { $, $$, $maybe, errorMessage, esc, ICON, main, toast } from "../dom";
 import { refreshEnv } from "../sidebar";
-import { S } from "../state";
+import { isBusy, S } from "../state";
 
 interface Preset {
   id: string;
@@ -112,14 +112,107 @@ function bindModelPicker(getModels: () => string[], getRecommended: () => string
   };
 }
 
+interface AsrModel {
+  id: string;
+  name: string;
+  desc: string;
+  size_mb: number;
+  ready: boolean;
+  active: boolean;
+}
+
+const delArmed = new Set<string>(); // 删除要点两次
+
+/* 识别模型卡片：只有桌面版（Rust 后端）有 /api/models，Python 版拿不到就不显示。 */
+async function drawAsr(): Promise<void> {
+  const box = $maybe("#sAsr");
+  if (!box) return;
+  let list: AsrModel[];
+  try {
+    list = (await api<{ models: AsrModel[] }>("/api/models")).models;
+  } catch {
+    box.hidden = true;
+    return;
+  }
+  const job = S.job;
+  const dlId = job?.kind === "models" && isBusy(job) ? job.meeting || "paraformer" : "";
+  const action = (m: AsrModel) => {
+    if (m.active) return `<span class="asr-badge">使用中</span>`;
+    if (m.ready)
+      return `${m.id !== "paraformer" ? `<button class="btn ghost asr-del" data-del="${m.id}">${delArmed.has(m.id) ? "确认删除" : "删除"}</button>` : ""}<button class="btn" data-use="${m.id}">使用</button>`;
+    if (m.id === dlId) return `<div class="asr-prog"><div class="asr-bar"><i id="asrBar"></i></div><small id="asrText">准备下载…</small></div>`;
+    return `<button class="btn" data-dl="${m.id}" ${dlId ? "disabled" : ""}>${ICON.download}下载 · ${m.size_mb} MB</button>`;
+  };
+  box.hidden = false;
+  $("#sAsrList", box).innerHTML = list
+    .map(
+      (m) => `
+      <div class="asr-row ${m.active ? "on" : ""}">
+        <div class="asr-main"><b>${esc(m.name)}</b>${m.id === "paraformer" ? `<em>默认</em>` : ""}<small>${esc(m.desc)}</small></div>
+        <div class="asr-act">${action(m)}</div>
+      </div>`,
+    )
+    .join("");
+  if (job && dlId) updateAsrProgress(job);
+  const act = async (path: string, init: RequestInit, done?: string) => {
+    try {
+      const r = await api<Job | { ok: boolean }>(path, init);
+      if ("state" in r) S.job = r as Job;
+      if (done) toast(done);
+      refreshEnv();
+    } catch (e) {
+      toast(errorMessage(e), true);
+    }
+    drawAsr();
+  };
+  $$<HTMLButtonElement>("[data-dl]", box).forEach((b) => (b.onclick = () => act(`/api/models/${b.dataset.dl}/download`, { method: "POST" })));
+  $$<HTMLButtonElement>("[data-use]", box).forEach(
+    (b) => (b.onclick = () => act(`/api/models/${b.dataset.use}/use`, { method: "POST" }, "已切换，下一次转写起生效")),
+  );
+  $$<HTMLButtonElement>("[data-del]", box).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const id = b.dataset.del ?? "";
+        if (!delArmed.has(id)) {
+          delArmed.add(id);
+          b.textContent = "确认删除";
+          setTimeout(() => delArmed.delete(id), 4000);
+          return;
+        }
+        delArmed.delete(id);
+        act(`/api/models/${id}`, { method: "DELETE" }, "已删除");
+      }),
+  );
+}
+
+function updateAsrProgress(job: Job): void {
+  const bar = $maybe("#asrBar");
+  if (!bar) return;
+  const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(job.stage ?? "");
+  $("#asrText").textContent = job.stage || "准备下载…";
+  if (m) bar.style.width = `${Math.min(100, (Number(m[1]) / Number(m[2])) * 100).toFixed(1)}%`;
+}
+
+/** 轮询到任务变化时调用：下载进度、下载完成/失败后刷新卡片 */
+export function updateSettingsJob(job: Job, prev: Job): void {
+  if (!$maybe("#sAsr") || job.kind !== "models") return;
+  if (prev.state !== job.state) {
+    if (job.state === "error") toast(`模型下载没有完成：${job.error ?? ""}（已下载的部分会保留，重试时接着下）`, true);
+    if (job.state === "done") toast("模型下载好了，已切换过去");
+    drawAsr();
+  } else updateAsrProgress(job);
+}
+
 export async function renderSettings(): Promise<void> {
   main().innerHTML = `<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;
   let c: Config;
   let local: LocalProvider[];
+  let vaults: { name: string; path: string }[];
   try {
-    [c, local] = await Promise.all([
+    [c, local, vaults] = await Promise.all([
       api<Config>("/api/config"),
       api<LocalProvider[]>("/api/llm/providers").catch(() => []),
+      api<{ name: string; path: string }[]>("/api/obsidian/vaults").catch(() => []),
       refreshEnv(),
     ]);
   } catch (e) {
@@ -152,6 +245,12 @@ export async function renderSettings(): Promise<void> {
 
   $("#sBody").innerHTML = `
     <div class="settings">
+      <section class="card s-card" id="sAsr" hidden>
+        <h2>识别模型</h2>
+        <p class="hint">把录音变成文字的模型，都在本机运行。默认的 Paraformer 适合大多数中文会议；需要更快或更准时可以下载别的换着用，切换后从下一次转写起生效。</p>
+        <div class="asr-list" id="sAsrList"></div>
+      </section>
+
       <section class="card s-card">
         <h2>大模型</h2>
         <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。</p>
@@ -183,6 +282,22 @@ export async function renderSettings(): Promise<void> {
       </section>
 
       <section class="card s-card">
+        <h2>Obsidian</h2>
+        <p class="hint">把纪要存进 Obsidian 库：一场会一篇笔记，日期、时长、参会人写在属性里；鱼骨图存成 Excalidraw 画板嵌进笔记（装了 Excalidraw 插件就能直接改），每个分支下面列着引用的原话。</p>
+        <div class="s-grid">
+          ${vaults.length ? `<div class="field"><label>本机 Obsidian 里的库</label><div class="seg fit" id="sVaults">${vaults.map((v) => `<button data-path="${esc(v.path)}" title="${esc(v.path)}">${esc(v.name)}</button>`).join("")}</div></div>` : ""}
+          <div class="s-row2">
+            <div class="field"><label>库的位置</label><input class="input" id="sVault" value="${esc(c.obsidian.vault)}" placeholder="${vaults.length ? "点上面选一个，或者填库的文件夹路径" : "Obsidian 库的文件夹路径，比如 ~/Documents/笔记"}"></div>
+            <div class="field"><label>存到库里的哪个文件夹</label><input class="input" id="sObFolder" value="${esc(c.obsidian.folder)}" placeholder="留空表示库的根目录"></div>
+          </div>
+          <div class="s-toggles">
+            <button class="toggle ${c.obsidian.auto ? "on" : ""}" id="sObAuto">${ICON.redo}生成纪要后自动存</button>
+            <button class="toggle ${c.obsidian.transcript ? "on" : ""}" id="sObTr">${ICON.file}附带转写全文</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card s-card">
         <h2>运行环境</h2>
         <p class="hint">会议保存在 ${esc(env?.root ?? "")}，配置文件在 ${esc(c.path)}</p>
         <div class="checks">
@@ -198,6 +313,7 @@ export async function renderSettings(): Promise<void> {
       <div class="save-bar"><button class="btn primary lg" id="sSave">保存设置</button></div>
     </div>`;
 
+  drawAsr();
   const model = $<HTMLInputElement>("#sModel");
   const key = $<HTMLInputElement>("#sKey");
   const markPreset = () => $$<HTMLButtonElement>("#sPreset button").forEach((b) => b.classList.toggle("on", b.dataset.id === presetOf()));
@@ -274,6 +390,13 @@ export async function renderSettings(): Promise<void> {
   baseInput().oninput = markPreset;
   baseInput().onchange = fetchModels;
 
+  const vault = $<HTMLInputElement>("#sVault");
+  const markVault = () => $$<HTMLButtonElement>("#sVaults button").forEach((b) => b.classList.toggle("on", b.dataset.path === vault.value.trim()));
+  markVault();
+  $$<HTMLButtonElement>("#sVaults button").forEach((b) => (b.onclick = () => ((vault.value = b.dataset.path ?? ""), markVault())));
+  vault.oninput = markVault;
+  $$<HTMLButtonElement>("#sObAuto, #sObTr").forEach((b) => (b.onclick = () => b.classList.toggle("on")));
+
   const tagInput = $<HTMLInputElement>("#sTagInput");
   const drawTags = () => {
     $$("#sTags .chip").forEach((x) => x.remove());
@@ -328,6 +451,12 @@ export async function renderSettings(): Promise<void> {
           hotwords: hot,
           webhook: $<HTMLInputElement>("#sHook").value.trim(),
           secret: secret || null,
+          obsidian: {
+            vault: vault.value.trim(),
+            folder: $<HTMLInputElement>("#sObFolder").value.trim(),
+            auto: $("#sObAuto").classList.contains("on"),
+            transcript: $("#sObTr").classList.contains("on"),
+          },
         },
       });
       toast("设置已保存");

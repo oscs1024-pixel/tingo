@@ -1,5 +1,5 @@
 //! 分段转写一个 16 kHz wav：jiyao-engine 的端到端检查。
-//! cargo run --release --example transcribe -- <模型目录> <wav> [输出 transcript.json]
+//! cargo run --release --example transcribe -- <模型目录> <wav> [输出 transcript.json 或 -] [识别模型] [热词…]
 use jiyao_engine::{asr, audio, chunked};
 use std::path::Path;
 use std::time::Instant;
@@ -7,7 +7,10 @@ use std::time::Instant;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let t = Instant::now();
-    let engine = asr::Engine::load(&asr::ModelPaths::new(&args[1]), 4).expect("加载模型");
+    let kind = args.get(4).map(|k| asr::AsrKind::from_id(k).expect("识别模型：paraformer / sensevoice / funasr-nano"));
+    let hot: Vec<String> = args.iter().skip(5).cloned().collect();
+    let engine = asr::Engine::load(&asr::ModelPaths::new(&args[1]), kind.unwrap_or(asr::AsrKind::Paraformer), &hot, 4)
+        .expect("加载模型");
     eprintln!("加载 {:.2}s", t.elapsed().as_secs_f64());
     let wav = Path::new(&args[2]);
     let samples = audio::read_wav16k(wav).expect("读 wav");
@@ -23,7 +26,7 @@ fn main() {
         tr.turns().len(),
         tr.speakers_in_order().len()
     );
-    if let Some(out) = args.get(3) {
+    if let Some(out) = args.get(3).filter(|o| *o != "-") {
         tr.save(Path::new(out)).unwrap();
     } else {
         println!("{}", tr.to_prompt_text());

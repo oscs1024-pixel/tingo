@@ -72,6 +72,7 @@ export interface Job {
   model_loaded?: boolean;
   levels?: Record<string, number>;
   live?: { start_ms: number; text: string }[];
+  notice?: string;
 }
 
 export interface Config {
@@ -83,6 +84,14 @@ export interface Config {
   webhook: string;
   secret_set: boolean;
   path: string;
+  obsidian: ObsidianConfig;
+}
+
+export interface ObsidianConfig {
+  vault: string;
+  folder: string;
+  auto: boolean;
+  transcript: boolean;
 }
 
 export interface LocalProvider {

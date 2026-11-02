@@ -167,3 +167,95 @@ def test_cors_allows_tauri_and_vite_only(client):
     assert dev.headers.get("access-control-allow-origin") == "http://localhost:1420"
     evil = client.get("/api/meetings", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in evil.headers
+
+
+FISHBONE_MINUTES = (
+    "# 周会\n\n## 原因分析\n```fishbone\n"
+    '{"problem": "为什么延期？", "branches": [{"title": "上线定了", "refs": ["00:00"]}, {"title": "猜的"}]}'
+    "\n```\n"
+)
+
+
+@pytest.fixture
+def opened(monkeypatch):
+    calls = []
+    monkeypatch.setattr("jiyao.server._open", lambda target, reveal=False: calls.append((target, reveal)))
+    return calls
+
+
+def test_config_obsidian_roundtrip_expands_home(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    c = client.get("/api/config").json()
+    assert c["obsidian"] == {"vault": "", "folder": "会议纪要", "auto": True, "transcript": True}
+    body = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "hotwords": [], "webhook": ""}
+    obs = {"vault": " ~/笔记 ", "folder": "/会议/", "auto": False, "transcript": True}
+    c = client.put("/api/config", json={**body, "obsidian": obs}).json()
+    assert c["obsidian"] == {"vault": f"{tmp_path}/笔记", "folder": "会议", "auto": False, "transcript": True}
+    c = client.put("/api/config", json=body).json()  # 不带 obsidian 就不改
+    assert c["obsidian"]["vault"] == f"{tmp_path}/笔记"
+    assert "[obsidian]" in (tmp_path / "config.toml").read_text()
+
+
+def test_obsidian_export_and_open(client, root, tmp_path, opened):
+    mid = "2026-11-02_1430_周会"
+    r = client.post(f"/api/meetings/{mid}/obsidian")
+    assert r.status_code == 400 and "Obsidian 库" in r.json()["detail"]
+    (root / mid / "纪要.md").write_text(FISHBONE_MINUTES)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    from jiyao import config
+
+    cfg = config.load()
+    cfg.obsidian.vault = str(vault)
+    config.save(cfg)
+    d = client.post(f"/api/meetings/{mid}/obsidian").json()
+    assert d["ok"] and d["drawings"] == 1 and opened == []
+    assert d["path"] == str(vault / "会议纪要" / "2026-11-02 周会.md")
+    assert d["uri"].startswith("obsidian://open?path=") and "%E5%91%A8%E4%BC%9A.md" in d["uri"]
+    d = client.post(f"/api/meetings/{mid}/obsidian", json={"open": True}).json()
+    assert opened == [(d["uri"], False)]
+    assert client.post("/api/meetings/nope/obsidian").status_code == 404
+
+
+def test_excalidraw_export(client, root, opened):
+    mid = "2026-11-02_1430_周会"
+    r = client.post(f"/api/meetings/{mid}/excalidraw")
+    assert r.status_code == 400 and r.json()["detail"] == "这份纪要里没有鱼骨图"
+    (root / mid / "纪要.md").write_text(FISHBONE_MINUTES + "\n```fishbone\n坏的\n```\n" + FISHBONE_MINUTES[5:])
+    d = client.post(f"/api/meetings/{mid}/excalidraw").json()
+    assert [p.rsplit("/", 1)[1] for p in d["paths"]] == ["鱼骨图.excalidraw", "鱼骨图2.excalidraw"]
+    assert opened == [(d["paths"][0], True)]
+    import json
+
+    drawing = json.loads((root / mid / "鱼骨图.excalidraw").read_text())
+    texts = [e["text"] for e in drawing["elements"] if e["type"] == "text"]
+    assert "为什么延期？" in texts and "依据很少 · 引用 1 段 · 6 字" in texts and "无原文依据" in texts
+
+
+def test_obsidian_vaults_endpoint(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert client.get("/api/obsidian/vaults").json() == []
+
+
+def test_summarize_auto_syncs_to_obsidian(client, root, tmp_path, monkeypatch):
+    from jiyao import config
+
+    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True: "# 新标题\n\n正文")
+    cfg = config.load()
+    cfg.obsidian.vault = str(tmp_path / "没有这个库")
+    config.save(cfg)
+    client.post("/api/meetings/2026-11-02_1430_周会/summarize")
+    job = wait_job(client)
+    assert job["state"] == "done" and job["notice"].startswith("没能同步到 Obsidian：还没有设置")
+    client.post("/api/job/dismiss")
+    (tmp_path / "没有这个库").mkdir()
+    client.post("/api/meetings/2026-11-02_1430_周会/summarize")
+    job = wait_job(client)
+    assert job["notice"] == "纪要已同步到 Obsidian"
+    assert (tmp_path / "没有这个库" / "会议纪要" / "2026-11-02 周会.md").exists()
+    cfg.obsidian.auto = False
+    config.save(cfg)
+    client.post("/api/job/dismiss")
+    client.post("/api/meetings/2026-11-02_1430_周会/summarize")
+    assert wait_job(client)["notice"] == ""

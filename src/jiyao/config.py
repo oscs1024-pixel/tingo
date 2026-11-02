@@ -41,11 +41,22 @@ class LLMConfig:
 
 
 @dataclass
+class ObsidianConfig:
+    """存进 Obsidian：库的路径、库里的文件夹、生成纪要后是否自动存、是否附带转写全文"""
+
+    vault: str = ""
+    folder: str = "会议纪要"
+    auto: bool = True
+    transcript: bool = True
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     hotwords: list[str] = field(default_factory=list)
     webhook: str = ""
     webhook_secret: str = ""
+    obsidian: ObsidianConfig = field(default_factory=ObsidianConfig)
 
 
 def load() -> Config:
@@ -55,6 +66,7 @@ def load() -> Config:
 
     llm = data.get("llm", {})
     push = data.get("push", {})
+    obs = data.get("obsidian", {})
     cfg = Config(
         llm=LLMConfig(
             base_url=llm.get("base_url", LLMConfig.base_url),
@@ -64,6 +76,12 @@ def load() -> Config:
         hotwords=list(data.get("hotwords", llm.get("hotwords", []))),  # 早期模板误把 hotwords 写在 [llm] 下
         webhook=push.get("webhook", ""),
         webhook_secret=push.get("secret", ""),
+        obsidian=ObsidianConfig(
+            vault=obs.get("vault", ObsidianConfig.vault),
+            folder=obs.get("folder", ObsidianConfig.folder),
+            auto=obs.get("auto", ObsidianConfig.auto),
+            transcript=obs.get("transcript", ObsidianConfig.transcript),
+        ),
     )
 
     env = os.environ
@@ -87,8 +105,12 @@ def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+def _toml_bool(b: bool) -> str:
+    return "true" if b else "false"
+
+
 def save(cfg: Config) -> Path:
-    """写回配置文件（图形界面的设置页用）。注释不保留。"""
+    """写回配置文件（图形界面的设置页用）。注释不保留，格式与桌面版（Rust）的 save 一致。"""
     words = ", ".join(_toml_str(w) for w in cfg.hotwords)
     text = (
         "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n"
@@ -100,7 +122,12 @@ def save(cfg: Config) -> Path:
         f"model = {_toml_str(cfg.llm.model)}\n\n"
         "[push]\n"
         f"webhook = {_toml_str(cfg.webhook)}\n"
-        f"secret = {_toml_str(cfg.webhook_secret)}\n"
+        f"secret = {_toml_str(cfg.webhook_secret)}\n\n"
+        "[obsidian]\n"
+        f"vault = {_toml_str(cfg.obsidian.vault)}\n"
+        f"folder = {_toml_str(cfg.obsidian.folder)}\n"
+        f"auto = {_toml_bool(cfg.obsidian.auto)}\n"
+        f"transcript = {_toml_bool(cfg.obsidian.transcript)}\n"
     )
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(text, encoding="utf-8")

@@ -1,4 +1,6 @@
-//! 识别引擎：sherpa-onnx 运行 FunASR Paraformer-large（int8）+ Silero VAD + CT-Transformer 标点 + CAM++ 声纹。
+//! 识别引擎：sherpa-onnx 运行识别模型 + Silero VAD + CT-Transformer 标点 + CAM++ 声纹。
+//! 识别模型默认 FunASR Paraformer-large（int8），可以换成 SenseVoice（更快、多语种）或
+//! Fun-ASR-Nano（更准、支持热词，慢几倍），见 [`AsrKind`]。
 //!
 //! 这条路线的选型依据见 spike/sherpa/RESULTS.md。识别结果没有逐字时间戳，
 //! 所以按 VAD 切出的语音段识别、每段提一个声纹，说话人以语音段为单位判断。
@@ -13,6 +15,35 @@ use sherpa_onnx::{
 };
 
 pub const SR: usize = 16000;
+
+/// 可选的识别模型。VAD、标点、声纹三个基础模型大家共用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsrKind {
+    Paraformer,
+    SenseVoice,
+    FunAsrNano,
+}
+
+impl AsrKind {
+    pub const ALL: [AsrKind; 3] = [AsrKind::Paraformer, AsrKind::SenseVoice, AsrKind::FunAsrNano];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            AsrKind::Paraformer => "paraformer",
+            AsrKind::SenseVoice => "sensevoice",
+            AsrKind::FunAsrNano => "funasr-nano",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+
+    /// 模型自己会加标点（不用再过 CT-Transformer）。SenseVoice 按 VAD 切出的短段识别时基本不出标点，照样要过
+    fn punctuates(self) -> bool {
+        matches!(self, AsrKind::FunAsrNano)
+    }
+}
 
 /// 模型文件布局（相对模型目录）。
 pub struct ModelPaths {
@@ -38,17 +69,54 @@ impl ModelPaths {
     pub fn speaker(&self) -> PathBuf {
         self.dir.join("campplus_zh.onnx")
     }
-    pub fn all(&self) -> [PathBuf; 5] {
-        [
-            self.paraformer(),
-            self.tokens(),
-            self.vad(),
-            self.punct(),
-            self.speaker(),
-        ]
+    /// 识别模型所在目录（Paraformer 沿用最早的位置，老用户不用重新下载）
+    pub fn asr_dir(&self, kind: AsrKind) -> PathBuf {
+        self.dir.join(match kind {
+            AsrKind::Paraformer => "paraformer",
+            AsrKind::SenseVoice => "sensevoice",
+            AsrKind::FunAsrNano => "funasr-nano",
+        })
     }
+    pub fn asr_files(&self, kind: AsrKind) -> Vec<PathBuf> {
+        let d = self.asr_dir(kind);
+        match kind {
+            AsrKind::Paraformer => vec![self.paraformer(), self.tokens()],
+            AsrKind::SenseVoice => vec![d.join("model.int8.onnx"), d.join("tokens.txt")],
+            AsrKind::FunAsrNano => vec![
+                d.join("encoder_adaptor.int8.onnx"),
+                d.join("llm.int8.onnx"),
+                d.join("embedding.int8.onnx"),
+                d.join("Qwen3-0.6B/tokenizer.json"),
+            ],
+        }
+    }
+    pub fn base(&self) -> [PathBuf; 3] {
+        [self.vad(), self.punct(), self.speaker()]
+    }
+    pub fn base_ready(&self) -> bool {
+        self.base().iter().all(|p| p.is_file())
+    }
+    pub fn asr_ready(&self, kind: AsrKind) -> bool {
+        self.asr_files(kind).iter().all(|p| p.is_file())
+    }
+    /// 默认的一套（基础模型 + Paraformer）是否齐全：首次启动下载的就是这一套
     pub fn ready(&self) -> bool {
-        self.all().iter().all(|p| p.is_file())
+        self.base_ready() && self.asr_ready(AsrKind::Paraformer)
+    }
+    fn active_file(&self) -> PathBuf {
+        self.dir.join("active-asr.txt")
+    }
+    /// 当前选用的识别模型；没选过或者选的那个文件不全时用 Paraformer
+    pub fn active(&self) -> AsrKind {
+        std::fs::read_to_string(self.active_file())
+            .ok()
+            .and_then(|s| AsrKind::from_id(s.trim()))
+            .filter(|&k| self.asr_ready(k))
+            .unwrap_or(AsrKind::Paraformer)
+    }
+    pub fn set_active(&self, kind: AsrKind) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.active_file(), kind.id())
     }
 }
 
@@ -63,8 +131,11 @@ pub struct Segment {
 }
 
 pub struct Engine {
+    pub kind: AsrKind,
+    /// 加载时交给模型的热词（只有 Fun-ASR-Nano 用；热词变了要重新加载）
+    pub hotwords: Vec<String>,
     rec: OfflineRecognizer,
-    punct: OfflinePunctuation,
+    punct: Option<OfflinePunctuation>,
     spk: SpeakerEmbeddingExtractor,
     vad: VadModelConfig,
     // sherpa 的对象单线程使用是安全的，这里统一串行化
@@ -80,24 +151,58 @@ fn path_str(p: &Path) -> Option<String> {
 }
 
 impl Engine {
-    pub fn load(models: &ModelPaths, threads: i32) -> Result<Self, String> {
-        if let Some(missing) = models.all().iter().find(|p| !p.is_file()) {
+    pub fn load(models: &ModelPaths, kind: AsrKind, hotwords: &[String], threads: i32) -> Result<Self, String> {
+        let files = models.base().into_iter().chain(models.asr_files(kind));
+        if let Some(missing) = files.into_iter().find(|p| !p.is_file()) {
             return Err(format!("缺少模型文件：{}", missing.display()));
         }
         let mut cfg = OfflineRecognizerConfig::default();
-        cfg.model_config.paraformer.model = path_str(&models.paraformer());
-        cfg.model_config.tokens = path_str(&models.tokens());
         cfg.model_config.num_threads = threads;
+        let [first, second, ..] = &models.asr_files(kind)[..] else { unreachable!() };
+        let dir = models.asr_dir(kind);
+        match kind {
+            AsrKind::Paraformer => {
+                cfg.model_config.paraformer.model = path_str(first);
+                cfg.model_config.tokens = path_str(second);
+            }
+            AsrKind::SenseVoice => {
+                cfg.model_config.sense_voice.model = path_str(first);
+                cfg.model_config.sense_voice.language = Some("zh".into()); // auto 在中文会议上错字明显多；中英混说照样能认英文
+                cfg.model_config.sense_voice.use_itn = true;
+                cfg.model_config.tokens = path_str(second);
+            }
+            AsrKind::FunAsrNano => {
+                let n = &mut cfg.model_config.funasr_nano;
+                n.encoder_adaptor = path_str(&dir.join("encoder_adaptor.int8.onnx"));
+                n.llm = path_str(&dir.join("llm.int8.onnx"));
+                n.embedding = path_str(&dir.join("embedding.int8.onnx"));
+                n.tokenizer = path_str(&dir.join("Qwen3-0.6B"));
+                // Rust 绑定的默认值是随机采样（temperature 1.0），改成和官方 Python 接口一样的近似贪心
+                n.max_new_tokens = 512;
+                n.temperature = 1e-6;
+                n.top_p = 0.8;
+                n.itn = 1;
+                if !hotwords.is_empty() {
+                    n.hotwords = Some(hotwords.join(","));
+                }
+            }
+        }
         let rec = OfflineRecognizer::create(&cfg).ok_or("识别模型加载失败")?;
 
-        let punct = OfflinePunctuation::create(&OfflinePunctuationConfig {
-            model: OfflinePunctuationModelConfig {
-                ct_transformer: path_str(&models.punct()),
-                num_threads: 2,
-                ..Default::default()
-            },
-        })
-        .ok_or("标点模型加载失败")?;
+        let punct = if kind.punctuates() {
+            None
+        } else {
+            Some(
+                OfflinePunctuation::create(&OfflinePunctuationConfig {
+                    model: OfflinePunctuationModelConfig {
+                        ct_transformer: path_str(&models.punct()),
+                        num_threads: 2,
+                        ..Default::default()
+                    },
+                })
+                .ok_or("标点模型加载失败")?,
+            )
+        };
 
         let spk = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
             model: path_str(&models.speaker()),
@@ -116,6 +221,8 @@ impl Engine {
         vad.sample_rate = SR as i32;
         vad.num_threads = 1;
         Ok(Self {
+            kind,
+            hotwords: if kind == AsrKind::FunAsrNano { hotwords.to_vec() } else { Vec::new() },
             rec,
             punct,
             spk,
@@ -125,7 +232,7 @@ impl Engine {
     }
 
     /// 识别一段 16 kHz 单声道音频。`offset_ms` 是这段在整场会议里的起点。
-    /// 这个模型不支持热词；热词在生成纪要时作为术语表交给大模型纠正。
+    /// 除了 Fun-ASR-Nano，识别模型都不支持热词；热词在生成纪要时作为术语表交给大模型纠正。
     pub fn transcribe(&self, samples: &[f32], offset_ms: u64) -> Vec<Segment> {
         let _guard = self.lock.lock().unwrap();
         let Some(vad) = VoiceActivityDetector::create(&self.vad, 120.0) else {
@@ -146,10 +253,10 @@ impl Engine {
             let raw = stream.get_result().map(|r| r.text).unwrap_or_default();
             let raw = raw.trim();
             if !raw.is_empty() {
-                let text = self
-                    .punct
-                    .add_punctuation(raw)
-                    .unwrap_or_else(|| raw.to_string());
+                let text = match &self.punct {
+                    Some(p) => p.add_punctuation(raw).unwrap_or_else(|| raw.to_string()),
+                    None => raw.to_string(),
+                };
                 let embeddings = windows(audio.len())
                     .filter_map(|(a, b)| self.embed(&audio[a..b]))
                     .collect();

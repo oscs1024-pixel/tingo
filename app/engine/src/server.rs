@@ -5,13 +5,13 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Multipart, Path as UrlPath, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,10 +19,11 @@ use tower::ServiceExt;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeFile;
 
-use crate::asr::{Engine, ModelPaths};
+use crate::asr::{AsrKind, Engine, ModelPaths};
 use crate::chunked::{transcribe_samples, LiveTranscriber};
 use crate::config::{self, Config};
 use crate::meetings::{self, AUDIO, MINUTES, TRANSCRIPT_JSON};
+use crate::{fishbone, obsidian};
 use crate::record::{self, Recorder};
 use crate::summarize::{self, Hooks};
 use crate::transcript::{fmt_ts, Transcript};
@@ -47,6 +48,8 @@ pub struct Job {
     pub minutes: String,
     pub stage: String,
     pub sources: Vec<String>,
+    /// 完成后给用户的附加提示（比如"已存到 Obsidian"）
+    pub notice: String,
 }
 
 impl Job {
@@ -72,7 +75,8 @@ struct Live {
 
 pub struct AppState {
     opt: Options,
-    engine: OnceLock<Arc<Engine>>,
+    /// 当前加载的识别引擎；切换模型（或 Fun-ASR-Nano 的热词变了）时换掉
+    engine: Mutex<Option<Arc<Engine>>>,
     engine_lock: Mutex<()>,
     job: Mutex<Option<Job>>,
     recording: Mutex<Option<Live>>,
@@ -109,7 +113,7 @@ impl AppState {
     pub fn new(opt: Options) -> Shared {
         Arc::new(Self {
             opt,
-            engine: OnceLock::new(),
+            engine: Mutex::new(None),
             engine_lock: Mutex::new(()),
             job: Mutex::new(None),
             recording: Mutex::new(None),
@@ -126,22 +130,34 @@ impl AppState {
 
     /// 识别引擎：第一次用时加载（约 1 秒），之后常驻。
     fn engine(&self) -> Result<Arc<Engine>, String> {
-        if let Some(e) = self.engine.get() {
-            return Ok(e.clone());
+        let paths = self.model_paths();
+        let kind = paths.active();
+        // Fun-ASR-Nano 在加载时就要拿到热词
+        let hot = if kind == AsrKind::FunAsrNano { self.config().hotwords } else { Vec::new() };
+        let current = || {
+            self.engine.lock().unwrap().clone().filter(|e| e.kind == kind && e.hotwords == hot)
+        };
+        if let Some(e) = current() {
+            return Ok(e);
         }
         let _guard = self.engine_lock.lock().unwrap();
-        if let Some(e) = self.engine.get() {
-            return Ok(e.clone());
+        if let Some(e) = current() {
+            return Ok(e);
         }
-        if !self.model_paths().ready() {
+        if !paths.base_ready() || !paths.asr_ready(kind) {
             return Err("识别模型还没有下载，先在首页下载（约 330 MB）".into());
         }
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().clamp(2, 4) as i32)
             .unwrap_or(4);
-        let e = Arc::new(Engine::load(&self.model_paths(), threads)?);
-        let _ = self.engine.set(e.clone());
+        *self.engine.lock().unwrap() = None; // 先放掉旧模型的内存
+        let e = Arc::new(Engine::load(&paths, kind, &hot, threads)?);
+        *self.engine.lock().unwrap() = Some(e.clone());
         Ok(e)
+    }
+
+    fn engine_loaded(&self) -> bool {
+        self.engine.lock().unwrap().is_some()
     }
 
     fn folder(&self, id: &str) -> ApiResult<PathBuf> {
@@ -209,6 +225,14 @@ impl AppState {
         )?;
         std::fs::write(dir.join(MINUTES), &text).map_err(|e| e.to_string())?;
         self.update(|j| j.minutes = text);
+        if cfg.obsidian.auto && !cfg.obsidian.vault.trim().is_empty() {
+            // 自动存进 Obsidian；失败不影响纪要本身，只提示一下
+            let notice = match obsidian::export(&cfg.obsidian, dir) {
+                Ok(_) => "纪要已同步到 Obsidian".to_string(),
+                Err(e) => format!("没能同步到 Obsidian：{e}"),
+            };
+            self.update(|j| j.notice = notice);
+        }
         Ok(())
     }
 
@@ -252,10 +276,11 @@ async fn env(State(s): State<Shared>) -> Json<Value> {
         "root": s.opt.root,
         "ffmpeg": true, // 桌面版不需要 ffmpeg
         "system_audio": system_audio_supported(&s.opt.recorder_bin),
-        "model_cached": s.model_paths().ready(),
+        "model_cached": s.model_paths().base_ready() && s.model_paths().asr_ready(s.model_paths().active()),
+        "asr_model": models::catalog().iter().find(|m| m.kind == s.model_paths().active()).map(|m| m.name),
         "models_downloadable": true, // 桌面版：模型在界面里下载（Python 版首次转写时自动下载，没有这个字段）
         "models_size_mb": models::total_size() / 1_000_000,
-        "model_loaded": s.engine.get().is_some(),
+        "model_loaded": s.engine_loaded(),
         "llm_ready": llm_ready,
         "llm_model": cfg.llm.model,
     }))
@@ -302,6 +327,12 @@ fn config_json(s: &AppState) -> Value {
         "hotwords": c.hotwords,
         "webhook": c.webhook,
         "secret_set": !c.webhook_secret.is_empty(),
+        "obsidian": {
+            "vault": c.obsidian.vault,
+            "folder": c.obsidian.folder,
+            "auto": c.obsidian.auto,
+            "transcript": c.obsidian.transcript,
+        },
         "path": s.opt.config_path,
     })
 }
@@ -320,6 +351,15 @@ struct ConfigReq {
     #[serde(default)]
     webhook: String,
     secret: Option<String>,
+    obsidian: Option<ObsidianReq>,
+}
+
+#[derive(Deserialize)]
+struct ObsidianReq {
+    vault: String,
+    folder: String,
+    auto: bool,
+    transcript: bool,
 }
 
 async fn put_config(State(s): State<Shared>, Json(r): Json<ConfigReq>) -> ApiResult<Json<Value>> {
@@ -338,6 +378,17 @@ async fn put_config(State(s): State<Shared>, Json(r): Json<ConfigReq>) -> ApiRes
     c.webhook = r.webhook.trim().into();
     if let Some(sec) = r.secret {
         c.webhook_secret = sec.trim().into();
+    }
+    if let Some(o) = r.obsidian {
+        c.obsidian = config::ObsidianConfig {
+            vault: match (o.vault.trim().strip_prefix("~/"), std::env::var("HOME")) {
+                (Some(rest), Ok(home)) => format!("{home}/{rest}"), // 设置页里可以填 ~/…
+                _ => o.vault.trim().into(),
+            },
+            folder: o.folder.trim().trim_matches('/').into(),
+            auto: o.auto,
+            transcript: o.transcript,
+        };
     }
     config::save(&s.opt.config_path, &c).map_err(|e| bad(e.to_string()))?;
     Ok(Json(config_json(&s)))
@@ -591,6 +642,61 @@ async fn post_push(
     ))
 }
 
+async fn obsidian_vaults() -> Json<Value> {
+    let v: Vec<Value> = obsidian::vaults().into_iter().map(|(name, path)| json!({"name": name, "path": path})).collect();
+    Json(json!(v))
+}
+
+#[derive(Deserialize, Default)]
+struct OpenReq {
+    #[serde(default)]
+    open: bool,
+}
+
+/// 存进 Obsidian；open=true 时顺便用 Obsidian 打开这篇笔记
+async fn post_obsidian(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    body: Option<Json<OpenReq>>,
+) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let cfg = s.config().obsidian;
+    let out = tokio::task::spawn_blocking(move || obsidian::export(&cfg, &dir))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(bad)?;
+    let uri = obsidian::uri(&out.note);
+    if body.is_some_and(|b| b.open) {
+        let _ = std::process::Command::new("/usr/bin/open").arg(&uri).spawn();
+    }
+    Ok(Json(json!({"ok": true, "path": out.note, "uri": uri, "drawings": out.drawings.len()})))
+}
+
+/// 把纪要里的鱼骨图导出成 .excalidraw 文件（放在会议文件夹里），并在访达里选中，
+/// 可以拖进 excalidraw.com 或用 Obsidian 的 Excalidraw 插件继续改。
+async fn post_excalidraw(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad("还没有纪要"))?;
+    let tr = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok();
+    let turns = tr.as_ref().map(|t| t.turns()).unwrap_or_default();
+    let duration = tr.as_ref().map(|t| t.duration_ms).unwrap_or(u64::MAX);
+    let specs: Vec<_> = fishbone::blocks(&minutes).into_iter().filter_map(|(_, s)| s).collect();
+    if specs.is_empty() {
+        return Err(bad("这份纪要里没有鱼骨图"));
+    }
+    let mut paths = Vec::new();
+    for (k, spec) in specs.iter().enumerate() {
+        let grounds: Vec<_> = spec.branches.iter().map(|b| fishbone::ground(b, &turns, duration)).collect();
+        let name = if k == 0 { "鱼骨图.excalidraw".to_string() } else { format!("鱼骨图{}.excalidraw", k + 1) };
+        let p = dir.join(name);
+        let text = serde_json::to_string_pretty(&fishbone::excalidraw(spec, &grounds)).unwrap();
+        std::fs::write(&p, text).map_err(|e| bad(e.to_string()))?;
+        paths.push(p);
+    }
+    let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&paths[0]).spawn();
+    Ok(Json(json!({"ok": true, "paths": paths})))
+}
+
 async fn reveal(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
     let _ = std::process::Command::new("/usr/bin/open").arg(dir).spawn();
@@ -763,7 +869,7 @@ async fn get_job(State(s): State<Shared>) -> Json<Value> {
     };
     let mut data = serde_json::to_value(&job).unwrap();
     data["elapsed"] = (now() - job.started_at).into();
-    data["model_loaded"] = s.engine.get().is_some().into();
+    data["model_loaded"] = s.engine_loaded().into();
     if job.state == "recording" {
         let dir = s.opt.root.join(&job.meeting);
         let levels: BTreeMap<&str, f32> = job
@@ -808,6 +914,79 @@ async fn dismiss(State(s): State<Shared>) -> Json<Value> {
 
 // ---------- 模型下载（桌面版新增） ----------
 
+fn model_kind(id: &str) -> ApiResult<AsrKind> {
+    AsrKind::from_id(id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("没有这个识别模型：{id}")))
+}
+
+/// 设置页的识别模型列表：哪些下载了、当前用哪个
+async fn list_asr_models(State(s): State<Shared>) -> Json<Value> {
+    let paths = s.model_paths();
+    let active = paths.active();
+    let list: Vec<Value> = models::catalog()
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.kind.id(),
+                "name": m.name,
+                "desc": m.desc,
+                "size_mb": m.size / 1_000_000,
+                "ready": paths.asr_ready(m.kind),
+                "active": m.kind == active,
+            })
+        })
+        .collect();
+    Json(json!({"active": active.id(), "base_ready": paths.base_ready(), "models": list}))
+}
+
+/// 下载一个识别模型，下好了直接切过去
+async fn download_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Job>> {
+    let kind = model_kind(&id)?;
+    let paths = s.model_paths();
+    if paths.base_ready() && paths.asr_ready(kind) {
+        return Err(bad("这个模型已经下载好了"));
+    }
+    let job = Job::new("models", kind.id(), "downloading");
+    s.start_job(job.clone())?;
+    spawn_job(&s, move |st| {
+        let paths = st.model_paths();
+        models::ensure_model(&paths, kind, |done, total| {
+            st.update(|j| {
+                j.stage = format!("{:.0} / {:.0} MB", done as f64 / 1e6, total as f64 / 1e6)
+            })
+        })?;
+        paths.set_active(kind).map_err(|e| e.to_string())?;
+        Ok(())
+    });
+    Ok(Json(job))
+}
+
+async fn use_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let kind = model_kind(&id)?;
+    let paths = s.model_paths();
+    if !paths.asr_ready(kind) {
+        return Err(bad("这个模型还没有下载"));
+    }
+    paths.set_active(kind).map_err(|e| bad(e.to_string()))?;
+    // 下次转写时按新模型加载；正在进行的转写用的还是旧引擎，不受影响
+    if !s.engine.lock().unwrap().as_ref().is_some_and(|e| e.kind == kind) {
+        *s.engine.lock().unwrap() = None;
+    }
+    Ok(Json(json!({"ok": true, "active": kind.id()})))
+}
+
+async fn delete_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let kind = model_kind(&id)?;
+    let paths = s.model_paths();
+    if paths.active() == kind {
+        return Err(bad("正在使用这个模型，先切换到别的模型再删除"));
+    }
+    if s.job.lock().unwrap().as_ref().is_some_and(|j| j.busy() && j.kind == "models" && j.meeting == kind.id()) {
+        return Err(bad("这个模型正在下载"));
+    }
+    models::remove_model(&paths, kind).map_err(bad)?;
+    Ok(Json(json!({"ok": true})))
+}
+
 async fn download_models(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     if s.model_paths().ready() {
         return Err(bad("模型已经下载好了"));
@@ -836,7 +1015,7 @@ pub fn router(state: Shared) -> Router {
         .allow_origin(AllowOrigin::list(
             origins.iter().map(|o| HeaderValue::from_static(o)),
         ))
-        .allow_methods([Method::GET, Method::POST, Method::PUT])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::RANGE]);
     Router::new()
         .route("/api/env", get(env))
@@ -853,12 +1032,19 @@ pub fn router(state: Shared) -> Router {
         .route("/api/meetings/{id}/process", post(post_process))
         .route("/api/meetings/{id}/push", post(post_push))
         .route("/api/meetings/{id}/reveal", post(reveal))
+        .route("/api/meetings/{id}/obsidian", post(post_obsidian))
+        .route("/api/meetings/{id}/excalidraw", post(post_excalidraw))
+        .route("/api/obsidian/vaults", get(obsidian_vaults))
         .route("/api/record/start", post(record_start))
         .route("/api/record/stop", post(record_stop))
         .route("/api/import", post(import_file))
         .route("/api/job", get(get_job))
         .route("/api/job/dismiss", post(dismiss))
         .route("/api/models/download", post(download_models))
+        .route("/api/models", get(list_asr_models))
+        .route("/api/models/{id}/download", post(download_model))
+        .route("/api/models/{id}/use", post(use_model))
+        .route("/api/models/{id}", delete(delete_model))
         .layer(axum::extract::DefaultBodyLimit::max(4 << 30)) // 导入的录屏可能有几个 GB
         .layer(cors)
         .with_state(state)

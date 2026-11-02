@@ -76,6 +76,21 @@ def _list_models(base_url: str, api_key: str) -> list[str] | None:
 log = get_logger()
 
 
+def _launch(args: list[str]) -> None:
+    """后台打开文件 / 链接，不等它结束。"""
+    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _open(target: str, reveal: bool = False) -> None:
+    """用系统默认程序打开；reveal=True 时在访达里选中这个文件。"""
+    if platform.system() == "Darwin":
+        _launch(["open", "-R", target] if reveal else ["open", target])
+    elif platform.system() == "Windows":
+        os.startfile(str(Path(target).parent) if reveal else target)
+    else:
+        _launch(["xdg-open", str(Path(target).parent) if reveal else target])
+
+
 @dataclass
 class Job:
     kind: str  # record | process | summarize
@@ -86,6 +101,7 @@ class Job:
     minutes: str = ""  # 生成中的纪要，流式累加
     stage: str = ""
     sources: list[str] = field(default_factory=list)
+    notice: str = ""  # 完成后给用户的附加提示（比如"已存到 Obsidian"）
 
     @property
     def busy(self) -> bool:
@@ -107,6 +123,13 @@ class MinutesRequest(BaseModel):
     text: str
 
 
+class ObsidianRequest(BaseModel):
+    vault: str
+    folder: str
+    auto: bool
+    transcript: bool
+
+
 class ConfigRequest(BaseModel):
     base_url: str
     model: str
@@ -114,6 +137,11 @@ class ConfigRequest(BaseModel):
     hotwords: list[str] = []
     webhook: str = ""
     secret: str | None = None
+    obsidian: ObsidianRequest | None = None  # None 表示不改
+
+
+class OpenRequest(BaseModel):
+    open: bool = False
 
 
 class LLMTestRequest(BaseModel):
@@ -167,6 +195,16 @@ def create_app(root: Path | None = None) -> FastAPI:
         (out / MINUTES).write_text(text, encoding="utf-8")
         job.minutes = text
         log.info("%s 纪要完成：模型 %s，%.0f 秒", out.name, cfg.llm.model, time.time() - t)
+        if cfg.obsidian.auto and cfg.obsidian.vault.strip():
+            # 自动存进 Obsidian；失败不影响纪要本身，只提示一下
+            from . import obsidian
+
+            try:
+                obsidian.export(cfg.obsidian, out)
+                job.notice = "纪要已同步到 Obsidian"
+            except Exception as e:  # noqa: BLE001
+                job.notice = f"没能同步到 Obsidian：{e}"
+                log.warning("%s 同步到 Obsidian 失败：%s", out.name, e)
 
     def run_process(job: Job, audio: Path, out: Path, hotwords: list[str]) -> None:
         from . import asr
@@ -224,6 +262,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             "hotwords": cfg.hotwords,
             "webhook": cfg.webhook,
             "secret_set": bool(cfg.webhook_secret),
+            "obsidian": asdict(cfg.obsidian),
             "path": str(config.CONFIG_PATH),
         }
 
@@ -237,6 +276,13 @@ def create_app(root: Path | None = None) -> FastAPI:
         cfg.webhook = req.webhook.strip()
         if req.secret is not None:
             cfg.webhook_secret = req.secret.strip()
+        if req.obsidian is not None:
+            o = req.obsidian
+            vault = o.vault.strip()
+            home = os.environ.get("HOME")
+            if vault.startswith("~/") and home is not None:
+                vault = f"{home}/{vault[2:]}"  # 设置页里可以填 ~/…
+            cfg.obsidian = config.ObsidianConfig(vault, o.folder.strip().strip("/"), o.auto, o.transcript)
         config.save(cfg)
         return get_config()
 
@@ -389,6 +435,55 @@ def create_app(root: Path | None = None) -> FastAPI:
         else:
             subprocess.run(["xdg-open", str(path)], check=False)
         return {"ok": True}
+
+    @app.post("/api/meetings/{meeting_id}/obsidian")
+    def post_obsidian(meeting_id: str, req: OpenRequest | None = None) -> dict:
+        """存进 Obsidian；open=true 时顺便用 Obsidian 打开这篇笔记"""
+        from . import obsidian
+
+        path = folder(meeting_id)
+        try:
+            out = obsidian.export(config.load().obsidian, path)
+        except Exception as e:
+            raise HTTPException(400, str(e)) from e
+        uri = obsidian.uri(out.note)
+        if req and req.open:
+            _open(uri)
+        return {"ok": True, "path": str(out.note), "uri": uri, "drawings": len(out.drawings)}
+
+    @app.post("/api/meetings/{meeting_id}/excalidraw")
+    def post_excalidraw(meeting_id: str) -> dict:
+        """把纪要里的鱼骨图导出成 .excalidraw 文件（放在会议文件夹里），并在访达里选中，
+        可以拖进 excalidraw.com 或用 Obsidian 的 Excalidraw 插件继续改。"""
+        from . import fishbone
+
+        path = folder(meeting_id)
+        if not (path / MINUTES).exists():
+            raise HTTPException(400, "还没有纪要")
+        minutes = (path / MINUTES).read_text(encoding="utf-8")
+        try:
+            tr: Transcript | None = Transcript.load(path / TRANSCRIPT_JSON)
+        except Exception:  # noqa: BLE001
+            tr = None
+        turns = tr.turns() if tr is not None else []
+        duration = tr.duration_ms if tr is not None else 2**64 - 1
+        specs = [s for _, s in fishbone.blocks(minutes) if s is not None]
+        if not specs:
+            raise HTTPException(400, "这份纪要里没有鱼骨图")
+        paths = []
+        for k, spec in enumerate(specs):
+            grounds = [fishbone.ground(b, turns, duration) for b in spec.branches]
+            p = path / ("鱼骨图.excalidraw" if k == 0 else f"鱼骨图{k + 1}.excalidraw")
+            p.write_text(fishbone.dumps(fishbone.excalidraw(spec, grounds)), encoding="utf-8")
+            paths.append(str(p))
+        _open(paths[0], reveal=True)
+        return {"ok": True, "paths": paths}
+
+    @app.get("/api/obsidian/vaults")
+    def obsidian_vaults() -> list[dict]:
+        from . import obsidian
+
+        return [{"name": n, "path": p} for n, p in obsidian.vaults()]
 
     # ---------- 录音与导入 ----------
 

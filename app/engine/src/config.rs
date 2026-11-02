@@ -20,12 +20,28 @@ impl Default for LlmConfig {
     }
 }
 
+/// 存进 Obsidian：库的路径、库里的文件夹、生成纪要后是否自动存、是否附带转写全文
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObsidianConfig {
+    pub vault: String,
+    pub folder: String,
+    pub auto: bool,
+    pub transcript: bool,
+}
+
+impl Default for ObsidianConfig {
+    fn default() -> Self {
+        Self { vault: String::new(), folder: "会议纪要".into(), auto: true, transcript: true }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Config {
     pub llm: LlmConfig,
     pub hotwords: Vec<String>,
     pub webhook: String,
     pub webhook_secret: String,
+    pub obsidian: ObsidianConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -43,12 +59,22 @@ struct RawPush {
 }
 
 #[derive(Deserialize, Default)]
+struct RawObsidian {
+    vault: Option<String>,
+    folder: Option<String>,
+    auto: Option<bool>,
+    transcript: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
 struct Raw {
     hotwords: Option<Vec<String>>,
     #[serde(default)]
     llm: RawLlm,
     #[serde(default)]
     push: RawPush,
+    #[serde(default)]
+    obsidian: RawObsidian,
 }
 
 pub fn default_path() -> PathBuf {
@@ -77,6 +103,15 @@ pub fn load(path: &Path) -> Config {
         hotwords: raw.hotwords.or(raw.llm.hotwords).unwrap_or_default(),
         webhook: raw.push.webhook.unwrap_or_default(),
         webhook_secret: raw.push.secret.unwrap_or_default(),
+        obsidian: {
+            let d = ObsidianConfig::default();
+            ObsidianConfig {
+                vault: raw.obsidian.vault.unwrap_or(d.vault),
+                folder: raw.obsidian.folder.unwrap_or(d.folder),
+                auto: raw.obsidian.auto.unwrap_or(d.auto),
+                transcript: raw.obsidian.transcript.unwrap_or(d.transcript),
+            }
+        },
     };
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     if let Some(v) = env("JIYAO_LLM_BASE_URL") {
@@ -108,13 +143,17 @@ fn quote(s: &str) -> String {
 pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
     let words: Vec<String> = cfg.hotwords.iter().map(|w| quote(w)).collect();
     let text = format!(
-        "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\n\n[push]\nwebhook = {}\nsecret = {}\n",
+        "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n",
         words.join(", "),
         quote(&cfg.llm.base_url),
         quote(&cfg.llm.api_key),
         quote(&cfg.llm.model),
         quote(&cfg.webhook),
         quote(&cfg.webhook_secret),
+        quote(&cfg.obsidian.vault),
+        quote(&cfg.obsidian.folder),
+        cfg.obsidian.auto,
+        cfg.obsidian.transcript,
     );
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -151,9 +190,11 @@ mod tests {
             hotwords: vec!["星河".into(), "Kafka".into()],
             webhook: "".into(),
             webhook_secret: "".into(),
+            obsidian: ObsidianConfig { vault: "/Users/a/笔记".into(), folder: "会议".into(), auto: false, transcript: true },
         };
         save(&p, &cfg).unwrap();
         assert_eq!(load(&p).llm, cfg.llm);
+        assert_eq!(load(&p).obsidian, cfg.obsidian);
         assert_eq!(load(&p).hotwords, cfg.hotwords);
         // Python 版写出的文件
         std::fs::write(&p, "hotwords = [\"青鸾\"]\n\n[llm]\nbase_url = \"https://ai.example/v1\"\napi_key = \"sk\"\nmodel = \"m\"\n\n[push]\nwebhook = \"\"\nsecret = \"\"\n").unwrap();

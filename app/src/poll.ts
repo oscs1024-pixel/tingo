@@ -6,6 +6,7 @@ import { refreshEnv, refreshMeetings } from "./sidebar";
 import { isBusy, S, stateLabel } from "./state";
 import { updateDetailJob } from "./views/detail";
 import { updateHome } from "./views/home";
+import { updateSettingsJob } from "./views/settings";
 
 let timer: number | undefined;
 
@@ -31,11 +32,13 @@ export async function poll(): Promise<void> {
   const onHome = !location.hash || location.hash === "#/";
   if (onHome) updateHome(job, prev);
   if (S.detail && job.meeting === S.detail.id) updateDetailJob(job, prev);
+  updateSettingsJob(job, prev);
 
   if (prev.state !== job.state && (job.state === "done" || job.state === "error")) {
     refreshMeetings();
     refreshEnv();
-    if (job.state === "done" && !onHome && job.kind !== "summarize") toast("纪要已生成");
+    if (job.state === "done" && !onHome && (job.kind === "process" || job.kind === "record")) toast("纪要已生成");
+    if (job.state === "done" && job.notice) toast(job.notice, job.notice.startsWith("没能"));
   }
   timer = window.setTimeout(poll, job.state === "recording" ? 160 : isBusy(job) ? 500 : 2500);
 }

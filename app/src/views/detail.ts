@@ -40,7 +40,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
       <div class="detail-head">
         <h1>${esc(d.title)}</h1>
         <div class="detail-actions">
-          ${d.minutes ? `<button class="btn" id="aCopy">${ICON.copy}复制纪要</button><button class="btn" id="aPush">${ICON.send}推送到群</button>` : ""}
+          ${d.minutes ? `<button class="btn" id="aCopy">${ICON.copy}复制纪要</button><button class="btn" id="aPush">${ICON.send}推送到群</button><button class="btn" id="aObsidian" title="存进 Obsidian 库并打开（在设置里选库）">${ICON.vault}Obsidian</button>` : ""}
           ${d.has_transcript ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? "重新生成" : "生成纪要"}</button>` : ""}
           <button class="btn ghost" id="aFolder" title="打开文件夹">${ICON.folder}</button>
         </div>
@@ -87,6 +87,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   };
   on("#aCopy", () => copyText(fishboneToText(d.minutes)));
   on("#aPush", pushMinutes);
+  on("#aObsidian", toObsidian);
   on("#aRegen", regenerate);
   on("#aRename", renameSpeakers);
   on("#aEdit", editMinutes);
@@ -138,6 +139,7 @@ function drawPane(): void {
         seek(Number(b.dataset.ms));
       }),
   );
+  $$<HTMLButtonElement>(".fb-draw", pane).forEach((b) => (b.onclick = toExcalidraw));
   // 鱼骨图：点分支展开它引用的原话
   $$<HTMLElement>(".fb-branch[role=button]", pane).forEach((br) => {
     const toggle = () => {
@@ -199,6 +201,26 @@ async function pushMinutes(): Promise<void> {
   if (!S.detail) return;
   try {
     toast((await api<{ message: string }>(meetingPath(S.detail.id, "/push"), { method: "POST" })).message);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
+async function toObsidian(): Promise<void> {
+  if (!S.detail) return;
+  try {
+    await api(meetingPath(S.detail.id, "/obsidian"), { json: { open: true } });
+    toast("已存到 Obsidian");
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
+async function toExcalidraw(): Promise<void> {
+  if (!S.detail) return;
+  try {
+    await api(meetingPath(S.detail.id, "/excalidraw"), { method: "POST" });
+    toast("已导出鱼骨图.excalidraw，拖进 excalidraw.com 即可编辑");
   } catch (e) {
     toast(errorMessage(e), true);
   }

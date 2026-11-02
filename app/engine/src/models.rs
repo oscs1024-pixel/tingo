@@ -1,4 +1,5 @@
 //! 识别模型：首次启动时下载（约 330 MB），并把 FunASR 官方 ONNX 转成 sherpa-onnx 能加载的样子。
+//! 另外两个可选的识别模型（SenseVoice、Fun-ASR-Nano）在设置里按需下载，见 [`catalog`]。
 //!
 //! - 识别：FunASR Paraformer-large int8（ModelScope，国内直连）。sherpa-onnx 要求模型里带
 //!   lfr_window_size / neg_mean / inv_stddev / vocab_size 等元数据，官方文件没有，下载后补上。
@@ -12,7 +13,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::asr::ModelPaths;
+use crate::asr::{AsrKind, ModelPaths};
 
 const MODELSCOPE: &str = "https://modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx/resolve/master";
 const SHERPA: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
@@ -26,11 +27,58 @@ struct Download {
     size: u64,
 }
 
-fn downloads() -> Vec<Download> {
+/// 设置页里列出的识别模型
+pub struct ModelInfo {
+    pub kind: AsrKind,
+    pub name: &'static str,
+    pub desc: &'static str,
+    /// 下载大小（字节）
+    pub size: u64,
+}
+
+pub fn catalog() -> [ModelInfo; 3] {
+    [
+        ModelInfo {
+            kind: AsrKind::Paraformer,
+            name: "Paraformer-large",
+            desc: "默认。中文准、速度快、内存占用小；热词交给大模型在纪要里纠正",
+            size: paraformer_downloads().iter().map(|d| d.size).sum(),
+        },
+        ModelInfo {
+            kind: AsrKind::SenseVoice,
+            name: "SenseVoice",
+            desc: "多语种：中、英、日、韩、粤语混着说也能认；纯中文会议的错字比默认模型多一些",
+            size: 165_783_878,
+        },
+        ModelInfo {
+            kind: AsrKind::FunAsrNano,
+            name: "Fun-ASR-Nano",
+            desc: "最准、断句最自然，识别时直接用上热词（人名、项目代号）；速度约为默认的 1/4，内存约 2 GB",
+            size: 841_730_611,
+        },
+    ]
+}
+
+/// 可选模型的发布包（sherpa-onnx 打包好的，解压即用）
+fn archive(kind: AsrKind) -> Option<&'static str> {
+    match kind {
+        AsrKind::Paraformer => None,
+        AsrKind::SenseVoice => Some("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"),
+        AsrKind::FunAsrNano => Some("sherpa-onnx-funasr-nano-int8-2025-12-30"),
+    }
+}
+
+fn paraformer_downloads() -> Vec<Download> {
     vec![
         Download { url: format!("{MODELSCOPE}/model_quant.onnx"), to: "download/paraformer.onnx", size: 238_380_216 },
         Download { url: format!("{MODELSCOPE}/am.mvn"), to: "download/am.mvn", size: 11_203 },
         Download { url: format!("{MODELSCOPE}/tokens.json"), to: "download/tokens.json", size: 93_676 },
+    ]
+}
+
+/// VAD、标点、声纹：所有识别模型共用
+fn base_downloads() -> Vec<Download> {
+    vec![
         Download { url: format!("{SHERPA}/punctuation-models/{PUNCT_TAR}.tar.bz2"), to: "download/punct.tar.bz2", size: 64_000_000 },
         Download {
             url: format!("{SHERPA}/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"),
@@ -41,8 +89,82 @@ fn downloads() -> Vec<Download> {
     ]
 }
 
+fn downloads() -> Vec<Download> {
+    let mut v = paraformer_downloads();
+    v.extend(base_downloads());
+    v
+}
+
 pub fn total_size() -> u64 {
     downloads().iter().map(|d| d.size).sum()
+}
+
+/// 下载一个识别模型（连同还没下载的基础模型）。`progress(已下载字节, 总字节)`。
+pub fn ensure_model(paths: &ModelPaths, kind: AsrKind, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
+    let Some(name) = archive(kind) else { return ensure(paths, progress) };
+    if paths.base_ready() && paths.asr_ready(kind) {
+        return Ok(());
+    }
+    let mut list = if paths.base_ready() { Vec::new() } else { base_downloads() };
+    let size = catalog().iter().find(|m| m.kind == kind).map(|m| m.size).unwrap_or(0);
+    let tar_to: &'static str = match kind {
+        AsrKind::SenseVoice => "download/sensevoice.tar.bz2",
+        _ => "download/funasr-nano.tar.bz2",
+    };
+    list.push(Download { url: format!("{SHERPA}/asr-models/{name}.tar.bz2"), to: tar_to, size });
+    fetch_all(paths, &list, &mut progress)?;
+    if !paths.base_ready() {
+        extract_punct(&paths.dir.join("download/punct.tar.bz2"), &paths.punct().parent().unwrap().to_path_buf())?;
+    }
+    extract_dir(&paths.dir.join(tar_to), &paths.asr_dir(kind))?;
+    cleanup(paths, &list);
+    if paths.base_ready() && paths.asr_ready(kind) {
+        Ok(())
+    } else {
+        Err("模型解压完了但文件不全，删掉后重新下载试试".into())
+    }
+}
+
+/// 删除一个可选的识别模型（默认的 Paraformer 不删）
+pub fn remove_model(paths: &ModelPaths, kind: AsrKind) -> Result<(), String> {
+    if kind == AsrKind::Paraformer {
+        return Err("默认模型不能删除".into());
+    }
+    fs::remove_dir_all(paths.asr_dir(kind)).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e.to_string()) })
+}
+
+fn ok_marker(dest: &Path) -> PathBuf {
+    dest.with_extension(format!("{}.ok", dest.extension().and_then(|e| e.to_str()).unwrap_or("")))
+}
+
+fn fetch_all(paths: &ModelPaths, list: &[Download], progress: &mut impl FnMut(u64, u64)) -> Result<(), String> {
+    let total: u64 = list.iter().map(|d| d.size).sum();
+    let mut done_before = 0u64;
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(None)
+        .user_agent("jiyao")
+        .build()
+        .map_err(|e| e.to_string())?;
+    for d in list {
+        let dest = paths.dir.join(d.to);
+        let finished = ok_marker(&dest);
+        if !finished.exists() && !final_exists(paths, d.to) {
+            fetch(&client, &d.url, &dest, |n| progress(done_before + n, total))?;
+            File::create(&finished).map_err(|e| e.to_string())?;
+        }
+        done_before += d.size;
+        progress(done_before, total);
+    }
+    Ok(())
+}
+
+/// 断点续传用的完成标记和下载的压缩包，全部就绪后就不需要了
+fn cleanup(paths: &ModelPaths, list: &[Download]) {
+    fs::remove_dir_all(paths.dir.join("download")).ok();
+    for d in list {
+        let _ = fs::remove_file(ok_marker(&paths.dir.join(d.to)));
+    }
 }
 
 /// 下载并准备好全部模型。`progress(已下载字节, 总字节)`。可以重复调用：已完成的文件跳过，断点续传。
@@ -52,38 +174,10 @@ pub fn ensure(paths: &ModelPaths, mut progress: impl FnMut(u64, u64)) -> Result<
     }
     let dir = &paths.dir;
     let list = downloads();
-    let total = total_size();
-    let mut done_before = 0u64;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(None)
-        .user_agent("jiyao")
-        .build()
-        .map_err(|e| e.to_string())?;
-    for d in &list {
-        let dest = dir.join(d.to);
-        let finished = dest.with_extension(format!(
-            "{}.ok",
-            dest.extension().and_then(|e| e.to_str()).unwrap_or("")
-        ));
-        if !finished.exists() && !final_exists(paths, d.to) {
-            fetch(&client, &d.url, &dest, |n| progress(done_before + n, total))?;
-            File::create(&finished).map_err(|e| e.to_string())?;
-        }
-        done_before += d.size;
-        progress(done_before, total);
-    }
+    fetch_all(paths, &list, &mut progress)?;
     prepare_paraformer(&dir.join("download"), &dir.join("paraformer"))?;
     extract_punct(&dir.join("download/punct.tar.bz2"), &dir.join("punct"))?;
-    fs::remove_dir_all(dir.join("download")).ok();
-    // 断点续传用的完成标记，全部就绪后就不需要了
-    for d in &list {
-        let dest = dir.join(d.to);
-        let _ = fs::remove_file(dest.with_extension(format!(
-            "{}.ok",
-            dest.extension().and_then(|e| e.to_str()).unwrap_or("")
-        )));
-    }
+    cleanup(paths, &list);
     if paths.ready() {
         Ok(())
     } else {
@@ -98,6 +192,8 @@ fn final_exists(paths: &ModelPaths, to: &str) -> bool {
             paths.paraformer().is_file() && paths.tokens().is_file()
         }
         "download/punct.tar.bz2" => paths.punct().is_file(),
+        "download/sensevoice.tar.bz2" => paths.asr_ready(AsrKind::SenseVoice),
+        "download/funasr-nano.tar.bz2" => paths.asr_ready(AsrKind::FunAsrNano),
         other => paths.dir.join(other).is_file(),
     }
 }
@@ -277,6 +373,32 @@ fn extract_punct(tar_bz2: &Path, dst: &Path) -> Result<(), String> {
         }
     }
     Err("标点模型包里没有 model.int8.onnx".into())
+}
+
+/// 解压 sherpa-onnx 的模型包：去掉最外层目录，跳过示例音频和说明。先解到临时目录，完整了再改名。
+fn extract_dir(tar_bz2: &Path, dst: &Path) -> Result<(), String> {
+    let tmp = dst.with_extension("tmp");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let f = File::open(tar_bz2).map_err(|e| format!("打开模型包：{e}"))?;
+    let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(f));
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let path: PathBuf = entry.path().map_err(|e| e.to_string())?.into_owned();
+        let rel: PathBuf = path.components().skip(1).collect();
+        let skip = rel.as_os_str().is_empty()
+            || rel.starts_with("test_wavs")
+            || rel.extension().is_some_and(|e| e == "md")
+            || rel.components().any(|c| matches!(c, std::path::Component::ParentDir));
+        if skip || !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let out = tmp.join(&rel);
+        fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
+        entry.unpack(&out).map_err(|e| e.to_string())?;
+    }
+    let _ = fs::remove_dir_all(dst);
+    fs::rename(&tmp, dst).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
