@@ -208,11 +208,15 @@ jiyao serve --port 8765 &     # 另开后端
 pnpm dev                      # 浏览器打开 http://localhost:1420 热更新开发，接口转给 8765
 ```
 
-桌面版（Tauri，开发中）：外壳在 `app/src-tauri`，现阶段启动时拉起本机的 `jiyao serve` 作为后端。
+桌面版（`app/`）：Tauri 外壳 + Rust 核心库 `app/engine`（sherpa-onnx 运行 FunASR Paraformer-large int8、
+CAM++ 声纹、谱聚类，移植自本仓库的 Python 版），不依赖 Python 和 ffmpeg。纪要.app 27 MB，
+首次启动在界面里下载约 330 MB 模型。会议目录和配置文件与命令行版共用。选型过程见 `spike/sherpa/RESULTS.md`。
 
 ```bash
 pnpm tauri dev                # 开发窗口
 pnpm tauri build              # 打包 .app / .dmg（未签名）
+cd engine && cargo test       # 核心库测试
+cargo run --release --example serve -- <模型目录> <录音组件> 8765   # 只起后端，配合 pnpm dev
 ```
 
 ## 致谢
