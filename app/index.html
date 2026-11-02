@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>纪要</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2334C6F4'/%3E%3Cstop offset='1' stop-color='%231F4BFF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M9 12h14M9 17h10M9 22h6' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><defs><linearGradient id="bm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34C6F4"/><stop offset="1" stop-color="#1F4BFF"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#bm)"/><path d="M9 12h14M9 17h10M9 22h6" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+        </span>
+        <span class="brand-name">纪要</span>
+        <span class="brand-tag">jiyao</span>
+      </a>
+
+      <nav class="nav">
+        <a href="#/" data-nav="home">
+          <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          新会议
+        </a>
+        <a href="#/meetings" data-nav="meetings">
+          <svg viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/></svg>
+          会议记录
+        </a>
+        <a href="#/settings" data-nav="settings">
+          <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+          设置
+        </a>
+      </nav>
+
+      <a class="live-pill" id="livePill" href="#/" hidden>
+        <span class="live-dot"></span><span id="livePillText">录音中</span>
+      </a>
+
+      <div class="recent">
+        <div class="recent-head">最近</div>
+        <div id="recentList"></div>
+      </div>
+
+      <div class="env" id="envBox"></div>
+    </aside>
+
+    <main class="main" id="main"></main>
+  </div>
+
+  <div class="drop-overlay" id="dropOverlay">
+    <div class="drop-card">
+      <svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+      <div>松开导入录音，自动转写并生成纪要</div>
+      <small>支持 m4a、mp3、wav、mp4 等，腾讯会议、飞书的录制文件都行</small>
+    </div>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <input type="file" id="fileInput" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.aac,.flac,.ogg,.webm,.mov,.mkv" hidden>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

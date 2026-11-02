@@ -147,11 +147,23 @@ def test_llm_providers_reports_running_relays(client, monkeypatch):
     assert not got["ollama"]["running"]
 
 
-def test_index_busts_asset_cache(client):
-    html = client.get("/").text
+def test_index_serves_built_frontend(client):
+    """界面由 app/ 用 Vite 构建：资源文件名带内容哈希，首页本身不缓存。"""
     import re
 
-    versions = set(re.findall(r"(?:style\.css|app\.js)\?v=([0-9a-f]{10})", html))
-    assert len(versions) == 1 and "__ASSET_VERSION__" not in html
-    assert client.get("/style.css").headers["cache-control"] == "no-cache"
+    r = client.get("/")
+    assets = re.findall(r'(?:src|href)="(/assets/[^"]+)"', r.text)
+    assert assets, "首页应引用 Vite 构建出的资源"
+    assert r.headers["cache-control"] == "no-cache"
+    for a in assets:
+        assert client.get(a).status_code == 200
     assert "cache-control" not in client.get("/api/meetings").headers
+
+
+def test_cors_allows_tauri_and_vite_only(client):
+    ok = client.get("/api/meetings", headers={"Origin": "tauri://localhost"})
+    assert ok.headers.get("access-control-allow-origin") == "tauri://localhost"
+    dev = client.get("/api/meetings", headers={"Origin": "http://localhost:1420"})
+    assert dev.headers.get("access-control-allow-origin") == "http://localhost:1420"
+    evil = client.get("/api/meetings", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in evil.headers

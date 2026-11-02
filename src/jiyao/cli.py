@@ -424,6 +424,42 @@ def ui(
 
 
 @app.command()
+def serve(
+    port: Annotated[int, typer.Option("--port", help="本地端口，默认自动选")] = 0,
+) -> None:
+    """只启动本地服务（桌面版外壳用）。启动后打印一行 JIYAO_PORT=端口，父进程退出时自动退出。"""
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from .server import create_app
+
+    if not port:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        if not thread.is_alive():
+            _fail("本地服务启动失败")
+        time.sleep(0.05)
+    print(f"JIYAO_PORT={port}", flush=True)
+
+    parent = os.getppid()
+    try:
+        # 外壳崩溃或被强退时不留下孤儿进程：父进程没了（被系统收养）就退出
+        while thread.is_alive() and os.getppid() == parent:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    server.should_exit = True
+
+
+@app.command()
 def version() -> None:
     """显示版本。"""
     console.print(f"jiyao {__version__}")

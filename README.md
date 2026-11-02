@@ -198,6 +198,23 @@ uv run pytest -m "not slow"   # 不下载模型的单元测试
 uv run pytest                 # 含端到端测试（首次会下载模型）
 ```
 
+界面源码在 `app/`（TypeScript + Vite），构建产物输出到 `src/jiyao/web`，随 Python 包一起发布，
+改了界面要重新构建并提交产物：
+
+```bash
+cd app && pnpm install
+pnpm build                    # 输出到 src/jiyao/web；`jiyao ui` 用的就是它
+jiyao serve --port 8765 &     # 另开后端
+pnpm dev                      # 浏览器打开 http://localhost:1420 热更新开发，接口转给 8765
+```
+
+桌面版（Tauri，开发中）：外壳在 `app/src-tauri`，现阶段启动时拉起本机的 `jiyao serve` 作为后端。
+
+```bash
+pnpm tauri dev                # 开发窗口
+pnpm tauri build              # 打包 .app / .dmg（未签名）
+```
+
 ## 致谢
 
 - [FunASR](https://github.com/modelscope/FunASR)：语音识别、VAD、标点、说话人模型

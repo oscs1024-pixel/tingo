@@ -533,6 +533,16 @@ def create_app(root: Path | None = None) -> FastAPI:
                 state["job"] = None
         return {"ok": True}
 
+    from fastapi.middleware.cors import CORSMiddleware
+
+    # 桌面版：界面跑在 Tauri 的 webview 里（tauri://localhost），开发时在 Vite（localhost:1420）
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(tauri://localhost|https?://tauri\.localhost|http://localhost:1420)$",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.middleware("http")
     async def no_cache_web(request, call_next):
         # 界面文件随版本更新，浏览器 / 独立窗口缓存旧的 CSS、JS 会出现"新结构 + 旧样式"的错乱
@@ -543,14 +553,8 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index() -> HTMLResponse:
-        # 资源地址带上内容摘要：文件一改地址就变，旧缓存自然失效
-        import hashlib
-
-        digest = hashlib.sha1()
-        for name in ("style.css", "app.js"):
-            digest.update((WEB_DIR / name).read_bytes())
-        html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(html.replace("__ASSET_VERSION__", digest.hexdigest()[:10]))
+        # 界面由 app/ 用 Vite 构建，资源文件名自带内容哈希；首页本身不缓存，更新后立即生效
+        return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
 
     if WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
