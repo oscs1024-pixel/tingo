@@ -4,7 +4,8 @@ import { api, type Job } from "../api";
 import { $, $$, $maybe, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
 import { renderMarkdown } from "../markdown";
 import { poll } from "../poll";
-import { isBusy, S, stateLabel } from "../state";
+import { isBusy, needsModels, S, stateLabel } from "../state";
+import { refreshEnv } from "../sidebar";
 
 type Phase = "idle" | "recording" | "processing" | "done" | "error" | "__init";
 
@@ -51,6 +52,12 @@ export function updateHome(job: Job, prev: Job, forceRender = false): void {
   const aurora = $("#aurora");
   const phase = phaseOf(job);
   aurora.classList.toggle("live", phase === "recording");
+  if (job.kind === "models" && job.state === "done") {
+    api("/api/job/dismiss", { method: "POST" });
+    S.job = { state: "idle" };
+    refreshEnv().then(() => updateHome(S.job, INIT, true));
+    return;
+  }
 
   if (forceRender || phase !== phaseOf(prev) || glass.dataset.phase !== phase) {
     glass.dataset.phase = phase;
@@ -89,7 +96,20 @@ function updateRecording(job: Job, aurora: HTMLElement): void {
 
 const sourceName = (s: string) => (s === "system" ? "系统声音" : "麦克风");
 
+function downloadPanel(): string {
+  const mb = S.env?.models_size_mb ?? 330;
+  return `
+    <div class="live-head" style="color:var(--blue)">第一次使用</div>
+    <div class="timer" style="font-size:22px;margin:12px 0 6px;font-family:var(--font)">先下载识别模型（约 ${mb} MB）</div>
+    <div class="proc-note">只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。</div>
+    <div class="glass-foot">
+      <span class="spacer"></span>
+      <button class="btn primary" id="dlBtn">下载模型</button>
+    </div>`;
+}
+
 function idleForm(): string {
+  if (needsModels()) return downloadPanel();
   const sys = S.env ? S.env.system_audio : true;
   return `
     <input class="title-input" id="fTitle" placeholder="会议名称，比如：周会、项目评审" value="${esc(S.form.title)}" maxlength="60">
@@ -125,7 +145,15 @@ const STEPS: [Job["state"][], string][] = [
   [["summarizing"], "生成纪要"],
 ];
 
-const processingView = (job: Job) => `
+const downloadingView = () => `
+  <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span>下载识别模型</div>
+  <div class="timer" id="dlText" style="font-size:22px;margin:12px 0 10px">0 MB</div>
+  <div class="steps" style="grid-template-columns:1fr"><div class="step now"><div class="bar"><div id="dlBar" style="position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,var(--cyan),var(--blue));border-radius:99px"></div></div></div></div>
+  <div class="proc-note">识别模型来自 ModelScope，标点和声纹模型来自 GitHub；网络中断会自动续传</div>`;
+
+const processingView = (job: Job) => (job.kind === "models" ? downloadingView() : processingSteps(job));
+
+const processingSteps = (job: Job) => `
   <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span><span id="procTitle">${esc(stateLabel(job.state))}</span></div>
   <div class="steps" id="steps" style="margin-top:16px">${STEPS.map(([, l]) => `<div class="step"><div class="bar"></div><span>${l}</span></div>`).join("")}</div>
   <div class="proc-note" id="procNote"></div>
@@ -134,11 +162,17 @@ const processingView = (job: Job) => `
 const NOTES: Partial<Record<Job["state"], string>> = {
   saving: "正在合成录音…",
   finalizing: "录音时已经转好了大部分，正在处理最后几秒并区分说话人",
-  loading: "第一次运行要从 ModelScope 下载约 2 GB 模型，之后会快很多",
+  loading: "正在加载识别模型",
   transcribing: "本地分段识别中，10 分钟的录音大约 1 分半",
 };
 
 function updateProcessing(job: Job): void {
+  if (job.kind === "models") {
+    const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(job.stage ?? "");
+    $("#dlText").textContent = job.stage || "准备下载…";
+    if (m) $("#dlBar").style.width = `${Math.min(100, (Number(m[1]) / Number(m[2])) * 100).toFixed(1)}%`;
+    return;
+  }
   const idx = job.kind === "summarize" ? 2 : STEPS.findIndex(([states]) => states.includes(job.state));
   $$("#steps .step").forEach((el, i) => {
     el.className = "step " + (i < idx ? "done" : i === idx ? "now" : "");
@@ -166,7 +200,18 @@ const doneView = (job: Job) => `
     <a class="btn primary" href="${meetingLink(job)}">查看纪要 ${ICON.chevron}</a>
   </div>`;
 
-const errorView = (job: Job) => `
+const errorView = (job: Job) =>
+  job.kind === "models"
+    ? `
+  <div class="live-head">模型下载没有完成</div>
+  <div class="err-box" style="margin-top:12px">${esc(job.error)}</div>
+  <div class="proc-note">已下载的部分会保留，重试时接着下</div>
+  <div class="glass-foot">
+    <button class="btn" id="againBtn">关闭</button>
+    <span class="spacer"></span>
+    <button class="btn primary" id="dlBtn">重试</button>
+  </div>`
+    : `
   <div class="live-head">处理没有完成</div>
   <div class="err-box" style="margin-top:12px">${esc(job.error)}</div>
   <div class="proc-note">录音和已完成的部分都保存在会议记录里，可以稍后重试</div>
@@ -185,7 +230,20 @@ const VIEWS: Record<Exclude<Phase, "__init">, (job: Job) => string> = {
 };
 
 function bindHome(phase: Phase): void {
-  if (phase === "idle") {
+  const dl = $maybe("#dlBtn");
+  if (dl) {
+    dl.onclick = async () => {
+      (dl as HTMLButtonElement).disabled = true;
+      try {
+        S.job = await api<Job>("/api/models/download", { method: "POST" });
+        poll();
+      } catch (e) {
+        toast(errorMessage(e), true);
+        (dl as HTMLButtonElement).disabled = false;
+      }
+    };
+  }
+  if (phase === "idle" && !needsModels()) {
     const title = $<HTMLInputElement>("#fTitle");
     title.oninput = () => (S.form.title = title.value);
     title.onkeydown = (e) => {

@@ -14,7 +14,7 @@ export const S: {
   detail: null,
 };
 
-const BUSY = new Set<JobState>(["recording", "saving", "finalizing", "loading", "transcribing", "summarizing"]);
+const BUSY = new Set<JobState>(["recording", "saving", "finalizing", "loading", "transcribing", "summarizing", "downloading"]);
 export const isBusy = (j: Job | undefined): boolean => !!j && BUSY.has(j.state);
 
 const LABELS: Partial<Record<JobState, string>> = {
@@ -23,5 +23,9 @@ const LABELS: Partial<Record<JobState, string>> = {
   loading: "加载识别模型",
   transcribing: "正在转写",
   summarizing: "正在生成纪要",
+  downloading: "下载识别模型",
 };
+/** 桌面版还没下载识别模型（Python 版会在首次转写时自动下载，不用这个判断）。 */
+export const needsModels = (): boolean => !!S.env?.models_downloadable && !S.env.model_cached;
+
 export const stateLabel = (s: JobState): string => LABELS[s] || "处理中";

@@ -76,6 +76,14 @@ pub fn ensure(paths: &ModelPaths, mut progress: impl FnMut(u64, u64)) -> Result<
     prepare_paraformer(&dir.join("download"), &dir.join("paraformer"))?;
     extract_punct(&dir.join("download/punct.tar.bz2"), &dir.join("punct"))?;
     fs::remove_dir_all(dir.join("download")).ok();
+    // 断点续传用的完成标记，全部就绪后就不需要了
+    for d in &list {
+        let dest = dir.join(d.to);
+        let _ = fs::remove_file(dest.with_extension(format!(
+            "{}.ok",
+            dest.extension().and_then(|e| e.to_str()).unwrap_or("")
+        )));
+    }
     if paths.ready() {
         Ok(())
     } else {

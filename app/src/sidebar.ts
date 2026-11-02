@@ -31,7 +31,10 @@ export async function refreshEnv(): Promise<void> {
   }
   const e = S.env;
   const rows: [string, string][] = [
-    [e.model_loaded || e.model_cached ? "" : "warn", e.model_loaded ? "识别模型已加载" : e.model_cached ? "识别模型已就绪" : "首次转写会下载模型"],
+    [
+      e.model_loaded || e.model_cached ? "" : "warn",
+      e.model_loaded ? "识别模型已加载" : e.model_cached ? "识别模型已就绪" : e.models_downloadable ? "识别模型未下载" : "首次转写会下载模型",
+    ],
     [e.llm_ready ? "" : "bad", e.llm_ready ? e.llm_model : "未配置大模型"],
     [e.system_audio ? "" : "warn", e.system_audio ? "可录系统声音" : "仅能录麦克风"],
   ];

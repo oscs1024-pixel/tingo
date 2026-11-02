@@ -9,6 +9,9 @@ export interface Env {
   model_loaded: boolean;
   llm_ready: boolean;
   llm_model: string;
+  /** 桌面版（Rust 后端）：模型在界面里下载 */
+  models_downloadable?: boolean;
+  models_size_mb?: number;
 }
 
 export interface MeetingSummary {
@@ -53,12 +56,13 @@ export type JobState =
   | "loading"
   | "transcribing"
   | "summarizing"
+  | "downloading"
   | "done"
   | "error";
 
 export interface Job {
   state: JobState;
-  kind?: "record" | "process" | "summarize";
+  kind?: "record" | "process" | "summarize" | "models";
   meeting?: string;
   error?: string;
   minutes?: string;
