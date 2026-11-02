@@ -4,4 +4,8 @@ pub mod asr;
 pub mod audio;
 pub mod chunked;
 pub mod cluster;
+pub mod config;
+pub mod meetings;
+pub mod models;
+pub mod summarize;
 pub mod transcript;
