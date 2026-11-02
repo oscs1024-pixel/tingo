@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -532,6 +532,25 @@ def create_app(root: Path | None = None) -> FastAPI:
             if current() and not current().busy:
                 state["job"] = None
         return {"ok": True}
+
+    @app.middleware("http")
+    async def no_cache_web(request, call_next):
+        # 界面文件随版本更新，浏览器 / 独立窗口缓存旧的 CSS、JS 会出现"新结构 + 旧样式"的错乱
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @app.get("/", include_in_schema=False)
+    def index() -> HTMLResponse:
+        # 资源地址带上内容摘要：文件一改地址就变，旧缓存自然失效
+        import hashlib
+
+        digest = hashlib.sha1()
+        for name in ("style.css", "app.js"):
+            digest.update((WEB_DIR / name).read_bytes())
+        html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("__ASSET_VERSION__", digest.hexdigest()[:10]))
 
     if WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

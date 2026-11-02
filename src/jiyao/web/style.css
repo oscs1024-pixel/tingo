@@ -387,6 +387,21 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .test-msg.bad { color: #b42318; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 8px; min-height: 42px; background: var(--card); }
 .tags input { border: none; outline: none; flex: 1; min-width: 160px; padding: 2px 4px; background: transparent; }
+.combo { position: relative; }
+.combo .input { padding-right: 34px; }
+.combo-arrow { position: absolute; right: 10px; top: 50%; transform: translateY(-50%) rotate(90deg); color: var(--muted-2); pointer-events: none; display: flex; }
+.combo-arrow svg { width: 14px; height: 14px; }
+.combo-pop {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 6px);
+  max-height: 340px; overflow: auto; padding: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-pop);
+}
+.combo-group { padding: 8px 10px 4px; font-size: 11px; color: var(--muted-2); letter-spacing: 0.3px; }
+.combo-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; cursor: pointer; }
+.combo-item:hover, .combo-item.act { background: var(--hover); }
+.combo-item.sel { color: var(--blue); font-weight: 500; }
+.combo-item em { margin-left: auto; font-style: normal; font-size: 11px; color: #067647; background: #ecfdf3; padding: 1px 8px; border-radius: 99px; }
+.combo-empty { padding: 12px; color: var(--muted); font-size: 13px; }
 .checks { display: grid; gap: 10px; }
 .check { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .check .dot { width: 8px; height: 8px; }

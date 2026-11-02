@@ -737,6 +737,57 @@ const REMOTE_PRESETS = [
   { id: "custom", name: "自定义" },
 ];
 
+/* 模型选择：点开显示全部模型（按服务商分组），输入时过滤。不用 <datalist>：它按输入框现有内容过滤，
+   框里已经有模型名时就只剩这一个选项，等于没法选。 */
+function bindModelPicker(getModels, getRecommended) {
+  const input = $("#sModel"), pop = $("#sModelPop");
+  let filter = "", active = -1, items = [];
+  const close = () => { pop.hidden = true; active = -1; };
+  const draw = () => {
+    const q = filter.trim().toLowerCase();
+    items = getModels().filter((m) => !q || m.toLowerCase().includes(q));
+    if (!getModels().length) {
+      pop.innerHTML = `<div class="combo-empty">这个接口没有返回模型列表，直接输入模型名即可</div>`;
+      return;
+    }
+    if (!items.length) { pop.innerHTML = `<div class="combo-empty">没有匹配“${esc(filter)}”的模型</div>`; return; }
+    const groups = {};
+    items.forEach((m) => { const g = m.includes("/") ? m.split("/")[0] : "其他"; (groups[g] ||= []).push(m); });
+    let i = 0;
+    pop.innerHTML = Object.entries(groups).map(([g, ms]) => `
+      <div class="combo-group">${esc(g)}</div>
+      ${ms.map((m) => `<div class="combo-item ${m === input.value ? "sel" : ""} ${i === active ? "act" : ""}" data-i="${i++}">
+        <span>${esc(m.includes("/") ? m.slice(g.length + 1) : m)}</span>${m === getRecommended() ? `<em>推荐</em>` : ""}</div>`).join("")}`).join("");
+    const sel = $(".combo-item.act", pop) || $(".combo-item.sel", pop);
+    if (sel) sel.scrollIntoView({ block: "nearest" });
+  };
+  const open = () => {
+    filter = "";
+    active = -1;
+    pop.hidden = false;
+    draw();
+    input.select(); // 选中现有内容：直接打字就是搜索，不会接在原来的模型名后面
+  };
+  const pick = (m) => { input.value = m; close(); input.dispatchEvent(new Event("change")); };
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => { if (pop.hidden) open(); });
+  input.addEventListener("input", () => { filter = input.value; active = -1; pop.hidden = false; draw(); });
+  input.addEventListener("keydown", (e) => {
+    if (pop.hidden) return;
+    if (e.key === "ArrowDown") { active = Math.min(items.length - 1, active + 1); draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { active = Math.max(0, active - 1); draw(); e.preventDefault(); }
+    else if (e.key === "Enter" && active >= 0) { pick(items[active]); e.preventDefault(); }
+    else if (e.key === "Escape") { close(); e.stopPropagation(); }
+  });
+  pop.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // 不让输入框先失焦把列表关掉
+    const it = e.target.closest(".combo-item");
+    if (it) pick(items[Number(it.dataset.i)]);
+  });
+  input.addEventListener("blur", () => setTimeout(close, 100));
+  return () => { if (!pop.hidden) draw(); }; // 模型列表异步到达后刷新已打开的下拉
+}
+
 async function renderSettings() {
   main.innerHTML = `<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;
   let c, local = [];
@@ -758,7 +809,8 @@ async function renderSettings() {
           <div class="seg" id="sPreset">${PRESETS.map((p) => `<button data-id="${p.id}">${p.local ? `<span class="dot" style="background:${p.running ? "var(--green)" : "#c9ccd1"};display:inline-block;margin-right:6px;vertical-align:1px" title="${p.running ? "运行中" : "未启动"}"></span>` : ""}${p.name}</button>`).join("")}</div>
           <div class="s-row2">
             <div class="field"><label>接口地址 Base URL</label><input class="input" id="sBase" value="${esc(c.base_url)}"></div>
-            <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label><input class="input" id="sModel" list="sModelList" value="${esc(c.model)}" placeholder="可以从列表里选"><datalist id="sModelList"></datalist></div>
+            <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label>
+              <div class="combo"><input class="input" id="sModel" value="${esc(c.model)}" placeholder="点这里从列表里选，也可以直接输入" autocomplete="off" spellcheck="false"><span class="combo-arrow">${ICON.chevron}</span><div class="combo-pop" id="sModelPop" hidden></div></div></div>
           </div>
           <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${c.api_key_set ? `已设置${c.api_key_hint !== "已设置" ? `（${esc(c.api_key_hint)}）` : ""}，留空表示不修改` : "本地 Ollama 不需要"}"></div>
           <div class="s-actions"><button class="btn" id="sTest">测试连接</button><span class="test-msg" id="sTestMsg"></span></div>
@@ -797,21 +849,37 @@ async function renderSettings() {
 
   const markPreset = () => $$("#sPreset button").forEach((b) => b.classList.toggle("on", b.dataset.id === presetOf()));
   markPreset();
-  const setModels = (models) => {
-    $("#sModelList").innerHTML = models.map((m) => `<option value="${esc(m)}">`).join("");
+  let modelList = [];
+  let recommended = "";
+  let refreshPicker = () => {};
+  const setModels = (models, rec = "") => {
+    modelList = models;
+    recommended = rec;
     $("#sModelCount").textContent = models.length ? `（可选 ${models.length} 个）` : "";
+    refreshPicker();
   };
+  refreshPicker = bindModelPicker(() => modelList, () => recommended);
   const msg = (text, cls = "") => { $("#sTestMsg").className = "test-msg " + cls; $("#sTestMsg").textContent = text; };
   const current = PRESETS.find((p) => p.id === presetOf());
-  if (current && current.local) setModels(current.models);
+  if (current && current.local) setModels(current.models, current.recommended);
 
   $$("#sPreset button").forEach((b) => (b.onclick = () => {
     const p = PRESETS.find((x) => x.id === b.dataset.id);
     msg("");
-    if (!p.base_url) { markPreset(); return; }
+    if (!p.base_url) {
+      // 自定义：清空，让用户填自己的地址；哪个预设高亮是按地址判断的，不清空就会跳回原来那个
+      $("#sBase").value = "";
+      $("#sModel").value = "";
+      $("#sKey").value = "";
+      setModels([]);
+      markPreset();
+      $("#sBase").focus();
+      msg("填 OpenAI 兼容接口的地址（一般以 /v1 结尾），填完会自动拉取模型列表");
+      return;
+    }
     $("#sBase").value = p.base_url;
     if (p.local) {
-      setModels(p.models);
+      setModels(p.models, p.recommended);
       // 本机中转的 key 是固定的，直接填上
       $("#sKey").value = p.api_key;
       const keep = p.models.includes($("#sModel").value);

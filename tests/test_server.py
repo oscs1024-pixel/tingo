@@ -145,3 +145,13 @@ def test_llm_providers_reports_running_relays(client, monkeypatch):
     assert got["magpie"]["running"] and got["magpie"]["recommended"] in got["magpie"]["models"]
     assert not got["ccswitch"]["running"] and "15721" in got["ccswitch"]["base_url"]
     assert not got["ollama"]["running"]
+
+
+def test_index_busts_asset_cache(client):
+    html = client.get("/").text
+    import re
+
+    versions = set(re.findall(r"(?:style\.css|app\.js)\?v=([0-9a-f]{10})", html))
+    assert len(versions) == 1 and "__ASSET_VERSION__" not in html
+    assert client.get("/style.css").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/api/meetings").headers
