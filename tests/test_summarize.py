@@ -75,10 +75,13 @@ def test_missing_key_for_remote_raises():
         sm._client(LLMConfig(base_url="https://api.deepseek.com", api_key=""))
 
 
-def test_local_ollama_needs_no_key():
+def test_local_ollama_needs_no_key(monkeypatch):
+    sm.is_ollama.cache_clear()
+    monkeypatch.setattr(sm, "_ollama_show", lambda base_url, model: {"details": {"format": "gguf"}})
     cfg = LLMConfig(base_url="http://localhost:11434/v1", api_key="")
     assert sm._client(cfg).api_key == "ollama"
     assert sm.default_max_chars(cfg) < sm.default_max_chars(LLMConfig())
+    sm.is_ollama.cache_clear()
 
 
 def test_annotate_dates_resolves_relative_days():
@@ -116,26 +119,39 @@ def test_prompt_dates_are_annotated(monkeypatch):
 def test_max_chars_follows_ollama_context(monkeypatch):
     import httpx
 
-    class R:
+    class Resp:
+        status_code = 200
+
         def __init__(self, d):
             self.d = d
 
         def json(self):
             return self.d
 
-    monkeypatch.setattr(
-        httpx, "post", lambda url, json, timeout: R({"parameters": "num_ctx                        16384"})
-    )
+    def serve(data):
+        sm.is_ollama.cache_clear()
+        monkeypatch.setattr(httpx, "post", lambda url, json, timeout: Resp(data))
+
+    gguf = {"format": "gguf", "family": "qwen3"}
     local = LLMConfig(base_url="http://localhost:11434/v1", model="qwen3-8b-jiyao")
+    serve({"parameters": "num_ctx    16384", "details": gguf})
     assert sm.ollama_context(local) == 16384
     assert sm.default_max_chars(local) == sm.LOCAL_CHUNK_CHARS  # 上下文够大也不切太大
 
-    monkeypatch.setattr(httpx, "post", lambda url, json, timeout: R({"parameters": ""}))
-    assert sm.default_max_chars(local) == 4000  # 没设 num_ctx：按保守默认
+    serve({"parameters": "", "details": gguf})
+    assert sm.default_max_chars(local) == 4000  # 没设 num_ctx：按 Ollama 的保守默认
+
+    # 本机中转连 /api/show 都仿了，但不是 gguf：按远程模型处理
+    relay = LLMConfig(base_url="http://127.0.0.1:3425/v1", api_key="k", model="deepseek/deepseek-v4-flash")
+    serve({"parameters": "", "details": {"format": "", "family": "magpie"}})
+    assert not sm.is_ollama(relay.base_url, relay.model)
+    assert sm.default_max_chars(relay) == 40000
 
     def boom(*a, **k):
         raise httpx.ConnectError("refused")
 
+    sm.is_ollama.cache_clear()
     monkeypatch.setattr(httpx, "post", boom)
-    assert sm.default_max_chars(local) == 4000
+    assert sm.default_max_chars(local) == 40000  # 连不上就不当 Ollama
     assert sm.default_max_chars(LLMConfig(base_url="https://api.deepseek.com")) == 40000
+    sm.is_ollama.cache_clear()

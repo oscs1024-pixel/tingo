@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from . import __version__, config, meetings
 from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
+from .summarize import is_ollama
 from .transcript import Transcript, fmt_ts
 
 WEB_DIR = Path(__file__).with_name("web")
@@ -162,7 +163,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             "system_audio": system_audio_supported(),
             "model_cached": asr.model_loaded() or any(cache.glob("**/*speech_seaco_paraformer*")),
             "model_loaded": asr.model_loaded(),
-            "llm_ready": bool(cfg.llm.api_key) or _is_local(cfg.llm.base_url),
+            "llm_ready": bool(cfg.llm.api_key) or is_ollama(cfg.llm.base_url, cfg.llm.model),
             "llm_model": cfg.llm.model,
         }
 
@@ -472,7 +473,3 @@ def create_app(root: Path | None = None) -> FastAPI:
     if WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app
-
-
-def _is_local(url: str) -> bool:
-    return any(h in url for h in ("localhost", "127.0.0.1", ":11434"))

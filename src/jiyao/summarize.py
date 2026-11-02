@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import re
+import urllib.parse
 from collections.abc import Callable
 from datetime import date, timedelta
 
@@ -120,7 +122,33 @@ def _client(cfg: LLMConfig):
 
 
 def _is_local(cfg: LLMConfig) -> bool:
-    return any(h in cfg.base_url for h in ("localhost", "127.0.0.1", ":11434"))
+    return is_ollama(cfg.base_url, cfg.model)
+
+
+@functools.lru_cache(maxsize=16)
+def is_ollama(base_url: str, model: str) -> bool:
+    """是不是本机 Ollama 上的这个模型。
+
+    不能只看地址是不是 127.0.0.1：本机也可能跑着别的 OpenAI 兼容中转，有的还仿了 Ollama 的
+    /api/version、/api/tags、/api/show。以 /api/show 里真实的模型文件格式为准。
+    """
+    if urllib.parse.urlparse(base_url).hostname not in ("localhost", "127.0.0.1", "::1"):
+        return False
+    return _ollama_show(base_url, model) is not None
+
+
+def _ollama_show(base_url: str, model: str) -> dict | None:
+    import httpx
+
+    root = re.sub(r"/v1/?$", "", base_url.rstrip("/"))
+    try:
+        r = httpx.post(f"{root}/api/show", json={"model": model}, timeout=5)
+        data = r.json() if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001 - 不是 Ollama 或连不上
+        return None
+    # 有的中转连 /api/show 也仿了，但给不出真实的模型文件格式；Ollama 跑的本地模型是 gguf（或 safetensors 导入）
+    fmt = (data or {}).get("details", {}).get("format") if isinstance(data, dict) else None
+    return data if fmt in ("gguf", "safetensors") else None
 
 
 CHARS_PER_TOKEN = 1.3  # 中文转写实测约 1.36 字/token，取保守值
@@ -144,13 +172,7 @@ def default_max_chars(cfg: LLMConfig) -> int:
 
 def ollama_context(cfg: LLMConfig) -> int | None:
     """问 Ollama 这个模型实际生效的上下文长度；问不到返回 None。"""
-    import httpx
-
-    root = re.sub(r"/v1/?$", "", cfg.base_url.rstrip("/"))
-    try:
-        data = httpx.post(f"{root}/api/show", json={"model": cfg.model}, timeout=5).json()
-    except Exception:  # noqa: BLE001 - 不是 Ollama 或连不上，都按默认值
-        return None
+    data = _ollama_show(cfg.base_url, cfg.model) or {}
     m = re.search(r"num_ctx\s+(\d+)", data.get("parameters") or "")
     return int(m.group(1)) if m else None
 

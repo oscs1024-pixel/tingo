@@ -358,7 +358,9 @@ def doctor() -> None:
     )
 
     cfg = config.load()
-    if cfg.llm.api_key or "11434" in cfg.llm.base_url or "localhost" in cfg.llm.base_url:
+    from .summarize import is_ollama
+
+    if cfg.llm.api_key or is_ollama(cfg.llm.base_url, cfg.llm.model):
         from openai import OpenAI
 
         try:
