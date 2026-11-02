@@ -32,7 +32,7 @@ WEB_DIR = Path(__file__).with_name("web")
 class Job:
     kind: str  # record | process | summarize
     meeting: str
-    state: str  # recording | saving | loading | transcribing | summarizing | done | error
+    state: str  # recording | saving | finalizing | loading | transcribing | summarizing | done | error
     started_at: float = field(default_factory=time.time)
     error: str = ""
     minutes: str = ""  # 生成中的纪要，流式累加
@@ -132,11 +132,6 @@ def create_app(root: Path | None = None) -> FastAPI:
             job.state = "done"
         except Exception as e:  # noqa: BLE001 - 错误原样显示给用户
             fail(job, e)
-
-    def preload_model() -> None:
-        from . import asr
-
-        threading.Thread(target=asr._load_model, daemon=True).start()
 
     # ---------- 环境与配置 ----------
 
@@ -339,8 +334,12 @@ def create_app(root: Path | None = None) -> FastAPI:
             state["job"] = None
             shutil.rmtree(out, ignore_errors=True)
             raise HTTPException(500, str(e)) from e
-        state["recording"], state["hotwords"] = rec, req.hotwords
-        preload_model()
+        from .live import LiveTranscriber
+
+        # 边录边转：录音时就分段识别，结束后只剩最后一段和一次说话人聚类
+        live = LiveTranscriber(out, rec.sources, hotwords=config.load().hotwords + req.hotwords)
+        live.start()
+        state["recording"], state["hotwords"], state["live"] = rec, req.hotwords, live
         return asdict(job)
 
     @app.post("/api/record/stop")
@@ -350,16 +349,31 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(400, "没有正在进行的录音")
         job.state = "saving"
         state["recording"] = None
+        live = state.pop("live", None)
 
         def work() -> None:
+            from .record import mixdown
+
+            out = root / job.meeting
+            final = out / AUDIO
             try:
-                audio = rec.stop()
-                final = audio.with_name(AUDIO)
-                audio.rename(final)
+                rec.stop_capture()
+                job.state = "finalizing"
+                tr = live.finish(final) if live else None  # 原始音轨合成前先把最后几秒转完
+                mixdown(out).rename(final)
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
                 return
-            run_process(job, final, final.parent, state["hotwords"])
+            if tr is None or not tr.sentences:
+                # 边录边转出错（或什么都没识别到）时退回整段转写
+                run_process(job, final, out, state["hotwords"])
+                return
+            try:
+                meetings.save_transcript(tr, out)
+                run_summarize(job, tr, out)
+                job.state = "done"
+            except Exception as e:  # noqa: BLE001
+                fail(job, e)
 
         threading.Thread(target=work, daemon=True).start()
         return asdict(job)
@@ -398,6 +412,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         if job.state == "recording":
             out = root / job.meeting
             data["levels"] = {s: track_level(out / f"{s}.wav") for s in job.sources}
+            live = state.get("live")
+            data["live"] = live.recent(8) if live else []
         return data
 
     @app.post("/api/job/dismiss")

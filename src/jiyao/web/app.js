@@ -84,7 +84,7 @@ const S = {
   lastJobState: "idle",
 };
 
-const BUSY = new Set(["recording", "saving", "loading", "transcribing", "summarizing"]);
+const BUSY = new Set(["recording", "saving", "finalizing", "loading", "transcribing", "summarizing"]);
 const isBusy = (j) => j && BUSY.has(j.state);
 
 /* ---------- 路由 ---------- */
@@ -160,7 +160,7 @@ async function poll() {
 }
 
 function stateLabel(s) {
-  return { saving: "正在保存", loading: "加载识别模型", transcribing: "正在转写", summarizing: "正在生成纪要" }[s] || "处理中";
+  return { saving: "正在保存", finalizing: "转写最后一段", loading: "加载识别模型", transcribing: "正在转写", summarizing: "正在生成纪要" }[s] || "处理中";
 }
 
 /* ---------- 首页 ---------- */
@@ -214,6 +214,17 @@ function updateHome(job, prev) {
       bars.forEach((b, i) => { b.classList.toggle("on", i < on); b.classList.toggle("hot", i < on && i >= bars.length - 2); });
     }
     aurora.style.setProperty("--lv", peak.toFixed(3));
+    $("#recNote").textContent = job.model_loaded ? "边录边转中，结束后几秒就出转写" : "正在准备识别模型…";
+    const lines = job.live || [];
+    const box = $("#liveLines");
+    const key = lines.map((l) => l.start_ms).join(",");
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      box.innerHTML = lines.length
+        ? lines.map((l) => `<div><span class="lt">${fmt(l.start_ms)}</span>${esc(l.text)}</div>`).join("")
+        : `<div class="lw">说话内容会在这里实时出现（约半分钟一批）</div>`;
+      box.scrollTop = box.scrollHeight;
+    }
   }
   if (phase === "processing") updateProcessing(job);
 }
@@ -238,14 +249,15 @@ const recordingView = (job) => `
   <div class="meters">
     ${job.sources.map((s) => `<div class="meter" id="meter-${s}"><span>${s === "system" ? "系统声音" : "麦克风"}</span><div class="meter-bars">${"<i></i>".repeat(28)}</div></div>`).join("")}
   </div>
+  <div class="live-lines" id="liveLines"></div>
   <div class="glass-foot">
-    <span class="proc-note" style="margin:0">${job.model_loaded ? "识别模型已就绪，结束后马上开始转写" : "正在后台准备识别模型…"}</span>
+    <span class="proc-note" style="margin:0" id="recNote"></span>
     <span class="spacer"></span>
     <span class="rec-label">结束录音</span>
     <button class="rec-btn stop" id="stopBtn" title="结束录音"><span class="core"></span></button>
   </div>`;
 
-const STEPS = [["saving", "保存录音"], ["loading", "准备模型"], ["transcribing", "转写"], ["summarizing", "生成纪要"]];
+const STEPS = [[["saving"], "保存录音"], [["finalizing", "loading", "transcribing"], "转写"], [["summarizing"], "生成纪要"]];
 
 const processingView = (job) => `
   <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span><span id="procTitle">${esc(stateLabel(job.state))}</span></div>
@@ -254,11 +266,12 @@ const processingView = (job) => `
   <div class="stream md" id="stream"></div>`;
 
 function updateProcessing(job) {
-  const idx = job.kind === "summarize" ? 3 : STEPS.findIndex(([s]) => s === job.state);
+  const idx = job.kind === "summarize" ? 2 : STEPS.findIndex(([states]) => states.includes(job.state));
   $$("#steps .step").forEach((el, i) => { el.className = "step " + (i < idx ? "done" : i === idx ? "now" : ""); });
   $("#procTitle").textContent = job.stage ? `${stateLabel(job.state)} · ${job.stage}` : stateLabel(job.state);
   const note = {
     saving: "正在合成录音…",
+    finalizing: "录音时已经转好了大部分，正在处理最后几秒并区分说话人",
     loading: "第一次运行要从 ModelScope 下载约 2 GB 模型，之后会快很多",
     transcribing: "本地识别中，10 分钟的录音大约需要 3 分钟",
     summarizing: "",

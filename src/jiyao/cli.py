@@ -97,6 +97,10 @@ def _process(
         tr = transcribe(audio, hotwords=words)
     if _interrupted:
         raise KeyboardInterrupt  # FunASR 会吞掉 Ctrl+C 并返回空结果，这里补回来
+    _finish_transcript(tr, out_dir, speakers, meeting_date, summary, push)
+
+
+def _finish_transcript(tr, out_dir: Path, speakers: list[str], meeting_date: date, summary: bool, push: bool) -> None:
     if not tr.sentences:
         _fail("没有识别出任何语音")
     tr.rename(speakers)
@@ -104,7 +108,6 @@ def _process(
     console.print(
         f"[green]✓[/green] 转写完成：{len(tr.turns())} 段发言，{len(tr.speakers_in_order())} 位说话人 → {out_dir / TRANSCRIPT_MD}"
     )
-
     if summary:
         _summarize_and_save(tr, out_dir, meeting_date, push)
 
@@ -160,8 +163,10 @@ def record(
     no_summary: NoSummaryOpt = False,
     push: PushOpt = False,
 ) -> None:
-    """开始录音，按 Ctrl+C 结束，然后自动转写并生成纪要。"""
-    from .record import record_until_interrupt, system_audio_supported
+    """开始录音，按 Ctrl+C 结束。录音时就边录边转，结束后很快出转写和纪要。"""
+    from .live import LiveTranscriber
+    from .record import mixdown, record_until_interrupt, system_audio_supported
+    from .transcript import fmt_ts
 
     if no_system and no_mic:
         _fail("系统声音和麦克风不能都关掉")
@@ -171,36 +176,63 @@ def record(
     if system and not system_audio_supported():
         console.print("[yellow]![/yellow] 录系统声音需要 macOS 15+ 和 Xcode Command Line Tools，本次只录麦克风")
         system = False
+    words = config.load().hotwords + _split(hotwords)
 
-    sources = "+".join(n for n, on in (("系统声音", system), ("麦克风", not no_mic)) if on)
-    console.print(f"[bold red]●[/bold red] 录音中（{sources}），按 [bold]Ctrl+C[/bold] 结束")
+    def make_live(sources: list[str]) -> LiveTranscriber:
+        return LiveTranscriber(
+            out_dir,
+            sources,
+            hotwords=words,
+            on_sentence=lambda text, ms: console.print(f"[dim]{fmt_ts(ms)}[/dim] {text}", highlight=False),
+        )
+
+    names = "+".join(n for n, on in (("系统声音", system), ("麦克风", not no_mic)) if on)
+    console.print(f"[bold red]●[/bold red] 录音中（{names}），按 [bold]Ctrl+C[/bold] 结束")
+    if not no_process:
+        console.print("[dim]边录边转，识别出的内容会显示在下面[/dim]")
+    final = out_dir / AUDIO
+    tr = None
     try:
         with console.status("") as status:
-            audio, error = record_until_interrupt(
+            _, error, live = record_until_interrupt(
                 out_dir,
                 system_audio=system,
                 mic=not no_mic,
                 on_tick=lambda s: status.update(f"已录 {int(s) // 60:02d}:{int(s) % 60:02d}"),
                 on_stopping=lambda: status.update("录音已结束，正在保存…"),
+                live_factory=None if no_process else make_live,
             )
+            # 收尾（转写最后一段 + 区分说话人 + 合成音频）只要十几秒，期间不响应 Ctrl+C，免得丢录音
+            old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                if live:
+                    status.update("正在转写最后一段、区分说话人…")
+                    tr = live.finish(final)
+                status.update("正在保存录音…")
+                mixdown(out_dir).rename(final)
+            finally:
+                signal.signal(signal.SIGINT, old)
     except RuntimeError as e:
         _fail(str(e))
-    final = audio.with_name(AUDIO)
-    audio.rename(final)
     if error:
         console.print(f"[yellow]![/yellow] 录音提前中断：{error}，已保存录到的部分")
     console.print(f"[green]✓[/green] 录音 → {final}")
+    if no_process:
+        return
 
-    if not no_process:
-        console.print("[dim]接下来自动转写并生成纪要，不用再按 Ctrl+C[/dim]")
-        old_handler = signal.signal(signal.SIGINT, _on_sigint)
-        try:
+    if live and tr is None:
+        console.print(f"[yellow]![/yellow] 边录边转出错（{live.error}），改为整段转写")
+    old_handler = signal.signal(signal.SIGINT, _on_sigint)
+    try:
+        if tr is not None:
+            _finish_transcript(tr, out_dir, _speaker_names(speakers), started.date(), not no_summary, push)
+        else:
             _process(final, out_dir, _split(hotwords), _speaker_names(speakers), started.date(), not no_summary, push)
-        except KeyboardInterrupt:
-            console.print()
-            _fail(f"已中断处理，录音已保存。继续处理：jiyao run {final} -o {out_dir}")
-        finally:
-            signal.signal(signal.SIGINT, old_handler)
+    except KeyboardInterrupt:
+        console.print()
+        _fail(f"已中断处理，录音已保存。继续处理：jiyao run {final} -o {out_dir}")
+    finally:
+        signal.signal(signal.SIGINT, old_handler)
 
 
 @app.command()

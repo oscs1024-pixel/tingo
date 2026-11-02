@@ -235,13 +235,23 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .live-head .live-dot { animation: ping 1.6s infinite; }
 .timer { font: 500 56px/1 var(--num); letter-spacing: 1px; font-variant-numeric: tabular-nums; margin: 14px 0 18px; color: #111; }
 .meters { display: grid; gap: 10px; }
+.live-lines {
+  margin-top: 16px; max-height: 132px; overflow: auto; display: grid; gap: 6px;
+  font-size: 13.5px; line-height: 1.6; color: var(--text-2);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px); mask-image: linear-gradient(180deg, transparent 0, #000 28px);
+  padding-top: 18px; scrollbar-width: none;
+}
+.live-lines::-webkit-scrollbar { display: none; }
+.live-lines > div { animation: rise 0.35s var(--ease) both; }
+.live-lines .lt { font: 12px var(--num); color: var(--muted-2); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.live-lines .lw { color: var(--muted-2); font-size: 13px; }
 .meter { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
 .meter-bars { display: flex; gap: 3px; height: 14px; align-items: center; }
 .meter-bars i { flex: 1; height: 100%; border-radius: 2px; background: var(--line-soft); transition: background 0.08s; }
 .meter-bars i.on { background: linear-gradient(180deg, var(--cyan), var(--blue)); }
 .meter-bars i.hot { background: var(--amber); }
 
-.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 16px; }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 16px; }
 .step { display: grid; gap: 8px; font-size: 12px; color: var(--muted-2); }
 .step .bar { height: 4px; border-radius: 99px; background: var(--line-soft); overflow: hidden; position: relative; }
 .step.done { color: var(--muted); }

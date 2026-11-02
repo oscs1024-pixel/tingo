@@ -76,8 +76,17 @@ class Recording:
     def elapsed(self) -> float:
         return time.time() - self.started_at if self.started_at else 0.0
 
+    @property
+    def sources(self) -> list[str]:
+        return [n for n, on in (("system", self.system_audio), ("mic", self.mic)) if on]
+
     def stop(self) -> Path:
         """结束录音，返回合成后的音频路径。"""
+        self.stop_capture()
+        return mixdown(self.out_dir)
+
+    def stop_capture(self) -> None:
+        """只停止录音进程，原始音轨留着（边录边转还要读最后几秒）。"""
         if self.proc and self.proc.poll() is None:
             if self.system_audio:
                 self.proc.send_signal(signal.SIGINT)
@@ -87,7 +96,6 @@ class Recording:
                 self.proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-        return mixdown(self.out_dir)
 
 
 def _mic_input() -> list[str]:
@@ -194,8 +202,14 @@ def record_until_interrupt(
     mic: bool,
     on_tick: Callable[[float], None],
     on_stopping: Callable[[], None] | None = None,
-) -> tuple[Path, str | None]:
-    """录到 Ctrl+C 为止。录音中途出错时也保住已录部分，返回 (音频, 错误信息)。"""
+    live_factory: Callable[[list[str]], object] | None = None,
+) -> tuple[Path, str | None, object | None]:
+    """录到 Ctrl+C 为止。录音中途出错时也保住已录部分。
+
+    live_factory 给了就边录边转：用实际录的音轨列表创建 LiveTranscriber 并启动。
+    返回 (音频, 错误信息, LiveTranscriber 或 None)；调用方负责 live.finish()，
+    原始音轨在那之前不能删，所以这里先不合成，合成交给 finish_recording。
+    """
     rec = Recording(out_dir, system_audio=system_audio, mic=mic)
     stop = False
 
@@ -204,11 +218,15 @@ def record_until_interrupt(
         stop = True
 
     # 显式接管：后台启动时 SIGINT 可能被继承为"忽略"，被其他程序 kill 时也要正常收尾。
-    # 保存期间（停止录音组件 + 合成音频，要一两秒）一直接管，多按几次 Ctrl+C 也不会把录音弄丢。
+    # 保存期间一直接管，多按几次 Ctrl+C 也不会把录音弄丢。
     old_int = signal.signal(signal.SIGINT, request_stop)
     old_term = signal.signal(signal.SIGTERM, request_stop)
+    live = None
     try:
         rec.start()
+        if live_factory:
+            live = live_factory(rec.sources)
+            live.start()
         while not stop and rec.proc.poll() is None:
             on_tick(rec.elapsed())
             time.sleep(0.2)
@@ -218,7 +236,8 @@ def record_until_interrupt(
         if rec.proc.poll() not in (None, 0):
             tail = rec.proc.stdout.read().strip() if rec.proc.stdout else ""
             error = tail.removeprefix("ERROR: ") or "录音组件意外退出"
-        return rec.stop(), error
+        rec.stop_capture()
+        return out_dir, error, live
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
