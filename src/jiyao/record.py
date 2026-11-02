@@ -134,6 +134,7 @@ def mixdown(out_dir: Path) -> Path:
             str(dst),
         ],
         check=True,
+        start_new_session=True,
     )
     for t in tracks:
         t.unlink()
@@ -150,6 +151,7 @@ def _read16k(path: Path):
         ["ffmpeg", "-loglevel", "error", "-i", str(path), "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-"],
         capture_output=True,
         check=True,
+        start_new_session=True,
     ).stdout
     return np.frombuffer(raw, dtype=np.float32)
 
@@ -183,7 +185,11 @@ def duck_mix(system, mic, sr: int, threshold_db: float = -50.0, hold_ms: int = 7
 
 
 def record_until_interrupt(
-    out_dir: Path, system_audio: bool, mic: bool, on_tick: Callable[[float], None]
+    out_dir: Path,
+    system_audio: bool,
+    mic: bool,
+    on_tick: Callable[[float], None],
+    on_stopping: Callable[[], None] | None = None,
 ) -> tuple[Path, str | None]:
     """录到 Ctrl+C 为止。录音中途出错时也保住已录部分，返回 (音频, 错误信息)。"""
     rec = Recording(out_dir, system_audio=system_audio, mic=mic)
@@ -193,7 +199,8 @@ def record_until_interrupt(
         nonlocal stop
         stop = True
 
-    # 显式接管：后台启动时 SIGINT 可能被继承为"忽略"，被其他程序 kill 时也要正常收尾
+    # 显式接管：后台启动时 SIGINT 可能被继承为"忽略"，被其他程序 kill 时也要正常收尾。
+    # 保存期间（停止录音组件 + 合成音频，要一两秒）一直接管，多按几次 Ctrl+C 也不会把录音弄丢。
     old_int = signal.signal(signal.SIGINT, request_stop)
     old_term = signal.signal(signal.SIGTERM, request_stop)
     try:
@@ -201,11 +208,13 @@ def record_until_interrupt(
         while not stop and rec.proc.poll() is None:
             on_tick(rec.elapsed())
             time.sleep(0.2)
+        if on_stopping:
+            on_stopping()
+        error = None
+        if rec.proc.poll() not in (None, 0):
+            tail = rec.proc.stdout.read().strip() if rec.proc.stdout else ""
+            error = tail.removeprefix("ERROR: ") or "录音组件意外退出"
+        return rec.stop(), error
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
-    error = None
-    if rec.proc.poll() not in (None, 0):
-        tail = rec.proc.stdout.read().strip() if rec.proc.stdout else ""
-        error = tail.removeprefix("ERROR: ") or "录音组件意外退出"
-    return rec.stop(), error

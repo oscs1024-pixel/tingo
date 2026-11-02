@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 
 from .config import LLMConfig
 from .transcript import Transcript, fmt_ts
@@ -39,7 +39,7 @@ MINUTES_PROMPT = """\
 要求：
 1. 只依据转写内容，不编造。负责人或截止时间没有明确说出的，写"未明确"。
 2. 转写有同音错字，结合上下文改正明显的错误；拿不准的保留原文。
-3. 相对时间（如"下周三""十五号"）保留原话，并按会议日期在括号里换算成具体日期，例如：下周三（11月11日）。
+3. 转写里的"下周五""明天"等已由程序标好具体日期，如"下周五（11月13日）"，照抄括号里的日期，不要自己推算。其他相对时间（如"十五号"）保留原话，并查上面的日期对照表在括号里写出具体日期。
 4. 每条要点、决议、待办都附上出处时间戳，便于回听核对。
 5. 某一节没有内容时写"无"，不要删掉这一节。
 6. 去掉寒暄和口头禅，语言简洁、书面化。
@@ -66,6 +66,48 @@ REDUCE_PROMPT = """\
 分段笔记：
 {notes}
 """
+
+
+WEEKDAYS = "一二三四五六日"
+
+
+def calendar_hint(d: date) -> str:
+    """日期对照表。小模型算"下周五是几号"经常算错，直接给表让它查。"""
+
+    def md(x: date) -> str:
+        return f"{x.month}月{x.day}日"
+
+    monday = d - timedelta(days=d.weekday())
+    lines = [
+        "日期对照表（每周从周一开始）：",
+        f"- 今天 {md(d)}（星期{WEEKDAYS[d.weekday()]}），明天 {md(d + timedelta(1))}，后天 {md(d + timedelta(2))}",
+    ]
+    for name, offset in (("本周", 0), ("下周", 7), ("下下周", 14)):
+        days = "、".join(f"周{WEEKDAYS[i]} {md(monday + timedelta(offset + i))}" for i in range(7))
+        lines.append(f"- {name}：{days}")
+    return "\n".join(lines)
+
+
+_WEEK_OFFSET = {"下下": 14, "下": 7, "本": 0, "这": 0}
+_DAY_INDEX = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+_WEEK_RE = re.compile(r"(下下|下|本|这)个?(?:周|星期|礼拜)的?(?:周|星期|礼拜)?([一二三四五六日天])(?![（(])")
+_DAY_RE = re.compile(r"(大后天|后天|明天)(?![（(])")
+_DAY_OFFSET = {"明天": 1, "后天": 2, "大后天": 3}
+
+
+def annotate_dates(text: str, d: date) -> str:
+    """在"下周五""下下周的周一""明天"后面标上具体日期，换算由程序完成，不靠模型。"""
+    monday = d - timedelta(days=d.weekday())
+
+    def week(m: re.Match) -> str:
+        x = monday + timedelta(_WEEK_OFFSET[m.group(1)] + _DAY_INDEX[m.group(2)])
+        return f"{m.group(0)}（{x.month}月{x.day}日）"
+
+    def day(m: re.Match) -> str:
+        x = d + timedelta(_DAY_OFFSET[m.group(1)])
+        return f"{m.group(0)}（{x.month}月{x.day}日）"
+
+    return _DAY_RE.sub(day, _WEEK_RE.sub(week, text))
 
 
 def _client(cfg: LLMConfig):
@@ -150,12 +192,13 @@ def summarize(
     on_stage: Callable[[str], None] | None = None,
 ) -> str:
     meeting_date = meeting_date or date.today()
-    day = f"{meeting_date.isoformat()}（星期{'一二三四五六日'[meeting_date.weekday()]}）"
+    day = f"{meeting_date.isoformat()}（星期{WEEKDAYS[meeting_date.weekday()]}）"
+    dated = f"{day}\n\n{calendar_hint(meeting_date)}"
     max_chars = max_chars or default_max_chars(cfg)
-    text = transcript.to_prompt_text()
+    text = annotate_dates(transcript.to_prompt_text(), meeting_date)
 
     if len(text) <= max_chars:
-        body = _chat(cfg, MINUTES_PROMPT.format(meeting_date=day, transcript=text), on_token)
+        body = _chat(cfg, MINUTES_PROMPT.format(meeting_date=dated, transcript=text), on_token)
     else:
         chunks = split_chunks(text.splitlines(), max_chars)
         notes = []
@@ -164,11 +207,11 @@ def summarize(
                 on_stage(f"分段提炼 {i}/{len(chunks)}")
             notes.append(
                 f"### 第 {i} 段\n"
-                + _chat(cfg, CHUNK_PROMPT.format(index=i, total=len(chunks), meeting_date=day, transcript=chunk))
+                + _chat(cfg, CHUNK_PROMPT.format(index=i, total=len(chunks), meeting_date=dated, transcript=chunk))
             )
         if on_stage:
             on_stage("合并成纪要")
-        instructions = MINUTES_PROMPT.split("转写：")[0].format(meeting_date=day, transcript="")
+        instructions = MINUTES_PROMPT.split("转写：")[0].format(meeting_date=dated, transcript="")
         body = _chat(cfg, REDUCE_PROMPT.format(instructions=instructions, notes="\n\n".join(notes)), on_token)
 
     return _with_meta(body, transcript, day)

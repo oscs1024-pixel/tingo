@@ -61,12 +61,17 @@ def _quiet():
         root.setLevel(level)  # FunASR 会把根 logger 调成 INFO，连带 httpx 等库开始刷日志
 
 
+# 下面的 ffmpeg/ffprobe 都放进独立进程组：终端里按 Ctrl+C 时信号会发给整个前台进程组，
+# 子进程被直接杀掉会变成看不懂的 CalledProcessError；统一由主程序收到 KeyboardInterrupt 后处理。
+
+
 def probe_duration_ms(path: Path) -> int:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
         capture_output=True,
         text=True,
         check=True,
+        start_new_session=True,
     ).stdout.strip()
     return int(float(out) * 1000) if out else 0
 
@@ -76,6 +81,7 @@ def to_wav16k(src: Path, dst: Path) -> None:
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", str(dst)],
         check=True,
+        start_new_session=True,
     )
 
 

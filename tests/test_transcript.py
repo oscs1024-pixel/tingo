@@ -53,3 +53,10 @@ def test_fmt_ts():
     assert fmt_ts(0) == "00:00"
     assert fmt_ts(61_500) == "01:01"
     assert fmt_ts(3_725_000) == "1:02:05"
+
+
+def test_title_uses_meeting_folder_for_recordings():
+    tr = _tr()
+    assert tr.title() == "周会"
+    tr.source = "/Users/x/Documents/jiyao/2026-11-02_1213_周会/录音.m4a"
+    assert tr.title() == "2026-11-02_1213_周会"

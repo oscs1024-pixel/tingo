@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
@@ -59,6 +60,15 @@ def _fail(msg: str) -> None:
     raise typer.Exit(1)
 
 
+_interrupted = False
+
+
+def _on_sigint(*_) -> None:
+    global _interrupted
+    _interrupted = True
+    raise KeyboardInterrupt
+
+
 def _process(
     audio: Path,
     out_dir: Path,
@@ -80,6 +90,8 @@ def _process(
         _load_model()
     with console.status(f"转写中：{audio.name}"):
         tr = transcribe(audio, hotwords=words)
+    if _interrupted:
+        raise KeyboardInterrupt  # FunASR 会吞掉 Ctrl+C 并返回空结果，这里补回来
     if not tr.sentences:
         _fail("没有识别出任何语音")
     tr.rename(speakers)
@@ -165,6 +177,7 @@ def record(
                 system_audio=system,
                 mic=not no_mic,
                 on_tick=lambda s: status.update(f"已录 {int(s) // 60:02d}:{int(s) % 60:02d}"),
+                on_stopping=lambda: status.update("录音已结束，正在保存…"),
             )
     except RuntimeError as e:
         _fail(str(e))
@@ -175,7 +188,15 @@ def record(
     console.print(f"[green]✓[/green] 录音 → {final}")
 
     if not no_process:
-        _process(final, out_dir, _split(hotwords), _speaker_names(speakers), started.date(), not no_summary, push)
+        console.print("[dim]接下来自动转写并生成纪要，不用再按 Ctrl+C[/dim]")
+        old_handler = signal.signal(signal.SIGINT, _on_sigint)
+        try:
+            _process(final, out_dir, _split(hotwords), _speaker_names(speakers), started.date(), not no_summary, push)
+        except KeyboardInterrupt:
+            console.print()
+            _fail(f"已中断处理，录音已保存。继续处理：jiyao run {final} -o {out_dir}")
+        finally:
+            signal.signal(signal.SIGINT, old_handler)
 
 
 @app.command()

@@ -62,7 +62,7 @@ class Transcript:
         return turns
 
     def to_markdown(self) -> str:
-        lines = [f"# 会议转写：{Path(self.source).stem}", ""]
+        lines = [f"# 会议转写：{self.title()}", ""]
         lines.append(f"时长 {fmt_ts(self.duration_ms)}，说话人 {len(self.speakers_in_order())} 位。")
         lines.append("")
         for t in self.turns():
@@ -71,6 +71,11 @@ class Transcript:
             lines.append(t.text)
             lines.append("")
         return "\n".join(lines)
+
+    def title(self) -> str:
+        """`jiyao record` 的录音统一叫 录音.m4a，这时用会议文件夹名（如 2026-11-02_1430_周会）。"""
+        src = Path(self.source)
+        return src.parent.name if src.stem == "录音" and src.parent.name else src.stem
 
     def to_prompt_text(self) -> str:
         """喂给 LLM 的紧凑格式：[mm:ss] 说话人：内容。"""

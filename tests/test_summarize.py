@@ -77,3 +77,33 @@ def test_local_ollama_needs_no_key():
     cfg = LLMConfig(base_url="http://localhost:11434/v1", api_key="")
     assert sm._client(cfg).api_key == "ollama"
     assert sm.default_max_chars(cfg) < sm.default_max_chars(LLMConfig())
+
+
+def test_annotate_dates_resolves_relative_days():
+    d = date(2026, 11, 2)  # 星期一
+    assert sm.annotate_dates("下周五完成", d) == "下周五（11月13日）完成"
+    assert sm.annotate_dates("下下周的周一合并", d) == "下下周的周一（11月16日）合并"
+    assert sm.annotate_dates("这周三、下个星期二、下礼拜天", d) == (
+        "这周三（11月4日）、下个星期二（11月10日）、下礼拜天（11月15日）"
+    )
+    assert sm.annotate_dates("明天和后天，大后天", d) == "明天（11月3日）和后天（11月4日），大后天（11月5日）"
+
+
+def test_annotate_dates_leaves_ambiguous_and_annotated_text_alone():
+    d = date(2026, 11, 2)
+    assert sm.annotate_dates("周五再说，今天天气好", d) == "周五再说，今天天气好"
+    assert sm.annotate_dates("下周五（11月13日）", d) == "下周五（11月13日）"
+
+
+def test_annotate_dates_across_month_end():
+    assert sm.annotate_dates("下周一", date(2026, 11, 29)) == "下周一（11月30日）"
+    assert sm.annotate_dates("下下周一", date(2026, 11, 29)) == "下下周一（12月7日）"
+
+
+def test_prompt_dates_are_annotated(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None: seen.setdefault("p", prompt) and "# T")
+    tr = Transcript("m.wav", 1000, [Sentence(0, 0, 900, "下周五交付。")])
+    sm.summarize(tr, LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2))
+    assert "下周五（11月13日）交付" in seen["p"]
+    assert "下周：周一 11月9日" in seen["p"]
