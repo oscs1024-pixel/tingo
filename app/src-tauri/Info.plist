@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 没有这条，macOS 会直接拒绝 App（以及它启动的录音组件）使用麦克风，设置里开了权限也没用 -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>录下会议里你自己的声音，用来转写和生成纪要。录音只保存在这台电脑上。</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>录下会议软件里对方的声音（系统声音），用来转写和生成纪要。录音只保存在这台电脑上。</string>
+</dict>
+</plist>
