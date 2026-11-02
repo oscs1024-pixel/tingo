@@ -44,6 +44,25 @@ def tables_to_lists(md: str) -> str:
     return "\n".join(out)
 
 
+def fishbone_to_text(md: str) -> str:
+    """纪要里的鱼骨图是 ```fishbone 代码块（JSON），群消息里换成可读的列表。"""
+    import json
+
+    def repl(m: re.Match) -> str:
+        try:
+            fb = json.loads(m.group(1))
+        except ValueError:
+            return ""
+        lines = [f"**{fb.get('problem', '原因分析')}**"]
+        for b in fb.get("branches", []):
+            refs = "、".join(b.get("refs") or [])
+            detail = f"：{b['detail']}" if b.get("detail") else ""
+            lines.append(f"- {b.get('title', '')}{detail}" + (f"（{refs}）" if refs else "（无原文依据）"))
+        return "\n".join(lines)
+
+    return re.sub(r"```fishbone\s*\n(.*?)\n```", repl, md, flags=re.DOTALL)
+
+
 def _truncate(text: str, max_bytes: int) -> str:
     data = text.encode("utf-8")
     if len(data) <= max_bytes:
@@ -63,6 +82,7 @@ def build_request(webhook: str, minutes_md: str, secret: str = "", now: float | 
     now = now if now is not None else time.time()
     platform = detect(webhook)
     title = _title(minutes_md)
+    minutes_md = fishbone_to_text(minutes_md)
 
     if platform == "feishu":
         body: dict = {

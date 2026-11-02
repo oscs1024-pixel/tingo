@@ -82,6 +82,25 @@ pub fn tables_to_lists(md: &str) -> String {
     out.join("\n")
 }
 
+/// 纪要里的鱼骨图是 ```fishbone 代码块（JSON），群消息里换成可读的列表。
+pub fn fishbone_to_text(md: &str) -> String {
+    static FENCE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)```fishbone\s*\n(.*?)\n```").unwrap());
+    FENCE
+        .replace_all(md, |c: &regex::Captures| {
+            let Ok(fb) = serde_json::from_str::<serde_json::Value>(&c[1]) else { return String::new() };
+            let mut lines = vec![format!("**{}**", fb["problem"].as_str().unwrap_or("原因分析"))];
+            for b in fb["branches"].as_array().into_iter().flatten() {
+                let refs: Vec<&str> = b["refs"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).collect();
+                let detail = b["detail"].as_str().filter(|d| !d.is_empty()).map(|d| format!("：{d}")).unwrap_or_default();
+                let src = if refs.is_empty() { "（无原文依据）".to_string() } else { format!("（{}）", refs.join("、")) };
+                lines.push(format!("- {}{detail}{src}", b["title"].as_str().unwrap_or("")));
+            }
+            lines.join("\n")
+        })
+        .into_owned()
+}
+
 fn truncate(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_string();
@@ -114,6 +133,7 @@ pub fn build_request(
 ) -> Result<(String, serde_json::Value), String> {
     let platform = detect(webhook)?;
     let t = title(minutes);
+    let minutes = &fishbone_to_text(minutes);
     if platform == Platform::Feishu {
         let mut body = serde_json::json!({
             "msg_type": "interactive",
@@ -214,6 +234,14 @@ mod tests {
         assert!(out.contains("- 修复支付模块（负责人：小王，截止时间：11月15日，出处：[00:29]）"));
         assert!(out.contains("- 出迁移方案（负责人：小张，出处：[00:40]）"));
         assert!(out.contains("## 风险\n- 无"));
+    }
+
+    #[test]
+    fn fishbone_becomes_list() {
+        let md = "## 原因分析\n```fishbone\n{\"problem\": \"为什么慢？\", \"branches\": [{\"title\": \"页面大\", \"detail\": \"6 秒\", \"refs\": [\"01:06\"]}, {\"title\": \"猜的\", \"refs\": []}]}\n```\n";
+        let out = fishbone_to_text(md);
+        assert!(out.contains("**为什么慢？**\n- 页面大：6 秒（01:06）\n- 猜的（无原文依据）"));
+        assert!(!out.contains("```"));
     }
 
     #[test]

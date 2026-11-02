@@ -1,7 +1,8 @@
 /* 会议详情：纪要 / 转写两个视图、回听播放器、说话人改名、编辑纪要、重新生成。 */
 
 import { api, type Job, type MeetingDetail, meetingPath, url } from "../api";
-import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial, main, openModal, toast } from "../dom";
+import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial, main, openModal, toast, tsToMs } from "../dom";
+import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
@@ -84,7 +85,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
     const el = $maybe(sel);
     if (el) el.onclick = fn;
   };
-  on("#aCopy", () => copyText(d.minutes));
+  on("#aCopy", () => copyText(fishboneToText(d.minutes)));
   on("#aPush", pushMinutes);
   on("#aRegen", regenerate);
   on("#aRename", renameSpeakers);
@@ -114,7 +115,7 @@ function drawPane(): void {
   if (detailTab === "minutes") {
     pane.className = "card doc";
     pane.innerHTML = d.minutes
-      ? `<div class="md">${renderMarkdown(d.minutes, { skipHead: true })}</div>`
+      ? `<div class="md">${renderMarkdown(d.minutes, { skipHead: true, resolve: turnResolver(d.turns, d.duration ? tsToMs(d.duration) : Infinity) })}</div>`
       : `<div class="minutes-empty">还没有纪要。<br><br><button class="btn primary" id="paneGen">${ICON.spark}生成纪要</button></div>`;
     const gen = $maybe("#paneGen");
     if (gen) gen.onclick = regenerate;
@@ -130,7 +131,30 @@ function drawPane(): void {
       )
       .join("");
   }
-  $$<HTMLButtonElement>(".ts", pane).forEach((b) => (b.onclick = () => seek(Number(b.dataset.ms))));
+  $$<HTMLButtonElement>(".ts", pane).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation(); // 鱼骨图分支里的时间戳：只跳转，不收起分支
+        seek(Number(b.dataset.ms));
+      }),
+  );
+  // 鱼骨图：点分支展开它引用的原话
+  $$<HTMLElement>(".fb-branch[role=button]", pane).forEach((br) => {
+    const toggle = () => {
+      const q = $maybe(".fb-quotes", br);
+      if (q) {
+        q.hidden = !q.hidden;
+        br.classList.toggle("open", !q.hidden);
+      }
+    };
+    br.onclick = toggle;
+    br.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    };
+  });
 }
 
 export function updateDetailJob(job: Job, prev: Job): void {

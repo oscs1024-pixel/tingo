@@ -61,3 +61,12 @@ def test_wecom_truncates_to_4096_bytes():
     content = body["markdown"]["content"]
     assert len(content.encode()) <= 4096
     assert content.endswith("（内容过长已截断）")
+
+
+def test_fishbone_becomes_list():
+    from jiyao.push import fishbone_to_text
+
+    md = '## 原因分析\n```fishbone\n{"problem": "为什么慢？", "branches": [{"title": "页面大", "detail": "6 秒", "refs": ["01:06"]}, {"title": "猜的", "refs": []}]}\n```\n'
+    out = fishbone_to_text(md)
+    assert "**为什么慢？**\n- 页面大：6 秒（01:06）\n- 猜的（无原文依据）" in out
+    assert "```" not in out

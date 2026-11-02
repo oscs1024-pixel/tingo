@@ -61,7 +61,7 @@ export const ICON = {
     '<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>',
   people:
     '<svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.6a3.2 3.2 0 0 1 0 5.8M18 13.8c1.6.8 2.6 2.6 2.6 5.2"/></svg>',
-  bot: '<svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4.5M9 13h.01M15 13h.01M9.5 16h5"/></svg>',
+  bot: '<svg viewBox="0 0 24 24"><path d="M6 4.5h12A2.5 2.5 0 0 1 20.5 7v7.5A2.5 2.5 0 0 1 18 17h-6.5l-4.5 3.5V17H6a2.5 2.5 0 0 1-2.5-2.5V7A2.5 2.5 0 0 1 6 4.5z"/><path d="M12 7.6c.35 1.65 1.25 2.55 2.9 2.9-1.65.35-2.55 1.25-2.9 2.9-.35-1.65-1.25-2.55-2.9-2.9 1.65-.35 2.55-1.25 2.9-2.9z"/></svg>',
 } as const;
 
 let toastTimer: number | undefined;

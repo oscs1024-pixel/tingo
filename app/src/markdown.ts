@@ -1,6 +1,7 @@
 /* 纪要渲染：只覆盖纪要用到的 Markdown 子集（标题、列表、表格、粗体、行内代码），时间戳变成可点的按钮。 */
 
 import { esc, tsToMs } from "./dom";
+import { parseFishbone, renderFishbone, type Resolver } from "./fishbone";
 
 const TS = String.raw`\d{1,2}:\d{2}(?::\d{2})?`;
 
@@ -14,7 +15,7 @@ function inline(s: string): string {
 
 const LIST = /^\s*([-*]|\d+\.)\s+/;
 
-export function renderMarkdown(md: string, { skipHead = false } = {}): string {
+export function renderMarkdown(md: string, { skipHead = false, resolve }: { skipHead?: boolean; resolve?: Resolver } = {}): string {
   const lines = md.replace(/\r/g, "").split("\n");
   const out: string[] = [];
   let i = 0;
@@ -23,6 +24,23 @@ export function renderMarkdown(md: string, { skipHead = false } = {}): string {
     const line = lines[i];
     if (!line.trim()) {
       i++;
+      continue;
+    }
+    if (line.trim().startsWith("```")) {
+      // 代码块：fishbone 渲染成鱼骨图；生成中还没闭合时先给个占位
+      const lang = line.trim().slice(3).trim();
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) body.push(lines[i++]);
+      const closed = i < lines.length;
+      i++;
+      if (lang === "fishbone") {
+        const spec = closed ? parseFishbone(body.join("\n")) : null;
+        out.push(spec ? renderFishbone(spec, resolve) : closed ? "" : `<div class="fishbone pending">正在画鱼骨图…</div>`);
+      } else {
+        out.push(`<pre><code>${esc(body.join("\n"))}</code></pre>`);
+      }
+      afterH1 = false;
       continue;
     }
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
@@ -64,7 +82,7 @@ export function renderMarkdown(md: string, { skipHead = false } = {}): string {
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,3}\s|\s*\||\s*([-*]|\d+\.)\s)/.test(lines[i])) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !/^(#{1,3}\s|\s*\||\s*([-*]|\d+\.)\s|\s*```)/.test(lines[i])) para.push(lines[i++]);
     out.push(`<p>${inline(para.join(" "))}</p>`);
     afterH1 = false;
   }
