@@ -260,7 +260,7 @@ function updateProcessing(job) {
   const note = {
     saving: "正在合成录音…",
     loading: "第一次运行要从 ModelScope 下载约 2 GB 模型，之后会快很多",
-    transcribing: "本地识别中，1 小时的会议大约需要 7 分钟",
+    transcribing: "本地识别中，10 分钟的录音大约需要 3 分钟",
     summarizing: "",
   }[job.state];
   $("#procNote").textContent = note || "";
