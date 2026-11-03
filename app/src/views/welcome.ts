@@ -1,7 +1,7 @@
 /* 新手引导：第一次打开时走一遍——认识 Tingo、下载识别模型、试录 3 秒确认权限、接上大模型、看示例会议。
    每一步都可以跳过；走完（或点"跳过引导"）后记在 localStorage，不再自动弹出，设置 → 运行环境里可以重新打开。 */
 
-import { api, isIOS, type Job } from "../api";
+import { api, type Job } from "../api";
 import { $, $maybe, errorMessage, esc, ICON, main, toast } from "../dom";
 import { t } from "../i18n";
 import { poll } from "../poll";
@@ -89,18 +89,10 @@ const BODY: Record<Step, () => void> = {
     $("#wlBody").innerHTML = `
       <img src="data:image/svg+xml,${encodeURIComponent(document.querySelector(".brand-mark svg")?.outerHTML.replace("<svg", "<svg xmlns='http://www.w3.org/2000/svg'") ?? "")}" class="wl-logo" alt="">
       <h1>${t("开过的会，都听过。", "Every meeting, heard.")}</h1>
-      <p class="hint">${
-        isIOS()
-          ? t("Tingo 录下会议，在这台手机上转文字、分清谁说了什么，再由你选的大模型整理成纪要。花一分钟走完下面几步就能用。", "Tingo records your meetings, transcribes them on this iPhone, tells speakers apart, and has the LLM you choose write the minutes. Take a minute to set it up.")
-          : t("Tingo 录下会议，在这台 Mac 上转文字、分清谁说了什么，再由你选的大模型整理成纪要。花一分钟走完下面几步就能用。", "Tingo records your meetings, transcribes them on this Mac, tells speakers apart, and has the LLM you choose write the minutes. Take a minute to set it up.")
-      }</p>
+      <p class="hint">${t("Tingo 录下会议，在这台 Mac 上转文字、分清谁说了什么，再由你选的大模型整理成纪要。花一分钟走完下面几步就能用。", "Tingo records your meetings, transcribes them on this Mac, tells speakers apart, and has the LLM you choose write the minutes. Take a minute to set it up.")}</p>
       <ul class="wl-points">
-        <li>${ICON.mic}<span><b>${isIOS() ? t("录音不出手机", "Audio stays on your iPhone") : t("录音不出本机", "Audio stays on your Mac")}</b>${t("识别、区分说话人都在本地完成", "Recognition and speaker separation run locally")}</span></li>
-        ${
-          isIOS()
-            ? `<li>${ICON.mic}<span><b>${t("放在桌上就能录", "Just put it on the table")}</b>${t("线下开会时把手机放在大家中间，锁屏也会继续录", "Place your iPhone in the middle of the room — it keeps recording when locked")}</span></li>`
-            : `<li>${ICON.monitor}<span><b>${t("直接录线上会议", "Records any call")}</b>${t("腾讯会议、飞书、Zoom 里对方的声音都能录", "Captures the other side in Zoom, Teams, Feishu…")}</span></li>`
-        }
+        <li>${ICON.mic}<span><b>${t("录音不出本机", "Audio stays on your Mac")}</b>${t("识别、区分说话人都在本地完成", "Recognition and speaker separation run locally")}</span></li>
+        <li>${ICON.monitor}<span><b>${t("直接录线上会议", "Records any call")}</b>${t("腾讯会议、飞书、Zoom 里对方的声音都能录", "Captures the other side in Zoom, Teams, Feishu…")}</span></li>
         <li>${ICON.spark}<span><b>${t("结论有出处", "Every claim has a source")}</b>${t("纪要每条都能点回录音原话", "Each line plays back the original words")}</span></li>
       </ul>`;
   },
@@ -155,10 +147,7 @@ const BODY: Record<Step, () => void> = {
       })[st] ?? st;
     box.innerHTML = `
       <h2>${t("录音权限", "Recording permissions")}</h2>
-      <p class="hint">${isIOS() ? t(
-        "Tingo 需要麦克风权限来录会议。点下面的按钮试录 3 秒，系统会弹窗请求权限。试录时随便说句话。",
-        "Tingo needs microphone access to record meetings. Tap below to test for 3 seconds — iOS will ask for permission. Say something while it tests.",
-      ) : t(
+      <p class="hint">${t(
         "Tingo 要两个权限：「麦克风」录你说的话，「屏幕与系统录音」录会议软件里对方的声音（只录声音，不录画面）。点下面的按钮试录 3 秒，系统会弹窗请求权限。试录时可以随便说句话、放点声音。",
         "Tingo needs two permissions: Microphone for your voice, and Screen & System Audio Recording for the other side of the call (audio only, never the screen). Click below to test for 3 seconds — macOS will ask for permission. Say something and play some audio while it tests.",
       )}</p>
@@ -166,13 +155,11 @@ const BODY: Record<Step, () => void> = {
       ${
         permResult
           ? `<div class="wl-perm">
-          <div class="${permResult.system} desk-only"><b>${icon(permResult.system)}</b>${t("系统声音", "System audio")}<small>${esc(label(permResult.system))}</small></div>
+          <div class="${permResult.system}"><b>${icon(permResult.system)}</b>${t("系统声音", "System audio")}<small>${esc(label(permResult.system))}</small></div>
           <div class="${permResult.mic}"><b>${icon(permResult.mic)}</b>${t("麦克风", "Microphone")}<small>${esc(label(permResult.mic))}</small></div>
         </div>
         ${
-          permResult.mic === "denied" && isIOS()
-            ? `<p class="hint">${t("去「设置 → Tingo」打开麦克风，再回来试一次。", "Open Settings → Tingo, turn on Microphone, then come back and try again.")}</p>`
-            : permResult.system === "denied" || permResult.mic === "denied"
+          permResult.system === "denied" || permResult.mic === "denied"
             ? `<p class="hint">${t(
                 "去「系统设置 → 隐私与安全性」，在「麦克风」和「屏幕与系统录音」里打开 Tingo，然后退出再重新打开 Tingo。之前拒绝过的话，可以在终端运行 <code>tccutil reset Microphone io.github.tancheng33.tingo</code> 和 <code>tccutil reset ScreenCapture io.github.tancheng33.tingo</code> 后重试。",
                 "Open System Settings → Privacy & Security, turn Tingo on under Microphone and Screen & System Audio Recording, then quit and reopen Tingo. If you denied it before, run <code>tccutil reset Microphone io.github.tancheng33.tingo</code> and <code>tccutil reset ScreenCapture io.github.tancheng33.tingo</code> in Terminal and try again.",

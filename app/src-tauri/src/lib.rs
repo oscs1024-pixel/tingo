@@ -8,9 +8,6 @@
 //! - 识别模型：App 数据目录下的 models/，首次使用时在界面里下载；改名前下载的会搬过来
 //! - 录音组件：打包在 App 资源里的 tingo-recorder（Swift，ScreenCaptureKit + AVFoundation）
 //! - 示例会议：打包在 App 资源里的 sample/（新手引导里一键导入）
-//!
-//! iOS 上：会议在 App 的「文稿」里（「文件」App 能看到），配置在 App 数据目录；不能起子进程，
-//! 录音、解码、压缩、PDF 排版由 tauri-plugin-recorder（Swift）提供，只能录麦克风。
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,81 +19,6 @@ use tauri::{Manager, State};
 struct Backend {
     url: Mutex<Option<String>>,
     error: Mutex<Option<String>>,
-    server: Mutex<Option<Server>>,
-}
-
-/// 后端的状态和运行时，重新监听时用
-struct Server {
-    app: server::App,
-    rt: tokio::runtime::Handle,
-    task: Option<tokio::task::JoinHandle<()>>,
-}
-
-/// 在后端运行时上监听一个新端口，换掉之前的监听，返回新地址。
-async fn relisten(backend: Arc<Backend>) -> Result<String, String> {
-    let (app, rt) = {
-        let s = backend.server.lock().unwrap();
-        let s = s.as_ref().ok_or("本地服务还没启动")?;
-        (s.app.clone(), s.rt.clone())
-    };
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let task = rt.spawn(async move {
-        match server::listen(app, 0).await {
-            Ok((port, serve)) => {
-                let _ = tx.send(Ok(format!("http://127.0.0.1:{port}")));
-                serve.await;
-            }
-            Err(e) => {
-                let _ = tx.send(Err(format!("启动本地服务失败：{e}")));
-            }
-        }
-    });
-    let url = rx.await.map_err(|e| e.to_string())??;
-    if let Some(old) = backend.server.lock().unwrap().as_mut().and_then(|s| s.task.replace(task)) {
-        old.abort();
-    }
-    *backend.url.lock().unwrap() = Some(url.clone());
-    Ok(url)
-}
-
-/// 界面连不上本地服务时调用：iOS 把 App 挂起后，系统可能收回监听的 socket。
-/// 重新监听一个端口，正在进行的录音和任务不受影响。
-#[tauri::command]
-async fn backend_restart(state: State<'_, Arc<Backend>>) -> Result<String, String> {
-    relisten(state.inner().clone()).await
-}
-
-/// iOS：录音、解码、压缩、排版交给 Swift 插件
-#[cfg(target_os = "ios")]
-struct IosNative(tauri::AppHandle);
-
-#[cfg(target_os = "ios")]
-impl IosNative {
-    fn plugin(&self) -> State<'_, tauri_plugin_recorder::Recorder<tauri::Wry>> {
-        self.0.state()
-    }
-}
-
-#[cfg(target_os = "ios")]
-impl tingo_engine::record::Native for IosNative {
-    fn start_mic(&self, dir: &std::path::Path) -> Result<(), String> {
-        self.plugin().start_mic(dir)
-    }
-    fn stop_mic(&self) {
-        self.plugin().stop_mic()
-    }
-    fn mic_error(&self) -> Option<String> {
-        self.plugin().mic_error()
-    }
-    fn decode(&self, input: &std::path::Path, out_wav: &std::path::Path) -> Result<(), String> {
-        self.plugin().decode(input, out_wav)
-    }
-    fn compress(&self, wav: &std::path::Path, out_m4a: &std::path::Path) -> Result<(), String> {
-        self.plugin().compress(wav, out_m4a)
-    }
-    fn html_to_pdf(&self, html: &std::path::Path, out: &std::path::Path) -> Result<(), String> {
-        self.plugin().html_to_pdf(html, out)
-    }
 }
 
 /// 界面启动时调用：等后端起来，返回它的地址。
@@ -135,16 +57,9 @@ fn start_backend(app: &tauri::App, state: Arc<Backend>) -> Result<(), String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     migrate_models(&data);
     let resources = app.path().resource_dir().map_err(|e| e.to_string())?;
-    #[cfg(target_os = "ios")]
-    tingo_engine::record::set_native(Arc::new(IosNative(app.handle().clone())));
-    // iOS 沙盒里只有「文稿」「资源库」能写，~/.config 建不了
-    #[cfg(target_os = "ios")]
-    let config_path = data.join("config.toml");
-    #[cfg(not(target_os = "ios"))]
-    let config_path = config::default_path();
     let opt = server::Options {
         root: meetings::default_root(),
-        config_path,
+        config_path: config::default_path(),
         models_dir: data.join("models"),
         recorder_bin: resources.join("tingo-recorder"),
         version: app.package_info().version.to_string(),
@@ -163,20 +78,14 @@ fn start_backend(app: &tauri::App, state: Arc<Backend>) -> Result<(), String> {
                 return;
             }
         };
-        let app = {
-            let _rt = rt.enter();
-            server::app(opt)
-        };
-        *state.server.lock().unwrap() = Some(Server {
-            app,
-            rt: rt.handle().clone(),
-            task: None,
-        });
         rt.block_on(async move {
-            if let Err(e) = relisten(state.clone()).await {
-                *state.error.lock().unwrap() = Some(e);
+            match server::serve(opt, 0).await {
+                Ok((port, serve)) => {
+                    *state.url.lock().unwrap() = Some(format!("http://127.0.0.1:{port}"));
+                    serve.await;
+                }
+                Err(e) => *state.error.lock().unwrap() = Some(format!("启动本地服务失败：{e}")),
             }
-            std::future::pending::<()>().await
         });
     });
     Ok(())
@@ -186,9 +95,8 @@ fn start_backend(app: &tauri::App, state: Arc<Backend>) -> Result<(), String> {
 pub fn run() {
     let backend = Arc::new(Backend::default());
     tauri::Builder::default()
-        .plugin(tauri_plugin_recorder::init())
         .manage(backend.clone())
-        .invoke_handler(tauri::generate_handler![backend_url, backend_restart])
+        .invoke_handler(tauri::generate_handler![backend_url])
         .setup(move |app| {
             if let Err(e) = start_backend(app, backend.clone()) {
                 *backend.error.lock().unwrap() = Some(e);

@@ -1,4 +1,4 @@
-import { api, isIOS, type MeetingSummary } from "../api";
+import { api, type MeetingSummary } from "../api";
 import { isEn, speakerName, t } from "../i18n";
 import { $, $maybe, color, esc, fmt, ICON, initial, main } from "../dom";
 import { refreshMeetings } from "../sidebar";
@@ -30,11 +30,7 @@ function drawMeetings(q: string): void {
   const box = $maybe("#mList");
   if (!box) return;
   const items = S.meetings.filter((m) => !q || (m.title + m.summary + m.speakers.join("")).includes(q));
-  const root = isIOS()
-    ? t("「文件」→ 我的 iPhone → Tingo", "Files → On My iPhone → Tingo")
-    : S.env
-      ? S.env.root.replace(/^\/Users\/[^/]+/, "~")
-      : "~/Documents/tingo";
+  const root = S.env ? S.env.root.replace(/^\/Users\/[^/]+/, "~") : "~/Documents/tingo";
   $("#mCount").textContent = S.meetings.length ? t(`共 ${S.meetings.length} 场，存放在 ${root}`, `${S.meetings.length} meetings, stored in ${root}`) : "";
   if (!S.meetings.length) {
     box.innerHTML = `<div class="empty"><h3>${t("还没有会议", "No meetings yet")}</h3><div>${t("开一场会，或者把已有的录音拖进窗口", "Start a meeting, or drop an existing recording into the window")}</div><a class="btn primary" href="#/">${t("开始录音", "Start recording")}</a></div>`;

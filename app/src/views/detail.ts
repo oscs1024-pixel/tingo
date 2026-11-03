@@ -1,6 +1,6 @@
 /* 会议详情：纪要 / 转写两个视图、回听播放器、说话人改名、编辑纪要、重新生成。 */
 
-import { api, isIOS, type Job, type MeetingDetail, meetingPath, share, url } from "../api";
+import { api, type Job, type MeetingDetail, meetingPath, url } from "../api";
 import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial, main, openModal, toast, tsToMs } from "../dom";
 import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
@@ -51,16 +51,16 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
             d.minutes
               ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}${t("导出", "Export")}${ICON.chevron}</button>
                   <div class="menu" id="exportMenu" hidden>
-                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${isIOS() ? t("A4 排版，发给别人或存到「文件」", "A4 layout — send it or save to Files") : t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
-                    <button data-act="docx" class="desk-only">${ICON.edit}<span><b>${t("导出 Word", "Export Word")}</b><small>${t("可以接着改的 .docx", "An editable .docx")}</small></span></button>
+                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
+                    <button data-act="docx">${ICON.edit}<span><b>${t("导出 Word", "Export Word")}</b><small>${t("可以接着改的 .docx", "An editable .docx")}</small></span></button>
                     <button data-act="srt">${ICON.play}<span><b>${t("导出 SRT 字幕", "Export SRT subtitles")}</b><small>${t("带说话人的逐句字幕", "Line-by-line subtitles with speakers")}</small></span></button>
-                    <button data-act="obsidian" class="desk-only">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
+                    <button data-act="obsidian">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
                     <button data-act="copy">${ICON.copy}<span><b>${t("复制为 Markdown", "Copy as Markdown")}</b><small>${t("粘贴到文档、邮件里", "Paste into docs or email")}</small></span></button>
                   </div></div><button class="btn" id="aPush">${ICON.send}${t("推送到群", "Share to chat")}</button>`
               : ""
           }
           ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? t("重新生成", "Regenerate") : t("生成纪要", "Write minutes")}</button>` : ""}
-          <button class="btn ghost desk-only" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
+          <button class="btn ghost" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
         </div>
       </div>
       <div class="meta">
@@ -352,14 +352,14 @@ function bindExportMenu(d: MeetingDetail): void {
   if (!btn || !menu) return;
   const close = () => {
     menu.hidden = true;
-    document.removeEventListener("pointerdown", outside);
+    document.removeEventListener("mousedown", outside);
   };
-  const outside = (e: PointerEvent) => {
+  const outside = (e: MouseEvent) => {
     if (!menu.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
   };
   btn.onclick = () => {
     menu.hidden = !menu.hidden;
-    if (!menu.hidden) document.addEventListener("pointerdown", outside);
+    if (!menu.hidden) document.addEventListener("mousedown", outside);
   };
   $$<HTMLButtonElement>("button", menu).forEach(
     (b) =>
@@ -374,21 +374,10 @@ function bindExportMenu(d: MeetingDetail): void {
   );
 }
 
-/** 导出完：桌面上已经在访达里选中了；iOS 弹系统分享面板 */
-async function exported(path: string): Promise<void> {
-  const name = path.split("/").pop();
-  if (!isIOS()) return toast(t(`已导出 ${name}，已在访达中选中`, `Exported ${name} — shown in Finder`));
-  try {
-    await share(path);
-  } catch (e) {
-    toast(errorMessage(e), true);
-  }
-}
-
 async function exportFile(d: MeetingDetail, path: string, json?: unknown): Promise<void> {
   try {
     const r = await api<{ path: string }>(meetingPath(d.id, path), json === undefined ? { method: "POST" } : { json });
-    await exported(r.path);
+    toast(t(`已导出 ${r.path.split("/").pop()}，已在访达中选中`, `Exported ${r.path.split("/").pop()} — shown in Finder`));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -398,7 +387,7 @@ async function toPdf(d: MeetingDetail): Promise<void> {
   toast(t("正在排版 PDF…", "Laying out the PDF…"));
   try {
     const r = await api<{ path: string }>(meetingPath(d.id, "/pdf"), { json: { html: minutesDocument(d) } });
-    await exported(r.path);
+    toast(t(`已导出 ${r.path.split("/").pop()}，已在访达中选中`, `Exported ${r.path.split("/").pop()} — shown in Finder`));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -418,7 +407,6 @@ async function toExcalidraw(): Promise<void> {
   if (!S.detail) return;
   try {
     const r = await api<{ paths: string[] }>(meetingPath(S.detail.id, "/excalidraw"), { method: "POST" });
-    if (isIOS() && r.paths?.[0]) return await share(r.paths[0]);
     const name = r.paths?.[0]?.split("/").pop() ?? "";
     toast(t(`已导出${name}，拖进 excalidraw.com 即可编辑`, `Exported ${name} — drop it into excalidraw.com to edit`));
   } catch (e) {

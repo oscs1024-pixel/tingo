@@ -339,7 +339,6 @@ async fn env(State(s): State<Shared>) -> Json<Value> {
             .unwrap_or(false);
     Json(json!({
         "version": s.opt.version,
-        "platform": if cfg!(target_os = "ios") { "ios" } else { std::env::consts::OS },
         "root": s.opt.root,
         "ffmpeg": true, // 桌面版不需要 ffmpeg
         "system_audio": system_audio_supported(&s.opt.recorder_bin),
@@ -354,7 +353,7 @@ async fn env(State(s): State<Shared>) -> Json<Value> {
 }
 
 fn system_audio_supported(bin: &Path) -> bool {
-    if record::native().is_some() || !bin.is_file() {
+    if !bin.is_file() {
         return false;
     }
     let out = std::process::Command::new("/usr/bin/sw_vers")
@@ -1709,24 +1708,9 @@ pub async fn serve(
     opt: Options,
     port: u16,
 ) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
-    listen(app(opt), port).await
-}
-
-/// 建好全部状态的服务（任务、录音、模型）；克隆后共用同一份状态。
-pub type App = Router;
-
-/// 和 [`listen`] 分开，是因为 iOS 挂起 App 后系统可能收回监听的 socket，回到前台要重新监听，
-/// 而正在进行的录音和任务不能丢。
-pub fn app(opt: Options) -> App {
-    router(AppState::new(opt))
-}
-
-pub async fn listen(
-    app: App,
-    port: u16,
-) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
+    let app = router(AppState::new(opt));
     Ok((port, async move {
         let _ = axum::serve(listener, app).await;
     }))

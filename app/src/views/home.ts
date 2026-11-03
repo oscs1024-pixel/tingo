@@ -2,7 +2,7 @@
    进度显示在玻璃面板下方和侧边栏。第一次使用时玻璃面板里下载识别模型。另含拖拽导入。 */
 
 import { t } from "../i18n";
-import { api, isIOS, type Job } from "../api";
+import { api, type Job } from "../api";
 import { $, $$, $maybe, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
 import { poll } from "../poll";
 import { isBusy, needsModels, S } from "../state";
@@ -18,7 +18,7 @@ export function renderHome(): void {
   main().innerHTML = `
     <div class="page">
       <div class="hero-head">
-        <span class="hero-tag"><b></b>${isIOS() ? t("本地转写 · 录音不出手机", "On-device transcription · audio never leaves your iPhone") : t("本地转写 · 录音不出本机", "On-device transcription · audio never leaves your Mac")}</span>
+        <span class="hero-tag"><b></b>${t("本地转写 · 录音不出本机", "On-device transcription · audio never leaves your Mac")}</span>
         <h1>${t("开个会，纪要交给我", "Have the meeting. Tingo takes the notes.")}</h1>
         <p>${t("录下会议，自动转写、区分说话人，整理出议题、决议和待办", "Record, transcribe, tell speakers apart — and get topics, decisions and action items")}</p>
       </div>
@@ -28,7 +28,7 @@ export function renderHome(): void {
       </section>
       <div class="home-tasks" id="homeTasks"></div>
       <div class="quick">
-        <div class="quick-item" id="qImport"><span class="ico">${ICON.upload}</span><span><b>${t("导入录音", "Import recording")}</b><small>${isIOS() ? t("从「文件」里选录音或视频", "Pick audio or video from Files") : t("拖进窗口，或点这里选文件", "Drop it in, or click to choose a file")}</small></span>${ICON.chevron}</div>
+        <div class="quick-item" id="qImport"><span class="ico">${ICON.upload}</span><span><b>${t("导入录音", "Import recording")}</b><small>${t("拖进窗口，或点这里选文件", "Drop it in, or click to choose a file")}</small></span>${ICON.chevron}</div>
         <a class="quick-item" href="#/meetings"><span class="ico">${ICON.file}</span><span><b>${t("会议记录", "Meetings")}</b><small id="qCount">${t("查看全部会议", "See all meetings")}</small></span>${ICON.chevron}</a>
         <a class="quick-item" href="#/settings/llm"><span class="ico">${ICON.bot}</span><span><b>${t("大模型", "LLM")}</b><small id="qModel">${t("设置纪要用的模型", "Choose the model that writes minutes")}</small></span>${ICON.chevron}</a>
         <a class="quick-item" href="#/settings/push"><span class="ico">${ICON.send}</span><span><b>${t("推送到群", "Share to chat")}</b><small>${t("飞书 · 钉钉 · 企业微信", "Feishu · DingTalk · WeCom")}</small></span>${ICON.chevron}</a>
@@ -100,7 +100,7 @@ function downloadPanel(): string {
   return `
     <div class="live-head" style="color:var(--blue)">${t("第一次使用", "First run")}</div>
     <div class="timer" style="font-size:22px;margin:12px 0 6px;font-family:var(--font)">${t(`先下载识别模型（约 ${mb} MB）`, `Download the speech model first (~${mb} MB)`)}</div>
-    <div class="proc-note">${isIOS() ? t("只需下载一次，建议连着 Wi-Fi。识别、区分说话人都在这台手机上完成，录音不会上传。", "One-time download — Wi-Fi recommended. Recognition and speaker separation run on this iPhone — your audio is never uploaded.") : t("只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。", "One-time download. Recognition and speaker separation run on this Mac — your audio is never uploaded.")}</div>
+    <div class="proc-note">${t("只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。", "One-time download. Recognition and speaker separation run on this Mac — your audio is never uploaded.")}</div>
     <div class="glass-foot">
       <span class="spacer"></span>
       <button class="btn primary" id="dlBtn">${t("下载模型", "Download")}</button>
@@ -114,8 +114,8 @@ function idleForm(): string {
     <input class="title-input" id="fTitle" placeholder="${t("会议名称，比如：周会、项目评审", "Meeting name, e.g. Weekly sync, Design review")}" value="${esc(S.form.title)}" maxlength="60">
     <input class="hot-input" id="fHot" placeholder="${t("热词（可选）：人名、项目代号、专有名词，用逗号隔开", "Hotwords (optional): names, project codes, jargon — comma separated")}" value="${esc(S.form.hotwords)}">
     <div class="glass-foot">
-      <button class="toggle desk-only ${S.form.system && sys ? "on" : ""}" id="tSys" ${sys ? "" : `disabled title='${t("需要 macOS 15+", "Requires macOS 15+")}'`}>${ICON.monitor}${t("系统声音", "System audio")}</button>
-      <button class="toggle desk-only ${S.form.mic ? "on" : ""}" id="tMic">${ICON.mic}${t("麦克风", "Microphone")}</button>
+      <button class="toggle ${S.form.system && sys ? "on" : ""}" id="tSys" ${sys ? "" : `disabled title='${t("需要 macOS 15+", "Requires macOS 15+")}'`}>${ICON.monitor}${t("系统声音", "System audio")}</button>
+      <button class="toggle ${S.form.mic ? "on" : ""}" id="tMic">${ICON.mic}${t("麦克风", "Microphone")}</button>
       <span class="spacer"></span>
       <span class="rec-label">${t("开始录音", "Record")}</span>
       <button class="rec-btn" id="recBtn" title="${t("开始录音", "Start recording")}"><span class="core"></span></button>
@@ -212,8 +212,7 @@ function bindHome(phase: Phase): void {
 
 async function startRecording(): Promise<void> {
   const sys = S.form.system && (!S.env || S.env.system_audio);
-  const mic = S.form.mic || isIOS(); // iOS 只能录麦克风，没有开关
-  if (!sys && !mic) return toast(t("系统声音和麦克风至少开一个", "Turn on system audio or the microphone"), true);
+  if (!sys && !S.form.mic) return toast(t("系统声音和麦克风至少开一个", "Turn on system audio or the microphone"), true);
   const btn = $maybe<HTMLButtonElement>("#recBtn");
   if (btn) btn.disabled = true;
   try {
@@ -221,7 +220,7 @@ async function startRecording(): Promise<void> {
       json: {
         title: S.form.title.trim() || t("会议", "Meeting"),
         system: sys,
-        mic,
+        mic: S.form.mic,
         hotwords: S.form.hotwords.split(/[,，、\s]+/).filter(Boolean),
       },
     });
