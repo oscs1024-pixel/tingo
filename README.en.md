@@ -8,6 +8,7 @@
   <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/badge/download-macOS%20app-1f4bff?logo=apple" alt="Download"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B-000?logo=apple" alt="macOS 13+">
   <img src="https://img.shields.io/badge/license-MIT-34c6f4" alt="MIT">
+  <a href="https://tancheng33.github.io/tingo/en.html"><img src="https://img.shields.io/badge/website-tancheng33.github.io%2Ftingo-555" alt="Website"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-555" alt="中文"></a>
 </p>
 
