@@ -93,6 +93,8 @@ export interface Config {
   secret_set: boolean;
   path: string;
   obsidian: ObsidianConfig;
+  /** 接口协议：openai（OpenAI 兼容）| anthropic */
+  api?: string;
   /** auto | zh | en */
   ui_language?: string;
   minutes_language?: string;

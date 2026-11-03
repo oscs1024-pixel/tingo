@@ -368,6 +368,7 @@ fn config_json(s: &AppState) -> Value {
     json!({
         "base_url": c.llm.base_url,
         "model": c.llm.model,
+        "api": c.llm.api,
         "api_key_set": !key.is_empty(),
         "api_key_hint": hint,
         "hotwords": c.hotwords,
@@ -405,6 +406,8 @@ struct ConfigReq {
     ui_language: Option<String>,
     minutes_language: Option<String>,
     asr_language: Option<String>,
+    /// 接口协议 openai | anthropic，不传就不改
+    api: Option<String>,
 }
 
 /// 设置页传来的语言选项；不认识的值报错
@@ -434,6 +437,12 @@ async fn put_config(State(s): State<Shared>, Json(r): Json<ConfigReq>) -> ApiRes
     let mut c = s.config();
     c.llm.base_url = r.base_url.trim().into();
     c.llm.model = r.model.trim().into();
+    if let Some(a) = &r.api {
+        if !matches!(a.trim().to_ascii_lowercase().as_str(), "openai" | "anthropic") {
+            return Err(bad(tr(&format!("不认识的接口协议：{a}"), &format!("Unknown API protocol: {a}"))));
+        }
+        c.llm.api = config::normalize_api(Some(a));
+    }
     if let Some(k) = r.api_key {
         c.llm.api_key = k.trim().into();
     }
@@ -471,18 +480,38 @@ struct LlmReq {
     #[serde(default)]
     model: String,
     api_key: Option<String>,
+    /// openai | anthropic；不传时，地址和已保存的一样就用已保存的协议，否则当 openai
+    api: Option<String>,
 }
 
-fn list_models(base_url: &str, key: &str) -> Option<Vec<String>> {
+impl LlmReq {
+    fn api(&self, s: &AppState) -> String {
+        match &self.api {
+            Some(a) => config::normalize_api(Some(a)),
+            None => {
+                let c = s.config().llm;
+                if c.base_url.trim_end_matches('/') == self.base_url.trim_end_matches('/') { c.api } else { "openai".into() }
+            }
+        }
+    }
+}
+
+fn list_models(base_url: &str, key: &str, api: &str) -> Option<Vec<String>> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(if api == "anthropic" { 10 } else { 3 }))
         .build()
         .ok()?;
-    let r = client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
-        .bearer_auth(if key.is_empty() { "none" } else { key })
-        .send()
-        .ok()?;
+    let req = if api == "anthropic" {
+        client
+            .get(format!("{}/models?limit=1000", summarize::anthropic_v1(base_url))) // 默认一页只有 20 个
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01")
+    } else {
+        client
+            .get(format!("{}/models", base_url.trim_end_matches('/')))
+            .bearer_auth(if key.is_empty() { "none" } else { key })
+    };
+    let r = req.send().ok()?;
     if !r.status().is_success() {
         return None;
     }
@@ -497,9 +526,10 @@ fn list_models(base_url: &str, key: &str) -> Option<Vec<String>> {
 }
 
 async fn test_llm(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Value> {
+    let api = r.api(&s);
     let key = r.api_key.unwrap_or_else(|| s.config().llm.api_key);
     let (url, model) = (r.base_url, r.model);
-    let ids = tokio::task::spawn_blocking(move || list_models(&url, &key))
+    let ids = tokio::task::spawn_blocking(move || list_models(&url, &key, &api))
         .await
         .ok()
         .flatten();
@@ -524,9 +554,10 @@ async fn test_llm(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Value>
 }
 
 async fn llm_models(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Value> {
+    let api = r.api(&s);
     let key = r.api_key.unwrap_or_else(|| s.config().llm.api_key);
     let url = r.base_url;
-    let ids = tokio::task::spawn_blocking(move || list_models(&url, &key))
+    let ids = tokio::task::spawn_blocking(move || list_models(&url, &key, &api))
         .await
         .ok()
         .flatten();
@@ -560,6 +591,7 @@ async fn llm_providers() -> Json<Value> {
                     let models = list_models(
                         p["base_url"].as_str().unwrap(),
                         p["api_key"].as_str().unwrap(),
+                        "openai",
                     );
                     p["running"] = models.is_some().into();
                     p["models"] = json!(models.unwrap_or_default());

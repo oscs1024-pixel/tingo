@@ -1,4 +1,4 @@
-"""用任一 OpenAI 兼容接口把转写整理成会议纪要（中文或英文）。"""
+"""用任一 OpenAI 兼容接口（或 Anthropic Messages 接口）把转写整理成会议纪要（中文或英文）。"""
 
 from __future__ import annotations
 
@@ -223,9 +223,7 @@ def annotate_dates(text: str, d: date) -> str:
     return _DAY_RE.sub(day, _WEEK_RE.sub(week, text))
 
 
-def _client(cfg: LLMConfig):
-    from openai import OpenAI
-
+def _api_key(cfg: LLMConfig) -> str:
     api_key = cfg.api_key or ("ollama" if _is_local(cfg) else "")
     if not api_key:
         raise RuntimeError(
@@ -234,11 +232,18 @@ def _client(cfg: LLMConfig):
                 "No LLM API key configured: run `tingo config` to see how, or set TINGO_LLM_API_KEY",
             )
         )
-    return OpenAI(base_url=cfg.base_url, api_key=api_key)
+    return api_key
+
+
+def _client(cfg: LLMConfig):
+    from openai import OpenAI
+
+    return OpenAI(base_url=cfg.base_url, api_key=_api_key(cfg))
 
 
 def _is_local(cfg: LLMConfig) -> bool:
-    return is_ollama(cfg.base_url, cfg.model)
+    # Ollama 只走 OpenAI 兼容协议；选了 anthropic 就不去探测
+    return cfg.api != "anthropic" and is_ollama(cfg.base_url, cfg.model)
 
 
 @functools.lru_cache(maxsize=16)
@@ -293,6 +298,37 @@ def ollama_context(cfg: LLMConfig) -> int | None:
     return int(m.group(1)) if m else None
 
 
+class _Output:
+    """把流式片段累计成回答：正文去掉 <think>…</think> 后报给 on_token，思考字数报给 on_think。"""
+
+    def __init__(self, on_token: Callable[[str], None] | None, on_think: Callable[[int], None] | None):
+        self.on_token, self.on_think = on_token, on_think
+        self.raw = ""
+        self.shown = 0
+        self.thought = 0
+
+    def think(self, text: str) -> None:
+        if text:
+            self.thought += len(text)
+            if self.on_think:
+                self.on_think(self.thought)
+
+    def text(self, delta: str) -> None:
+        if not delta:
+            return
+        self.raw += delta
+        visible = strip_think(self.raw, partial=True)
+        if len(visible) > self.shown:
+            if self.on_token:
+                self.on_token(visible[self.shown :])
+            self.shown = len(visible)
+        elif self.shown == 0 and self.raw.lstrip().startswith("<think>") and self.on_think:
+            self.on_think(self.thought + len(self.raw))
+
+    def result(self) -> str:
+        return strip_think(self.raw).strip()
+
+
 def _chat(
     cfg: LLMConfig,
     prompt: str,
@@ -301,11 +337,15 @@ def _chat(
     on_think: Callable[[int], None] | None = None,
     system: str = SYSTEM,
 ) -> str:
-    """流式调用 chat/completions，返回去掉思考过程的完整回答。
+    """流式调用 chat/completions（api = anthropic 时是 messages），返回去掉思考过程的完整回答。
 
     on_think(已思考字数)：推理模型先长时间思考，不报出来界面就像卡住了。
     思考内容有的放在 reasoning_content / reasoning 字段，有的夹在正文的 <think> 里，两种都算。
     """
+    out = _Output(on_token, on_think)
+    if cfg.api == "anthropic":
+        _chat_anthropic(cfg, prompt, system, out)
+        return out.result()
     extra: dict = {}
     if not think and _is_local(cfg):
         # Ollama 的 OpenAI 兼容接口用 reasoning_effort=none 关掉 Qwen3 等模型的思考；只对本地生效，远程接口未必认这个值
@@ -317,9 +357,6 @@ def _chat(
         stream=True,
         extra_body=extra or None,
     )
-    raw = ""
-    shown = 0
-    thought = 0
     for chunk in stream:
         if not chunk.choices:
             continue
@@ -327,22 +364,98 @@ def _chat(
         reasoning = getattr(d, "reasoning_content", None)
         if not isinstance(reasoning, str):
             reasoning = getattr(d, "reasoning", None)
-        if isinstance(reasoning, str) and reasoning:
-            thought += len(reasoning)
-            if on_think:
-                on_think(thought)
-        delta = d.content or ""
-        if not delta:
-            continue
-        raw += delta
-        visible = strip_think(raw, partial=True)
-        if len(visible) > shown:
-            if on_token:
-                on_token(visible[shown:])
-            shown = len(visible)
-        elif shown == 0 and raw.lstrip().startswith("<think>") and on_think:
-            on_think(thought + len(raw))
-    return strip_think(raw).strip()
+        if isinstance(reasoning, str):
+            out.think(reasoning)
+        out.text(d.content or "")
+    return out.result()
+
+
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_MAX_TOKENS = 16000
+
+
+def anthropic_v1(base_url: str) -> str:
+    """Anthropic 接口的 /v1 根：https://api.anthropic.com 和 https://api.anthropic.com/v1 都认。"""
+    root = base_url.strip().rstrip("/")
+    return root if root.endswith("/v1") else root + "/v1"
+
+
+def anthropic_headers(api_key: str) -> dict[str, str]:
+    return {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+
+
+def anthropic_models(base_url: str, api_key: str, timeout: float = 15) -> list[str]:
+    """GET {v1}/models，返回排好序的模型 id；连不上或返回非 200 时抛异常。"""
+    import httpx
+
+    # 默认一页只有 20 个，一次取全
+    r = httpx.get(
+        anthropic_v1(base_url) + "/models",
+        params={"limit": 1000},
+        headers=anthropic_headers(api_key),
+        timeout=timeout,
+    )
+    r.raise_for_status()
+    return sorted(m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and m.get("id"))
+
+
+def _chat_anthropic(cfg: LLMConfig, prompt: str, system: str, out: _Output) -> None:
+    """Anthropic Messages API 的流式调用（SSE）：text_delta 是正文，thinking_delta 只计思考字数。"""
+    import json
+
+    import httpx
+
+    key = _api_key(cfg)
+    body = {
+        "model": cfg.model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": True,
+    }
+    url = cfg.base_url
+    try:
+        with httpx.stream(
+            "POST",
+            anthropic_v1(cfg.base_url) + "/messages",
+            headers=anthropic_headers(key),
+            json=body,
+            timeout=httpx.Timeout(1800, connect=20),
+        ) as r:
+            if r.status_code >= 400:
+                text = r.read().decode("utf-8", "replace")[:300]
+                raise RuntimeError(
+                    tr(f"大模型返回 {r.status_code}：{text}", f"The language model returned {r.status_code}: {text}")
+                )
+            try:
+                for line in r.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[len("data:") :].strip())
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    kind = event.get("type")
+                    if kind == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            out.text(delta.get("text") or "")
+                        elif delta.get("type") == "thinking_delta":
+                            out.think(delta.get("thinking") or "")
+                    elif kind == "error":
+                        msg = (event.get("error") or {}).get("message") or "unknown error"
+                        raise RuntimeError(tr(f"大模型返回错误：{msg}", f"The language model returned an error: {msg}"))
+                    elif kind == "message_stop":
+                        break
+            except httpx.HTTPError as e:
+                raise RuntimeError(
+                    tr(f"读取大模型输出中断：{e}", f"Lost the connection while reading the model's output: {e}")
+                ) from e
+    except httpx.HTTPError as e:
+        raise RuntimeError(tr(f"连不上大模型（{url}）：{e}", f"Couldn't reach the language model ({url}): {e}")) from e
 
 
 def strip_think(text: str, partial: bool = False) -> str:

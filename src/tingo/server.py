@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from . import __version__, config, i18n, meetings
 from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
-from .summarize import is_ollama
+from .summarize import anthropic_models, is_ollama
 from .transcript import Transcript, fmt_ts
 
 WEB_DIR = Path(__file__).with_name("web")
@@ -69,11 +69,13 @@ LOCAL_PROVIDERS_EN = {
 }
 
 
-def _list_models(base_url: str, api_key: str) -> list[str] | None:
-    """GET /v1/models；连不上返回 None。"""
+def _list_models(base_url: str, api_key: str, api: str = "openai") -> list[str] | None:
+    """GET /v1/models；连不上返回 None。api = anthropic 时按 Anthropic 的鉴权头和 /v1 规则。"""
     import httpx
 
     try:
+        if api == "anthropic":
+            return anthropic_models(base_url, api_key, timeout=10)
         r = httpx.get(
             base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key or 'none'}"}, timeout=2
         )
@@ -159,6 +161,7 @@ class ConfigRequest(BaseModel):
     base_url: str
     model: str
     api_key: str | None = None  # None 表示不改
+    api: str | None = None  # openai | anthropic，None 表示不改
     hotwords: list[str] = []
     webhook: str = ""
     secret: str | None = None
@@ -193,6 +196,15 @@ class LLMTestRequest(BaseModel):
     base_url: str
     model: str
     api_key: str | None = None
+    api: str | None = None  # openai | anthropic；不传时见 _request_api
+
+
+def _request_api(req: LLMTestRequest) -> str:
+    """测试连接 / 列模型用哪种协议：请求里给了就用它；没给时，地址和已保存的一样就沿用已保存的，否则按 openai。"""
+    if req.api is not None:
+        return config.normalize_api(req.api)
+    saved = config.load().llm
+    return saved.api if req.base_url.rstrip("/") == saved.base_url.rstrip("/") else "openai"
 
 
 def create_app(root: Path | None = None) -> FastAPI:
@@ -331,7 +343,8 @@ def create_app(root: Path | None = None) -> FastAPI:
             "system_audio": system_audio_supported(),
             "model_cached": asr.model_loaded() or any(cache.glob("**/*speech_seaco_paraformer*")),
             "model_loaded": asr.model_loaded(),
-            "llm_ready": bool(cfg.llm.api_key) or is_ollama(cfg.llm.base_url, cfg.llm.model),
+            "llm_ready": bool(cfg.llm.api_key)
+            or (cfg.llm.api != "anthropic" and is_ollama(cfg.llm.base_url, cfg.llm.model)),
             "llm_model": cfg.llm.model,
         }
 
@@ -342,6 +355,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         return {
             "base_url": cfg.llm.base_url,
             "model": cfg.llm.model,
+            "api": cfg.llm.api,
             "api_key_set": bool(key),
             "api_key_hint": f"{key[:3]}…{key[-4:]}" if len(key) > 10 else (i18n.tr("已设置", "set") if key else ""),
             "hotwords": cfg.hotwords,
@@ -360,6 +374,11 @@ def create_app(root: Path | None = None) -> FastAPI:
         cfg.llm.base_url, cfg.llm.model = req.base_url.strip(), req.model.strip()
         if req.api_key is not None:
             cfg.llm.api_key = req.api_key.strip()
+        if req.api is not None:
+            api = req.api.strip().lower()
+            if api not in config.LLM_APIS:
+                raise HTTPException(400, i18n.tr(f"不认识的接口协议：{req.api}", f"Unknown API protocol: {req.api}"))
+            cfg.llm.api = api
         cfg.hotwords = [w.strip() for w in req.hotwords if w.strip()]
         cfg.webhook = req.webhook.strip()
         if req.secret is not None:
@@ -411,7 +430,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.post("/api/llm/models")
     def llm_models(req: LLMTestRequest) -> dict:
         key = req.api_key if req.api_key is not None else config.load().llm.api_key
-        models = _list_models(req.base_url, key or "none")
+        models = _list_models(req.base_url, key or "none", _request_api(req))
         return {"ok": models is not None, "models": models or []}
 
     @app.post("/api/config/test")
@@ -420,8 +439,11 @@ def create_app(root: Path | None = None) -> FastAPI:
 
         key = req.api_key if req.api_key is not None else config.load().llm.api_key
         try:
-            client = OpenAI(base_url=req.base_url, api_key=key or "ollama", timeout=15)
-            ids = [m.id for m in client.models.list().data]
+            if _request_api(req) == "anthropic":
+                ids = anthropic_models(req.base_url, key or "", timeout=10)
+            else:
+                client = OpenAI(base_url=req.base_url, api_key=key or "ollama", timeout=15)
+                ids = [m.id for m in client.models.list().data]
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "message": i18n.tr(f"连不上：{e}", f"Couldn't connect: {e}")}
         # Ollama 列出的模型名带 :latest

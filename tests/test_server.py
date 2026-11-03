@@ -11,7 +11,15 @@ from tingo.transcript import Sentence, Transcript
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     monkeypatch.setattr("tingo.config.CONFIG_PATH", tmp_path / "config.toml")
-    for k in ("TINGO_LLM_API_KEY", "TINGO_LLM_BASE_URL", "TINGO_LLM_MODEL", "DEEPSEEK_API_KEY", "TINGO_WEBHOOK"):
+    for k in (
+        "TINGO_LLM_API_KEY",
+        "TINGO_LLM_BASE_URL",
+        "TINGO_LLM_MODEL",
+        "DEEPSEEK_API_KEY",
+        "TINGO_WEBHOOK",
+        "TINGO_LLM_API",
+        "JIYAO_LLM_API",
+    ):
         monkeypatch.delenv(k, raising=False)
     r = tmp_path / "meetings"
     m = r / "2026-11-02_1430_周会"
@@ -580,3 +588,53 @@ def test_excalidraw_export_english_minutes(client, root, opened):
 def test_meeting_card_reads_english_summary(client, root):
     (root / MID / "纪要.md").write_text("# Weekly\n\n- Date: 2026-11-02 (Monday)\n\n## Summary\nShip on Friday.\n")
     assert client.get("/api/meetings").json()[0]["summary"] == "Ship on Friday."
+
+
+def test_config_api_roundtrip_and_invalid_rejected(client):
+    body = {"base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "api_key": "sk-ant-x"}
+    assert client.get("/api/config").json()["api"] == "openai"
+    assert client.put("/api/config", json={**body, "api": " Anthropic "}).json()["api"] == "anthropic"
+    assert client.put("/api/config", json=body).json()["api"] == "anthropic"  # 不传就不改
+    r = client.put("/api/config", json={**body, "api": "gemini"})
+    assert r.status_code == 400 and r.json()["detail"] == "不认识的接口协议：gemini"
+    r = client.put("/api/config", json={**body, "api": "gemini"}, headers={"X-Tingo-Lang": "en"})
+    assert r.status_code == 400 and r.json()["detail"] == "Unknown API protocol: gemini"
+    assert client.get("/api/config").json()["api"] == "anthropic"  # 拒绝时不写入
+
+
+def test_llm_models_and_test_pick_protocol(client, monkeypatch):
+    from tingo import server
+
+    seen = []
+
+    def fake_anthropic(base_url, api_key, timeout=15):
+        seen.append(("anthropic", base_url, api_key))
+        return ["claude-haiku-4-5", "claude-sonnet-4-5"]
+
+    def fake_list(base_url, api_key, api="openai"):
+        seen.append((api, base_url, api_key))
+        return fake_anthropic(base_url, api_key) if api == "anthropic" else ["gpt"]
+
+    monkeypatch.setattr(server, "_list_models", fake_list)
+    monkeypatch.setattr(server, "anthropic_models", fake_anthropic)
+    saved = {
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-sonnet-4-5",
+        "api_key": "sk-ant",
+        "api": "anthropic",
+    }
+    client.put("/api/config", json=saved)
+
+    # 地址与已保存的一样：沿用已保存的协议；不一样：openai；显式给了：照办
+    probe = {"base_url": saved["base_url"] + "/", "model": "claude-sonnet-4-5"}  # 末尾斜杠不影响比较
+    assert client.post("/api/llm/models", json=probe).json()["models"] == ["claude-haiku-4-5", "claude-sonnet-4-5"]
+    assert client.post("/api/llm/models", json={**probe, "base_url": "https://other/v1"}).json()["models"] == ["gpt"]
+    other = {**probe, "base_url": "https://other", "api": "anthropic"}
+    assert client.post("/api/llm/models", json=other).json()["ok"]
+    assert [s[0] for s in seen] == ["anthropic", "anthropic", "openai", "anthropic", "anthropic"]
+
+    seen.clear()
+    assert client.post("/api/config/test", json=probe).json()["ok"]
+    assert seen == [("anthropic", "https://api.anthropic.com/", "sk-ant")]
+    r = client.post("/api/config/test", json={**probe, "model": "claude-x"}).json()
+    assert not r["ok"] and "claude-haiku-4-5" in r["message"]

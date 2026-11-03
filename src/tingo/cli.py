@@ -325,7 +325,7 @@ def show_config() -> None:
     key = cfg.llm.api_key
     masked = f"{key[:5]}…{key[-4:]}" if len(key) > 12 else ("未设置" if not key else "已设置")
     console.print(f"配置文件：{path}")
-    console.print(f"  LLM：{cfg.llm.model} @ {cfg.llm.base_url}（key {masked}）")
+    console.print(f"  LLM：{cfg.llm.model} @ {cfg.llm.base_url}（{cfg.llm.api} 协议，key {masked}）")
     console.print(f"  热词：{'、'.join(cfg.hotwords) or '无'}")
     console.print(f"  推送：{cfg.webhook or '未配置'}")
 
@@ -359,13 +359,17 @@ def doctor() -> None:
     )
 
     cfg = config.load()
-    from .summarize import is_ollama
+    from .summarize import anthropic_models, is_ollama
 
-    if cfg.llm.api_key or is_ollama(cfg.llm.base_url, cfg.llm.model):
+    anthropic = cfg.llm.api == "anthropic"
+    if cfg.llm.api_key or (not anthropic and is_ollama(cfg.llm.base_url, cfg.llm.model)):
         from openai import OpenAI
 
         try:
-            OpenAI(base_url=cfg.llm.base_url, api_key=cfg.llm.api_key or "ollama", timeout=10).models.list()
+            if anthropic:
+                anthropic_models(cfg.llm.base_url, cfg.llm.api_key, timeout=10)
+            else:
+                OpenAI(base_url=cfg.llm.base_url, api_key=cfg.llm.api_key or "ollama", timeout=10).models.list()
             check(f"大模型 {cfg.llm.model}", True)
         except Exception as e:  # noqa: BLE001
             check(f"大模型 {cfg.llm.model}", False, f"连不上 {cfg.llm.base_url}：{e}")

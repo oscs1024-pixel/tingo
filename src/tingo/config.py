@@ -55,6 +55,16 @@ class LLMConfig:
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-chat"
+    api: str = "openai"  # 接口协议：openai（OpenAI 兼容的 chat/completions）| anthropic（Claude 的 messages）
+
+
+LLM_APIS = ("openai", "anthropic")
+
+
+def normalize_api(value: object) -> str:
+    """接口协议只认 openai / anthropic，其它值（包括没写）都当 openai。与桌面版的 normalize_api 一致。"""
+    v = value.strip().lower() if isinstance(value, str) else ""
+    return v if v in LLM_APIS else "openai"
 
 
 @dataclass
@@ -102,6 +112,7 @@ def load() -> Config:
             base_url=llm.get("base_url", LLMConfig.base_url),
             api_key=llm.get("api_key", ""),
             model=llm.get("model", LLMConfig.model),
+            api=normalize_api(llm.get("api")),
         ),
         hotwords=list(data.get("hotwords", llm.get("hotwords", []))),  # 早期模板误把 hotwords 写在 [llm] 下
         webhook=push.get("webhook", ""),
@@ -119,6 +130,8 @@ def load() -> Config:
 
     cfg.llm.base_url = env_var("LLM_BASE_URL", cfg.llm.base_url)
     cfg.llm.model = env_var("LLM_MODEL", cfg.llm.model)
+    if api := env_var("LLM_API"):
+        cfg.llm.api = normalize_api(api)
     cfg.llm.api_key = env_var("LLM_API_KEY") or cfg.llm.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
     cfg.webhook = env_var("WEBHOOK", cfg.webhook)
     cfg.webhook_secret = env_var("WEBHOOK_SECRET", cfg.webhook_secret)
@@ -151,7 +164,8 @@ def save(cfg: Config) -> Path:
         "[llm]\n"
         f"base_url = {_toml_str(cfg.llm.base_url)}\n"
         f"api_key = {_toml_str(cfg.llm.api_key)}\n"
-        f"model = {_toml_str(cfg.llm.model)}\n\n"
+        f"model = {_toml_str(cfg.llm.model)}\n"
+        f"api = {_toml_str(cfg.llm.api)}\n\n"
         "[push]\n"
         f"webhook = {_toml_str(cfg.webhook)}\n"
         f"secret = {_toml_str(cfg.webhook_secret)}\n\n"

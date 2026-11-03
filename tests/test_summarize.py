@@ -322,3 +322,164 @@ def test_calendar_hint_en():
     assert hint.splitlines()[1] == "- Today Oct 28 (Wednesday), tomorrow Oct 29, the day after tomorrow Oct 30"
     assert "- This week: Mon Oct 26, Tue Oct 27, Wed Oct 28, Thu Oct 29, Fri Oct 30, Sat Oct 31, Sun Nov 1" in hint
     assert "- The week after next: Mon Nov 9," in hint
+
+
+class _SSE:
+    """假的 httpx.stream 响应：按行给出 SSE，记下请求。"""
+
+    def __init__(self, lines, status=200, body=b""):
+        self.lines, self.status_code, self.body = lines, status, body
+        self.calls = []
+
+    def __call__(self, method, url, headers, json, timeout):
+        self.calls.append({"method": method, "url": url, "headers": headers, "json": json})
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+    def iter_lines(self):
+        yield from self.lines
+
+
+def _event(kind, **fields):
+    import json
+
+    return "data: " + json.dumps({"type": kind, **fields}, ensure_ascii=False)
+
+
+def _text(t):
+    return _event("content_block_delta", index=1, delta={"type": "text_delta", "text": t})
+
+
+ANTHROPIC = LLMConfig(
+    base_url="https://api.anthropic.com/", api_key="sk-ant", model="claude-sonnet-4-5", api="anthropic"
+)
+
+
+def test_anthropic_chat_streams_text_and_thinking(monkeypatch):
+    import httpx
+
+    sse = _SSE(
+        [
+            "event: message_start",
+            _event("message_start", message={"id": "m"}),
+            "",
+            _event("content_block_start", index=0, content_block={"type": "thinking", "thinking": ""}),
+            _event("content_block_delta", index=0, delta={"type": "thinking_delta", "thinking": "先看议题"}),
+            _event("content_block_delta", index=0, delta={"type": "thinking_delta", "thinking": "再看待办"}),
+            _event("content_block_delta", index=0, delta={"type": "signature_delta", "signature": "sig"}),
+            _event("ping"),
+            "data: not json",
+            _text("<think>x</think>"),
+            _text("# 标题"),
+            _text("\n正文"),
+            _event("message_stop"),
+            _text("停止之后的不要"),
+        ]
+    )
+    monkeypatch.setattr(httpx, "stream", sse)
+    thinking, tokens = [], []
+    out = sm._chat(ANTHROPIC, "转写", tokens.append, think=False, on_think=thinking.append, system="系统")
+    assert out == "".join(tokens) == "# 标题\n正文"
+    assert thinking == [4, 8, 24]  # 正文里夹的 <think>…</think> 同 openai 协议一样计入思考字数
+
+    (call,) = sse.calls
+    assert call["method"] == "POST" and call["url"] == "https://api.anthropic.com/v1/messages"
+    assert call["headers"]["x-api-key"] == "sk-ant" and call["headers"]["anthropic-version"] == "2023-06-01"
+    assert "Authorization" not in call["headers"]
+    assert call["json"] == {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 16000,
+        "system": "系统",
+        "messages": [{"role": "user", "content": "转写"}],
+        "temperature": 0.2,
+        "stream": True,
+    }  # 没有 reasoning_effort：只对 openai 协议的本地 Ollama 生效
+
+
+def test_anthropic_chat_errors(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        _SSE([_text("半截"), _event("error", error={"type": "overloaded_error", "message": "Overloaded"})]),
+    )
+    with pytest.raises(RuntimeError, match="Overloaded"):
+        sm._chat(ANTHROPIC, "p")
+
+    monkeypatch.setattr(httpx, "stream", _SSE([], status=401, body=b'{"error":{"message":"invalid x-api-key"}}'))
+    with pytest.raises(RuntimeError, match="大模型返回 401：.*invalid x-api-key"):
+        sm._chat(ANTHROPIC, "p")
+
+    def refuse(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "stream", refuse)
+    with pytest.raises(RuntimeError, match="连不上大模型"):
+        sm._chat(ANTHROPIC, "p")
+
+    # 没有 key：与 openai 协议同样的提示；anthropic 不去探测 Ollama
+    monkeypatch.setattr(sm, "_ollama_show", lambda *a: pytest.fail("anthropic 不该探测 Ollama"))
+    with pytest.raises(RuntimeError, match="API key"):
+        sm._chat(LLMConfig(base_url="http://localhost:11434", api_key="", api="anthropic"), "p")
+    assert sm.default_max_chars(LLMConfig(base_url="http://localhost:11434", api="anthropic")) == 40000
+
+
+def test_anthropic_models_url_and_headers(monkeypatch):
+    import httpx
+
+    calls = []
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": [{"id": "claude-sonnet-4-5"}, {"id": "claude-haiku-4-5"}, {"type": "model"}],
+                "has_more": False,
+            }
+
+    def get(url, headers, timeout, params=None):
+        assert params == {"limit": 1000}  # 默认一页只有 20 个
+        calls.append((url, headers))
+        return Resp()
+
+    monkeypatch.setattr(httpx, "get", get)
+    for base in (
+        "https://api.anthropic.com",
+        "https://api.anthropic.com/",
+        "https://api.anthropic.com/v1",
+        "https://api.anthropic.com/v1/",
+    ):
+        assert sm.anthropic_models(base, "sk-ant") == ["claude-haiku-4-5", "claude-sonnet-4-5"]
+    assert {url for url, _ in calls} == {"https://api.anthropic.com/v1/models"}
+    assert calls[0][1] == {"x-api-key": "sk-ant", "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    assert sm.anthropic_v1(" https://relay.example/anthropic ") == "https://relay.example/anthropic/v1"
+
+    # 服务端列模型时连不上 / 非 200：返回 None
+    from tingo import server
+
+    assert server._list_models("https://api.anthropic.com", "sk-ant", "anthropic") == [
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5",
+    ]
+
+    class Bad(Resp):
+        status_code = 401
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("401", request=httpx.Request("GET", "https://x"), response=httpx.Response(401))
+
+    monkeypatch.setattr(httpx, "get", lambda url, headers, timeout: Bad())
+    assert server._list_models("https://api.anthropic.com", "bad", "anthropic") is None

@@ -8,6 +8,8 @@ pub struct LlmConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    /// 接口协议："openai"（OpenAI 兼容的 chat/completions，默认）或 "anthropic"（Claude 的 messages）
+    pub api: String,
 }
 
 impl Default for LlmConfig {
@@ -16,6 +18,7 @@ impl Default for LlmConfig {
             base_url: "https://api.deepseek.com".into(),
             api_key: String::new(),
             model: "deepseek-chat".into(),
+            api: "openai".into(),
         }
     }
 }
@@ -79,6 +82,7 @@ struct RawLlm {
     base_url: Option<String>,
     api_key: Option<String>,
     model: Option<String>,
+    api: Option<String>,
     hotwords: Option<Vec<String>>, // 早期模板误把 hotwords 写在 [llm] 下
 }
 
@@ -134,6 +138,14 @@ pub fn with_legacy(new: PathBuf, old: PathBuf) -> PathBuf {
     }
 }
 
+/// 接口协议只认 openai / anthropic，其它值（包括没写）都当 openai
+pub fn normalize_api(v: Option<&str>) -> String {
+    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("anthropic") => "anthropic".into(),
+        _ => "openai".into(),
+    }
+}
+
 pub fn default_path() -> PathBuf {
     if let Some(p) = env_var("CONFIG") {
         return PathBuf::from(p);
@@ -156,6 +168,7 @@ pub fn load(path: &Path) -> Config {
             base_url: raw.llm.base_url.unwrap_or(d.base_url),
             api_key: raw.llm.api_key.unwrap_or_default(),
             model: raw.llm.model.unwrap_or(d.model),
+            api: normalize_api(raw.llm.api.as_deref()),
         },
         hotwords: raw.hotwords.or(raw.llm.hotwords).unwrap_or_default(),
         webhook: raw.push.webhook.unwrap_or_default(),
@@ -183,6 +196,9 @@ pub fn load(path: &Path) -> Config {
     if let Some(v) = env("TINGO_LLM_MODEL") {
         cfg.llm.model = v;
     }
+    if let Some(v) = env("TINGO_LLM_API") {
+        cfg.llm.api = normalize_api(Some(&v));
+    }
     if let Some(v) = env("TINGO_LLM_API_KEY") {
         cfg.llm.api_key = v;
     } else if cfg.llm.api_key.is_empty() {
@@ -206,11 +222,12 @@ fn quote(s: &str) -> String {
 pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
     let words: Vec<String> = cfg.hotwords.iter().map(|w| quote(w)).collect();
     let text = format!(
-        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n\n[ui]\nlanguage = {}\n\n[minutes]\nlanguage = {}\n\n[asr]\nlanguage = {}\n",
+        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\napi = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n\n[ui]\nlanguage = {}\n\n[minutes]\nlanguage = {}\n\n[asr]\nlanguage = {}\n",
         words.join(", "),
         quote(&cfg.llm.base_url),
         quote(&cfg.llm.api_key),
         quote(&cfg.llm.model),
+        quote(&cfg.llm.api),
         quote(&cfg.webhook),
         quote(&cfg.webhook_secret),
         quote(&cfg.obsidian.vault),
@@ -252,6 +269,7 @@ mod tests {
                 base_url: "http://127.0.0.1:3425/v1".into(),
                 api_key: "k\"q".into(),
                 model: "deepseek/deepseek-v4-flash".into(),
+                api: "anthropic".into(),
             },
             hotwords: vec!["星河".into(), "Kafka".into()],
             webhook: "".into(),

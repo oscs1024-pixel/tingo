@@ -13,6 +13,8 @@ interface Preset {
   name: string;
   base_url?: string;
   model?: string;
+  /** 接口协议，默认 openai */
+  api?: "openai" | "anthropic";
   local?: LocalProvider;
 }
 
@@ -21,6 +23,8 @@ const remotePresets = (): Preset[] => [
   { id: "deepseek", name: "DeepSeek", base_url: "https://api.deepseek.com", model: "deepseek-chat" },
   { id: "bailian", name: t("通义千问（百炼）", "Qwen (Bailian)"), base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
   { id: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+  { id: "claude", name: "Claude", base_url: "https://api.anthropic.com/v1", model: "claude-sonnet-5", api: "anthropic" },
+  { id: "gemini", name: "Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash" },
   { id: "custom", name: t("自定义", "Custom") },
 ];
 
@@ -441,14 +445,20 @@ function panelLlm(x: Ctx): void {
   $("#sPanel").innerHTML = `
     <h2>${t("大模型", "LLM")}</h2>
     <p class="hint">${t(
-      "用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。",
-      "Turns the transcript into minutes. Any OpenAI-compatible API works. Local relays (Magpie, CC Switch) are detected automatically; pick local Ollama to keep everything on this Mac.",
+      "用来把转写整理成纪要。支持 OpenAI 兼容接口和 Anthropic（Claude）接口。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。",
+      "Turns the transcript into minutes. Works with OpenAI-compatible and Anthropic (Claude) APIs. Local relays (Magpie, CC Switch) are detected automatically; pick local Ollama to keep everything on this Mac.",
     )}</p>
     <div class="s-grid">
-      <div class="seg" id="sPreset">${presets.map((p) => `<button data-id="${p.id}">${dot(p)}${p.name}</button>`).join("")}</div>
+      <div class="prov-grid" id="sPreset">${presets.map((p) => `<button data-id="${p.id}" title="${esc(p.name)}">${dot(p)}<span>${esc(p.name)}</span></button>`).join("")}</div>
+      <div class="field"><label>${t("接口协议", "API protocol")}</label>
+        ${segChoice("sApi", c.api === "anthropic" ? "anthropic" : "openai", [
+          ["openai", "OpenAI 兼容", "OpenAI-compatible"],
+          ["anthropic", "Anthropic（Claude）", "Anthropic (Claude)"],
+        ])}</div>
       <div class="s-row2">
         <div class="field"><label>${t("接口地址 Base URL", "Base URL")}</label><input class="input" id="sBase" value="${esc(c.base_url)}"></div>
-        <div class="field"><label>${t("模型", "Model")} <span id="sModelCount" style="color:var(--muted-2)"></span></label>
+        <div class="field"><label>${t("模型", "Model")} <span id="sModelCount" style="color:var(--muted-2)"></span>
+          <button class="link-btn" id="sFetch" type="button">${ICON.redo}${t("获取模型列表", "Fetch models")}</button></label>
           <div class="combo"><input class="input" id="sModel" value="${esc(c.model)}" placeholder="${t("点这里从列表里选，也可以直接输入", "Pick from the list or type a model name")}" autocomplete="off" spellcheck="false"><span class="combo-arrow">${ICON.chevron}</span><div class="combo-pop" id="sModelPop" hidden></div></div></div>
       </div>
       <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${keyHint}"></div>
@@ -457,6 +467,8 @@ function panelLlm(x: Ctx): void {
 
   const model = $<HTMLInputElement>("#sModel");
   const key = $<HTMLInputElement>("#sKey");
+  const getApi = bindSeg("sApi");
+  const setApi = (a: string) => $$<HTMLButtonElement>("#sApi button").forEach((b) => b.classList.toggle("on", b.dataset.v === a));
   const markPreset = () => $$<HTMLButtonElement>("#sPreset button").forEach((b) => b.classList.toggle("on", b.dataset.id === presetOf()));
   markPreset();
 
@@ -478,19 +490,39 @@ function panelLlm(x: Ctx): void {
     el.className = "test-msg " + cls;
     el.textContent = text;
   };
-  const fetchModels = async () => {
+  /** 拉模型列表；manual 为 true 时（点了按钮）把结果告诉用户 */
+  const fetchModels = async (manual = false) => {
+    if (!baseInput().value.trim()) {
+      if (manual) msg(t("先填接口地址", "Enter the base URL first"), "bad");
+      return;
+    }
+    if (manual) msg(t("正在获取模型列表…", "Fetching models…"));
     try {
-      const r = await api<{ models: string[] }>("/api/llm/models", {
-        json: { base_url: baseInput().value.trim(), model: "", api_key: key.value.trim() || null },
+      const r = await api<{ ok: boolean; models: string[] }>("/api/llm/models", {
+        json: { base_url: baseInput().value.trim(), model: "", api_key: key.value.trim() || null, api: getApi() },
       });
       setModels(r.models);
-    } catch {
+      if (manual)
+        msg(
+          r.ok
+            ? r.models.length
+              ? t(`找到 ${r.models.length} 个模型，点模型框选择`, `Found ${r.models.length} models — pick one in the model box`)
+              : t("这个接口没有返回模型列表，直接输入模型名即可", "This endpoint didn't return a model list — just type the model name")
+            : t("拿不到模型列表：检查接口地址、API Key 和接口协议", "Couldn't get the model list: check the URL, API key and protocol"),
+          r.ok ? "ok" : "bad",
+        );
+    } catch (e) {
       setModels([]);
+      if (manual) msg(errorMessage(e), "bad");
     }
+  };
+  $("#sFetch").onclick = (e) => {
+    e.preventDefault();
+    fetchModels(true);
   };
   const current = presets.find((p) => p.id === presetOf());
   if (current?.local) setModels(current.local.models, current.local.recommended);
-  else if (current?.id === "custom" && c.base_url) fetchModels(); // 自定义地址：打开设置页时也拉一次模型列表
+  else if (c.base_url) fetchModels(); // 打开设置页时就拉一次模型列表
 
   $$<HTMLButtonElement>("#sPreset button").forEach(
     (b) =>
@@ -506,10 +538,11 @@ function panelLlm(x: Ctx): void {
           setModels([]);
           markPreset();
           baseInput().focus();
-          msg(t("填 OpenAI 兼容接口的地址（一般以 /v1 结尾），填完会自动拉取模型列表", "Enter an OpenAI-compatible base URL (usually ending in /v1); the model list loads automatically"));
+          msg(t("填接口地址（OpenAI 兼容的一般以 /v1 结尾）、选接口协议，再点「获取模型列表」", "Enter the base URL (OpenAI-compatible ones usually end in /v1), choose the protocol, then click Fetch models"));
           return;
         }
         baseInput().value = p.base_url;
+        setApi(p.api ?? "openai");
         if (p.local) {
           const lp = p.local;
           setModels(lp.models, lp.recommended);
@@ -529,13 +562,15 @@ function panelLlm(x: Ctx): void {
       }),
   );
   baseInput().oninput = markPreset;
-  baseInput().onchange = fetchModels;
+  baseInput().onchange = () => fetchModels();
+  key.onchange = () => fetchModels(); // 填了 Key 才拿得到模型列表的服务（OpenAI、Claude 等），填完自动拉一次
+  $$<HTMLButtonElement>("#sApi button").forEach((b) => b.addEventListener("click", () => fetchModels()));
 
   $("#sTest").onclick = async () => {
     msg(t("连接中…", "Connecting…"));
     try {
       const r = await api<{ ok: boolean; message: string }>("/api/config/test", {
-        json: { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null },
+        json: { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null, api: getApi() },
       });
       msg(r.message, r.ok ? "ok" : "bad");
     } catch (e) {
@@ -543,7 +578,7 @@ function panelLlm(x: Ctx): void {
     }
   };
   $("#sSave").onclick = () =>
-    save(x, { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null }, "llm");
+    save(x, { base_url: baseInput().value.trim(), model: model.value.trim(), api_key: key.value.trim() || null, api: getApi() }, "llm");
 }
 
 function panelHotwords(x: Ctx): void {

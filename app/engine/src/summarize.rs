@@ -332,7 +332,7 @@ fn glossary_in(hotwords: &[String], lang: Lang) -> String {
 /// 是不是本机 Ollama 上的这个模型：以 /api/show 里真实的模型文件格式为准
 /// （本机的 OpenAI 兼容中转可能连 /api/show 都仿了，但给不出 gguf）。
 pub fn is_ollama(cfg: &LlmConfig) -> bool {
-    ollama_show(cfg).is_some()
+    cfg.api != "anthropic" && ollama_show(cfg).is_some()
 }
 
 fn ollama_show(cfg: &LlmConfig) -> Option<serde_json::Value> {
@@ -408,6 +408,9 @@ pub fn chat(
     mut on_token: impl FnMut(&str),
     mut on_think: impl FnMut(usize),
 ) -> Result<String, String> {
+    if cfg.api == "anthropic" {
+        return chat_anthropic(cfg, system, prompt, on_token, on_think);
+    }
     let local = is_ollama(cfg);
     let key = if cfg.api_key.is_empty() && local {
         "ollama".to_string()
@@ -502,6 +505,126 @@ pub fn chat(
             shown = visible.len();
         } else if shown == 0 && raw.trim_start().starts_with("<think>") {
             on_think(thought + raw.chars().count());
+        }
+    }
+    Ok(strip_think(&raw, false).trim().to_string())
+}
+
+/// Anthropic 接口的根地址：用户填 https://api.anthropic.com 或 …/v1 都行，统一成以 /v1 结尾
+pub fn anthropic_v1(base_url: &str) -> String {
+    let b = base_url.trim().trim_end_matches('/');
+    if b.ends_with("/v1") {
+        b.to_string()
+    } else {
+        format!("{b}/v1")
+    }
+}
+
+/// 一行 Anthropic 流式事件（SSE 的 data 部分）
+#[derive(Debug, PartialEq)]
+pub enum AnthropicEvent {
+    Text(String),
+    Thinking(usize),
+    Error(String),
+    Stop,
+    Other,
+}
+
+pub fn parse_anthropic_event(data: &str) -> AnthropicEvent {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else { return AnthropicEvent::Other };
+    match v["type"].as_str() {
+        Some("content_block_delta") => match v["delta"]["type"].as_str() {
+            Some("text_delta") => AnthropicEvent::Text(v["delta"]["text"].as_str().unwrap_or("").to_string()),
+            Some("thinking_delta") => AnthropicEvent::Thinking(v["delta"]["thinking"].as_str().unwrap_or("").chars().count()),
+            _ => AnthropicEvent::Other,
+        },
+        Some("error") => AnthropicEvent::Error(v["error"]["message"].as_str().unwrap_or("unknown error").to_string()),
+        Some("message_stop") => AnthropicEvent::Stop,
+        _ => AnthropicEvent::Other,
+    }
+}
+
+/// Claude 等 Anthropic Messages 接口：POST /v1/messages，x-api-key + anthropic-version 头，流式事件见 parse_anthropic_event
+fn chat_anthropic(
+    cfg: &LlmConfig,
+    system: &str,
+    prompt: &str,
+    mut on_token: impl FnMut(&str),
+    mut on_think: impl FnMut(usize),
+) -> Result<String, String> {
+    if cfg.api_key.is_empty() {
+        return Err(tr(
+            "没有配置大模型的 API Key：在设置里填写",
+            "No API key configured for the language model: add one in Settings",
+        )
+        .into());
+    }
+    let body = serde_json::json!({
+        "model": cfg.model,
+        "max_tokens": 16000,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": true,
+    });
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{}/messages", anthropic_v1(&cfg.base_url)))
+        .header("x-api-key", &cfg.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .map_err(|e| {
+            let url = &cfg.base_url;
+            tr(
+                &format!("连不上大模型（{url}）：{e}"),
+                &format!("Couldn't reach the language model ({url}): {e}"),
+            )
+            .to_string()
+        })?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text: String = resp.text().unwrap_or_default().chars().take(300).collect();
+        return Err(tr(
+            &format!("大模型返回 {status}：{text}"),
+            &format!("The language model returned {status}: {text}"),
+        )
+        .into());
+    }
+    let mut raw = String::new();
+    let mut shown = 0;
+    let mut thought = 0usize;
+    for line in BufReader::new(resp).lines() {
+        let line = line.map_err(|e| {
+            tr(
+                &format!("读取大模型输出中断：{e}"),
+                &format!("Lost the connection while reading the model's output: {e}"),
+            )
+            .to_string()
+        })?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
+        match parse_anthropic_event(data) {
+            AnthropicEvent::Text(t) if !t.is_empty() => {
+                raw.push_str(&t);
+                let visible = strip_think(&raw, true);
+                if visible.len() > shown {
+                    on_token(&visible[shown..]);
+                    shown = visible.len();
+                }
+            }
+            AnthropicEvent::Thinking(n) => {
+                thought += n;
+                on_think(thought);
+            }
+            AnthropicEvent::Error(m) => {
+                return Err(tr(&format!("大模型返回错误：{m}"), &format!("The language model returned an error: {m}")).into())
+            }
+            AnthropicEvent::Stop => break,
+            _ => {}
         }
     }
     Ok(strip_think(&raw, false).trim().to_string())
@@ -663,6 +786,26 @@ fn strip_fence(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anthropic_url_and_events() {
+        assert_eq!(anthropic_v1("https://api.anthropic.com"), "https://api.anthropic.com/v1");
+        assert_eq!(anthropic_v1("https://api.anthropic.com/v1/"), "https://api.anthropic.com/v1");
+        assert_eq!(
+            parse_anthropic_event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#),
+            AnthropicEvent::Text("你好".into())
+        );
+        assert_eq!(
+            parse_anthropic_event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想一想"}}"#),
+            AnthropicEvent::Thinking(3)
+        );
+        assert_eq!(
+            parse_anthropic_event(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            AnthropicEvent::Error("Overloaded".into())
+        );
+        assert_eq!(parse_anthropic_event(r#"{"type":"message_stop"}"#), AnthropicEvent::Stop);
+        assert_eq!(parse_anthropic_event(r#"{"type":"ping"}"#), AnthropicEvent::Other);
+    }
     use crate::transcript::Sentence;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {

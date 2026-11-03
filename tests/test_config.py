@@ -9,7 +9,7 @@ from tingo.config import Config, LLMConfig, ObsidianConfig
 RUST_SAVED = (
     "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\n"
     'hotwords = ["星河", "Kafka"]\n\n[llm]\nbase_url = "http://127.0.0.1:3425/v1"\napi_key = "k\\"q"\n'
-    'model = "deepseek/deepseek-v4-flash"\n\n[push]\nwebhook = ""\nsecret = ""\n\n'
+    'model = "deepseek/deepseek-v4-flash"\napi = "anthropic"\n\n[push]\nwebhook = ""\nsecret = ""\n\n'
     '[obsidian]\nvault = "/Users/a/笔记"\nfolder = "会议"\nauto = false\ntranscript = true\n'
     '\n[ui]\nlanguage = "auto"\n\n[minutes]\nlanguage = "auto"\n\n[asr]\nlanguage = "zh"\n'
 )
@@ -18,13 +18,21 @@ RUST_SAVED = (
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.toml")
-    for k in ("TINGO_LLM_API_KEY", "TINGO_LLM_BASE_URL", "TINGO_LLM_MODEL", "DEEPSEEK_API_KEY", "TINGO_WEBHOOK"):
+    for k in (
+        "TINGO_LLM_API_KEY",
+        "TINGO_LLM_BASE_URL",
+        "TINGO_LLM_MODEL",
+        "DEEPSEEK_API_KEY",
+        "TINGO_WEBHOOK",
+        "TINGO_LLM_API",
+        "JIYAO_LLM_API",
+    ):
         monkeypatch.delenv(k, raising=False)
 
 
 def test_roundtrip_with_obsidian_matches_desktop_format():
     cfg = Config(
-        llm=LLMConfig("http://127.0.0.1:3425/v1", 'k"q', "deepseek/deepseek-v4-flash"),
+        llm=LLMConfig("http://127.0.0.1:3425/v1", 'k"q', "deepseek/deepseek-v4-flash", "anthropic"),
         hotwords=["星河", "Kafka"],
         obsidian=ObsidianConfig("/Users/a/笔记", "会议", False, True),
     )
@@ -54,3 +62,24 @@ def test_language_sections_roundtrip_and_defaults():
     config.CONFIG_PATH.write_text('[llm]\nmodel = "m"\n\n[asr]\nlanguage = "fr"\n\n[minutes]\nlanguage = "EN"\n')
     c = config.load()
     assert (c.ui_language, c.minutes_language, c.asr_language) == ("auto", "en", "zh")
+
+
+def test_llm_api_defaults_normalizes_and_env_override(monkeypatch):
+    # 没写 api（老配置、Python 旧版写出的文件）：openai
+    config.CONFIG_PATH.write_text('[llm]\nbase_url = "https://ai.example/v1"\napi_key = "sk"\nmodel = "m"\n')
+    assert config.load().llm.api == "openai"
+    # 去空白、不分大小写；不认识的值当 openai
+    config.CONFIG_PATH.write_text('[llm]\nmodel = "m"\napi = " Anthropic "\n')
+    assert config.load().llm.api == "anthropic"
+    config.CONFIG_PATH.write_text('[llm]\nmodel = "m"\napi = "gemini"\n')
+    assert config.load().llm.api == "openai"
+    # 默认值写回时紧跟在 model 后面
+    config.save(Config())
+    assert '\nmodel = "deepseek-chat"\napi = "openai"\n\n[push]' in config.CONFIG_PATH.read_text(encoding="utf-8")
+    # 环境变量优先，改名前的 JIYAO_ 前缀也认
+    monkeypatch.setenv("JIYAO_LLM_API", "ANTHROPIC")
+    assert config.load().llm.api == "anthropic"
+    monkeypatch.setenv("TINGO_LLM_API", "openai")
+    assert config.load().llm.api == "openai"
+    monkeypatch.setenv("TINGO_LLM_API", "nope")
+    assert config.load().llm.api == "openai"
