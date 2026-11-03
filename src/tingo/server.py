@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -209,6 +209,56 @@ class RecordTestRequest(BaseModel):
     seconds: Any = 3  # 1～10
 
 
+class MetaRequest(BaseModel):
+    """字段都可选，没传的不改；title 为 null 或空串 = 恢复默认标题。类型自己检查（不对时回 400，不是 422）"""
+
+    title: Any = None
+    tags: Any = None
+    archived: Any = None
+
+
+class BatchRequest(BaseModel):
+    ids: Any = None
+    action: Any = None
+    tag: Any = None
+
+
+class CleanupRequest(BaseModel):
+    what: Any = None  # leftovers | audio
+    older_than_days: Any = None  # 0～3650 的整数，0 = 全部
+    archived_only: Any = False
+
+
+BATCH_ACTIONS = ("archive", "unarchive", "tag_add", "tag_remove", "delete", "delete_audio")
+CLEANUP_DAYS_MAX = 3650
+STORAGE_LARGEST = 10  # 存储空间页列出最大的几场会议
+
+
+class TrashUnsupported(RuntimeError):
+    pass
+
+
+def _trash(path: Path) -> None:
+    """移到废纸篓（不是彻底删除）：macOS 用录音组件的 trash 子命令，Linux 有 gio 就用 gio trash。"""
+    if platform.system() == "Darwin":
+        from . import record
+
+        binary = record.ensure_recorder()
+        res = subprocess.run([str(binary), "trash", str(path)], check=False, capture_output=True, text=True, timeout=60)
+        if res.returncode != 0 or "OK" not in res.stdout.split():
+            err = next((line[7:] for line in res.stdout.splitlines() if line.startswith("ERROR: ")), "")
+            raise RuntimeError(err or i18n.tr("移到废纸篓失败", "Couldn't move it to the Trash"))
+        return
+    gio = shutil.which("gio") if platform.system() == "Linux" else None
+    if gio is None:
+        raise TrashUnsupported(
+            i18n.tr("这个系统上没法移到废纸篓", "Moving to the Trash isn't supported on this system")
+        )
+    res = subprocess.run([gio, "trash", str(path)], check=False, capture_output=True, text=True, timeout=60)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or i18n.tr("移到废纸篓失败", "Couldn't move it to the Trash"))
+
+
 def _is_number(v: object) -> bool:
     return isinstance(v, int | float) and not isinstance(v, bool)
 
@@ -309,6 +359,46 @@ def create_app(root: Path | None = None) -> FastAPI:
         if new.meeting and new.kind != "models" and j.kind != "models" and j.meeting == new.meeting:
             return i18n.tr("这场会议正在处理，等它完成", "This meeting is being processed; wait for it to finish")
         return None
+
+    def busy_msg() -> str:
+        return i18n.tr("这场会议正在处理，等它完成", "This meeting is being processed; wait for it to finish")
+
+    def is_busy(meeting_id: str) -> bool:
+        """这场会议有进行中的任务（录音、转写、生成纪要）"""
+        with lock:
+            return any(j.busy and j.kind != "models" and j.meeting == meeting_id for j in jobs)
+
+    def trash(path: Path) -> None:
+        """移到废纸篓；失败时 500，错误信息原样给用户。"""
+        try:
+            _trash(path)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(500, str(e) or e.__class__.__name__) from e
+
+    def trash_meeting(meeting_id: str) -> None:
+        path = folder(meeting_id)
+        if is_busy(meeting_id):
+            raise HTTPException(409, busy_msg())
+        trash(path)
+        log.info("%s 已移到废纸篓", meeting_id)
+
+    def trash_audio(meeting_id: str, missing_ok: bool) -> int:
+        """只把录音（录音.*、system.wav、mic.wav）移到废纸篓，返回腾出的字节数。"""
+        path = folder(meeting_id)
+        if is_busy(meeting_id):
+            raise HTTPException(409, busy_msg())
+        files = meetings.audio_files(path)
+        if not files:
+            if missing_ok:
+                return 0
+            raise HTTPException(400, i18n.tr("这场会议没有录音文件", "This meeting has no recording"))
+        freed = 0
+        for f in files:
+            size = meetings.file_size(f)
+            trash(f)
+            freed += size
+        log.info("%s 录音已移到废纸篓（%d 字节）", meeting_id, freed)
+        return freed
 
     def start_job(job: Job) -> None:
         """登记一个任务。录音同时只能有一场；同一场会议、模型下载各自同时只能有一个任务；其余可以并行
@@ -629,6 +719,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                         "title": info["title"],
                         "date": info["date"],
                         "time": info["time"],
+                        "archived": info["archived"],
                         "minutes_hit": minutes_hit,
                         "hits": hits,
                     }
@@ -636,6 +727,168 @@ def create_app(root: Path | None = None) -> FastAPI:
                 if len(results) >= SEARCH_MEETINGS:
                     break
         return {"q": query, "expanded": expanded, "results": results}
+
+    @app.put("/api/meetings/{meeting_id}/meta")
+    def put_meta(meeting_id: str, req: MetaRequest) -> dict:
+        """改标题、标签、归档（存在 meta.json，不改文件夹名）；返回更新后的列表项。"""
+        path = folder(meeting_id)
+        given = req.model_fields_set
+        if "title" in given and req.title is not None and not isinstance(req.title, str):
+            raise HTTPException(400, i18n.tr("title 只能是文字或 null", "title must be a string or null"))
+        if "tags" in given and (not isinstance(req.tags, list) or not all(isinstance(t, str) for t in req.tags)):
+            raise HTTPException(400, i18n.tr("tags 只能是文字列表", "tags must be a list of strings"))
+        if "archived" in given and not isinstance(req.archived, bool):
+            raise HTTPException(400, i18n.tr("archived 只能是 true 或 false", "archived must be true or false"))
+        meta = meetings.read_meta(path)
+        if "title" in given:
+            meta["title"] = req.title
+        if "tags" in given:
+            meta["tags"] = req.tags
+        if "archived" in given:
+            meta["archived"] = req.archived
+        try:
+            meetings.write_meta(path, meta)
+        except OSError as e:
+            raise HTTPException(500, str(e)) from e
+        return meetings.summary(path)
+
+    @app.delete("/api/meetings/{meeting_id}")
+    def delete_meeting(meeting_id: str) -> dict:
+        """整个会议文件夹移到废纸篓"""
+        trash_meeting(meeting_id)
+        return {"ok": True}
+
+    @app.delete("/api/meetings/{meeting_id}/audio")
+    def delete_audio(meeting_id: str) -> dict:
+        """只把录音移到废纸篓，转写、纪要、导出的文件都保留"""
+        return {"ok": True, "freed_bytes": trash_audio(meeting_id, missing_ok=False)}
+
+    @app.post("/api/meetings/batch")
+    def batch(req: BatchRequest) -> dict:
+        """批量归档 / 加减标签 / 删除 / 删录音。逐个处理，某一个失败不影响其他。"""
+        ids, action = req.ids, req.action
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+            raise HTTPException(400, i18n.tr("没有选中会议", "No meetings selected"))
+        if action not in BATCH_ACTIONS:
+            raise HTTPException(400, i18n.tr(f"不认识的操作：{action}", f"Unknown action: {action}"))
+        tag = req.tag.strip() if isinstance(req.tag, str) else ""
+        if action in ("tag_add", "tag_remove") and not tag:
+            raise HTTPException(400, i18n.tr("请给出标签", "A tag is required"))
+        tag = tag[: meetings.TAG_MAX_CHARS].strip()
+        ok, freed, failed = 0, 0, []
+        for meeting_id in ids:
+            try:
+                if action == "delete":
+                    trash_meeting(meeting_id)
+                elif action == "delete_audio":
+                    freed += trash_audio(meeting_id, missing_ok=True)
+                else:
+                    path = folder(meeting_id)
+                    meta = meetings.read_meta(path)
+                    if action in ("archive", "unarchive"):
+                        meta["archived"] = action == "archive"
+                    elif action == "tag_add":
+                        meta["tags"] = [*meta["tags"], tag]
+                    else:
+                        meta["tags"] = [t for t in meta["tags"] if t != tag]
+                    meetings.write_meta(path, meta)
+                ok += 1
+            except HTTPException as e:
+                failed.append({"id": meeting_id, "error": str(e.detail)})
+            except Exception as e:  # noqa: BLE001 - 一场失败不影响其他
+                failed.append({"id": meeting_id, "error": str(e) or e.__class__.__name__})
+        return {"ok": ok, "failed": failed, "freed_bytes": freed}
+
+    def meeting_folders() -> list[tuple[dict, Path]]:
+        return [(info, root / info["id"]) for info in meetings.list_meetings(root)]
+
+    @app.get("/api/storage")
+    def storage() -> dict:
+        """会议目录占了多少空间：录音、残留文件、最大的几场会议，以及磁盘剩余空间。每次现算。"""
+        items, audio, leftover = [], 0, 0
+        for info, path in meeting_folders():
+            a = sum(meetings.file_size(f) for f in meetings.audio_files(path))
+            audio += a
+            leftover += sum(meetings.file_size(f) for f in meetings.leftover_files(path))
+            items.append(
+                {
+                    "id": info["id"],
+                    "title": info["title"],
+                    "date": info["date"],
+                    "bytes": info["size_bytes"],
+                    "audio_bytes": a,
+                    "archived": info["archived"],
+                }
+            )
+        disk = root
+        while not disk.exists() and disk.parent != disk:
+            disk = disk.parent
+        try:
+            free: int | None = shutil.disk_usage(disk).free
+        except OSError:
+            free = None
+        return {
+            "root": str(root),
+            "count": len(items),
+            "meetings_bytes": sum(i["bytes"] for i in items),
+            "audio_bytes": audio,
+            "leftover_bytes": leftover,
+            "models_bytes": None,  # 识别模型在 ModelScope 缓存里，Python 版不统计
+            "free_bytes": free,
+            "largest": sorted(items, key=lambda i: i["bytes"], reverse=True)[:STORAGE_LARGEST],
+        }
+
+    @app.post("/api/storage/cleanup")
+    def storage_cleanup(req: CleanupRequest) -> dict:
+        """leftovers：残留文件移到废纸篓（count 是文件数）；audio：早于 N 天的会议只删录音（count 是会议数）。
+        跳过正在处理的会议。"""
+        if req.what not in ("leftovers", "audio"):
+            raise HTTPException(400, i18n.tr(f"不认识的清理项：{req.what}", f"Unknown cleanup target: {req.what}"))
+        days = req.older_than_days
+        if req.what == "audio":
+            if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= CLEANUP_DAYS_MAX:
+                raise HTTPException(
+                    400,
+                    i18n.tr(
+                        f"天数只能是 0～{CLEANUP_DAYS_MAX} 的整数",
+                        f"The number of days must be a whole number from 0 to {CLEANUP_DAYS_MAX}",
+                    ),
+                )
+            if not isinstance(req.archived_only, bool):
+                raise HTTPException(
+                    400, i18n.tr("archived_only 只能是 true 或 false", "archived_only must be true or false")
+                )
+        cutoff = date.today() - timedelta(days=days) if req.what == "audio" and days else None
+        count, freed, errors = 0, 0, []
+        for info, path in meeting_folders():
+            if is_busy(info["id"]):
+                continue
+            if req.what == "leftovers":
+                files = meetings.leftover_files(path)
+            else:
+                if req.archived_only and not info["archived"]:
+                    continue
+                if cutoff is not None and date.fromisoformat(info["date"]) >= cutoff:
+                    continue
+                files = meetings.audio_files(path)
+            done = 0
+            for f in files:
+                size = meetings.file_size(f)
+                try:
+                    _trash(f)
+                except TrashUnsupported as e:
+                    raise HTTPException(500, str(e)) from e
+                except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+                    errors.append(str(e) or e.__class__.__name__)
+                    log.warning("%s 清理 %s 失败：%s", info["id"], f.name, e)
+                    continue
+                freed += size
+                done += 1
+            count += done if req.what == "leftovers" else (1 if done else 0)
+        if errors and not count:
+            raise HTTPException(500, errors[0])
+        log.info("清理%s：%d，腾出 %d 字节", req.what, count, freed)
+        return {"ok": True, "count": count, "freed_bytes": freed}
 
     @app.post("/api/demo")
     def demo() -> dict:

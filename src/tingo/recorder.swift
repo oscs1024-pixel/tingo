@@ -9,6 +9,8 @@
 //   用系统的 AVFoundation 解码 m4a/mp3/wav/aac/flac/mp4/mov 等，输出 16 kHz 单声道 16 位 wav；成功打印 OK。
 // 导出 PDF：tingo-recorder pdf <输入.html> <输出.pdf>
 //   用系统的 WebKit 排版，A4 分页；成功打印 OK。
+// 移到废纸篓：tingo-recorder trash <路径>
+//   文件或文件夹都行，可以从废纸篓里恢复；成功打印 OK。
 
 import AppKit
 import AVFoundation
@@ -320,6 +322,15 @@ func exportPDF(_ input: String, _ output: String) -> Never {
 let args = CommandLine.arguments
 if args.count >= 4 && args[1] == "decode" { decode(args[2], args[3]) }
 if args.count >= 4 && args[1] == "pdf" { exportPDF(args[2], args[3]) }
+if args.count >= 3 && args[1] == "trash" {
+    do {
+        try FileManager.default.trashItem(at: URL(fileURLWithPath: args[2]), resultingItemURL: nil)
+        print("OK")
+        exit(0)
+    } catch {
+        fail("移到废纸篓失败：\(error.localizedDescription)")
+    }
+}
 guard args.count >= 2 else { fail("用法：tingo-recorder <输出目录> [--no-mic] [--no-system]，或 tingo-recorder decode <输入> <输出.wav>") }
 let outDir = URL(fileURLWithPath: args[1])
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)

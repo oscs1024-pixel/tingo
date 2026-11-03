@@ -4,11 +4,13 @@
 ├── 录音.m4a
 ├── 转写.md
 ├── transcript.json
-└── 纪要.md
+├── 纪要.md
+└── meta.json   可选：用户改的标题、标签、是否归档；文件夹名不改
 """
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -22,6 +24,12 @@ AUDIO = "录音.m4a"
 MINUTES = "纪要.md"
 TRANSCRIPT_MD = "转写.md"
 TRANSCRIPT_JSON = "transcript.json"
+META = "meta.json"
+RECORDING_STEM = "录音"  # 录音.m4a / 导入的 录音.mp3 等
+RAW_AUDIO = ("system.wav", "mic.wav")  # 录音时的原始音轨（合成失败时会留下）
+TEMP_SUFFIXES = (".part", ".tmp")
+TAG_MAX_CHARS = 20
+TAG_MAX_COUNT = 10
 
 _FOLDER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})_(.+)$")
 _RAW_TRACKS = {"system.wav", "mic.wav", "mixed.wav"}  # 录音进行中的原始轨道
@@ -69,6 +77,92 @@ def find_audio(folder: Path) -> Path | None:
     return None
 
 
+def normalize_tags(tags: object) -> list[str]:
+    """标签：去首尾空白、空的丢掉、每个最长 20 个字符、去重（保持顺序）、最多 10 个。不是列表时当作没有标签。"""
+    if not isinstance(tags, list):
+        return []
+    out: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()[:TAG_MAX_CHARS].strip()
+        if t and t not in out:
+            out.append(t)
+    return out[:TAG_MAX_COUNT]
+
+
+def read_meta(folder: Path) -> dict:
+    """meta.json：{"title": 用户改的标题或 None, "tags": [...], "archived": bool}。没有或读不了时全是默认值。"""
+    try:
+        data = json.loads((folder / META).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    title = data.get("title")
+    title = title.strip() if isinstance(title, str) else ""
+    archived = data.get("archived")
+    return {
+        "title": title or None,
+        "tags": normalize_tags(data.get("tags")),
+        "archived": archived if isinstance(archived, bool) else False,
+    }
+
+
+def write_meta(folder: Path, meta: dict) -> dict:
+    """写 meta.json（UTF-8、缩进 2、中文原样），只写 title（为空时不写）、tags、archived。返回规范化后的内容。"""
+    title = meta.get("title")
+    title = title.strip() if isinstance(title, str) else ""
+    norm = {"title": title or None, "tags": normalize_tags(meta.get("tags")), "archived": meta.get("archived") is True}
+    data: dict = {"title": title} if title else {}
+    data["tags"], data["archived"] = norm["tags"], norm["archived"]
+    (folder / META).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return norm
+
+
+def _files(folder: Path) -> list[Path]:
+    try:
+        return sorted(p for p in folder.iterdir() if p.is_file())
+    except OSError:
+        return []
+
+
+def _is_recording(p: Path) -> bool:
+    """录音.*（任何扩展名）"""
+    return p.name.startswith(RECORDING_STEM + ".") and len(p.name) > len(RECORDING_STEM) + 1
+
+
+def audio_files(folder: Path) -> list[Path]:
+    """这场会议的录音文件：录音.*、system.wav、mic.wav。"""
+    return [p for p in _files(folder) if _is_recording(p) or p.name in RAW_AUDIO]
+
+
+def leftover_files(folder: Path) -> list[Path]:
+    """残留文件：已经有 录音.* 时还留着的 system.wav / mic.wav（合成录音失败前的原始音轨），以及 *.part、*.tmp。"""
+    files = _files(folder)
+    has_recording = any(_is_recording(p) for p in files)
+    return [p for p in files if (has_recording and p.name in RAW_AUDIO) or p.suffix.lower() in TEMP_SUFFIXES]
+
+
+def file_size(p: Path) -> int:
+    try:
+        return p.stat().st_size
+    except OSError:
+        return 0
+
+
+def dir_size(folder: Path) -> int:
+    """整个文件夹（含子文件夹）的大小；符号链接不跟进。"""
+    total = 0
+    for p in folder.rglob("*"):
+        try:
+            if p.is_file() and not p.is_symlink():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def minutes_title(text: str) -> str | None:
     for line in text.splitlines():
         if line.startswith("# "):
@@ -94,9 +188,11 @@ def summary(folder: Path) -> dict:
     m = _FOLDER_RE.match(folder.name)
     started = f"{m.group(2)}:{m.group(3)}" if m else ""
     fallback_title = m.group(4) if m else folder.name
+    meta = read_meta(folder)
     info: dict = {
         "id": folder.name,
-        "title": minutes_title(minutes) or fallback_title,
+        # 标题：用户改的 → 纪要第一行 # 标题 → 文件夹名里的会议名
+        "title": meta["title"] or minutes_title(minutes) or fallback_title,
         "date": meeting_date(folder).isoformat(),
         "time": started,
         "summary": one_liner(minutes),
@@ -104,6 +200,10 @@ def summary(folder: Path) -> dict:
         "has_transcript": (folder / TRANSCRIPT_JSON).exists(),
         "duration": "",
         "speakers": [],
+        "tags": meta["tags"],
+        "archived": meta["archived"],
+        "size_bytes": dir_size(folder),
+        "has_audio": any(_is_recording(p) for p in _files(folder)),
     }
     if info["has_transcript"]:
         tr = Transcript.load(folder / TRANSCRIPT_JSON)

@@ -28,6 +28,11 @@ export interface MeetingSummary {
   has_transcript: boolean;
   duration: string;
   speakers: string[];
+  /** 会议管理（新版后端才有） */
+  tags?: string[];
+  archived?: boolean;
+  size_bytes?: number;
+  has_audio?: boolean;
 }
 
 export interface Turn {

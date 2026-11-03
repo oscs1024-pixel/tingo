@@ -124,7 +124,7 @@ pub fn ensure_model(paths: &ModelPaths, kind: AsrKind, mut progress: impl FnMut(
     list.push(Download { url: format!("{SHERPA}/asr-models/{name}.tar.bz2"), to: tar_to, size });
     fetch_all(paths, &list, &mut progress)?;
     if !paths.base_ready() {
-        extract_punct(&paths.dir.join("download/punct.tar.bz2"), &paths.punct().parent().unwrap().to_path_buf())?;
+        extract_punct(&paths.dir.join("download/punct.tar.bz2"), paths.punct().parent().unwrap())?;
     }
     extract_dir(&paths.dir.join(tar_to), &paths.asr_dir(kind))?;
     cleanup(paths, &list);

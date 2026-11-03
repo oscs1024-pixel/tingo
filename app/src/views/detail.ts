@@ -5,6 +5,8 @@ import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial
 import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
 import { minutesDocument, wordDocument } from "../pdf";
+import { confirmBox, deleteAudio, deleteMeeting, editTags, fmtBytes, renameBox, setMeta } from "../manage";
+import { showTag } from "./meetings";
 import type { Config } from "../api";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
@@ -45,7 +47,7 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
     <div class="page">
       ${backLink()}
       <div class="detail-head">
-        <h1>${esc(d.title)}</h1>
+        <h1>${esc(d.title)}${d.archived ? `<span class="arch-badge">${t("已归档", "Archived")}</span>` : ""}<button class="icon-btn" id="aTitle" title="${t("修改标题", "Rename")}">${ICON.edit}</button></h1>
         <div class="detail-actions">
           ${
             d.minutes
@@ -61,10 +63,18 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
           }
           ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? t("重新生成", "Regenerate") : t("生成纪要", "Write minutes")}</button>` : ""}
           <button class="btn ghost" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
+          <div class="menu-wrap"><button class="btn ghost" id="aMore" title="${t("更多", "More")}">···</button>
+            <div class="menu" id="moreMenu" hidden>
+              <button data-act="tags">${ICON.spark}<span><b>${t("编辑标签", "Edit tags")}</b><small>${t("按项目、类型给会议分类", "Group meetings by project or type")}</small></span></button>
+              <button data-act="archive">${ICON.folder}<span><b>${d.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}</b><small>${d.archived ? t("放回会议列表", "Move back to the meeting list") : t("从会议列表收起，搜索时照样能找到", "Hide from the list; still searchable")}</small></span></button>
+              ${d.audio ? `<button data-act="audio">${ICON.mic}<span><b>${t("只删录音", "Delete recording")}</b><small>${t("保留转写和纪要，腾出空间", "Keep transcript & minutes, free up space")}</small></span></button>` : ""}
+              <button data-act="delete" class="danger">${ICON.trash}<span><b>${t("删除会议", "Delete meeting")}</b><small>${t("移到废纸篓，可以恢复", "Moves to the Trash; restorable")}</small></span></button>
+            </div></div>
         </div>
       </div>
       <div class="meta">
         <span>${esc(d.date)} ${esc(d.time)}</span>
+        ${(d.tags ?? []).map((tg) => `<a class="tag-chip sm" href="#/meetings" data-tag="${esc(tg)}">${esc(tg)}</a>`).join("")}
         ${d.duration ? `<span class="sep"></span><span>${t("时长", "Duration")} ${esc(d.duration)}</span>` : ""}
         ${
           d.speaker_list.length
@@ -108,6 +118,25 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
     if (el) el.onclick = fn;
   };
   on("#aPush", pushMinutes);
+  bindMoreMenu(d);
+  $$<HTMLAnchorElement>(".meta .tag-chip[data-tag]").forEach(
+    (a) =>
+      (a.onclick = (e) => {
+        e.preventDefault();
+        showTag(a.dataset.tag ?? "");
+      }),
+  );
+  on("#aTitle", async () => {
+    const v = await renameBox(d.title);
+    if (v === undefined) return;
+    try {
+      await setMeta(d.id, { title: v });
+      await refreshMeetings();
+      renderDetail(d.id, true);
+    } catch (e) {
+      toast(errorMessage(e), true);
+    }
+  });
   bindExportMenu(d);
   on("#aRegen", regenerate);
   on("#aRename", renameSpeakers);
@@ -344,6 +373,65 @@ async function pushMinutes(): Promise<void> {
   } catch (e) {
     toast(errorMessage(e), true);
   }
+}
+
+/** 下拉菜单：点按钮开关，点外面收起 */
+function bindMenu(btnSel: string, menuSel: string, onPick: (act: string) => void): void {
+  const btn = $maybe(btnSel);
+  const menu = $maybe(menuSel);
+  if (!btn || !menu) return;
+  const close = () => {
+    menu.hidden = true;
+    document.removeEventListener("mousedown", outside);
+  };
+  const outside = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
+  };
+  btn.onclick = () => {
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) document.addEventListener("mousedown", outside);
+  };
+  $$<HTMLButtonElement>("button", menu).forEach(
+    (b) =>
+      (b.onclick = () => {
+        close();
+        onPick(b.dataset.act ?? "");
+      }),
+  );
+}
+
+function bindMoreMenu(d: MeetingDetail): void {
+  bindMenu("#aMore", "#moreMenu", async (act) => {
+    try {
+      if (act === "tags") {
+        const tags = await editTags(d.tags ?? []);
+        if (!tags) return;
+        await setMeta(d.id, { tags });
+      } else if (act === "archive") {
+        await setMeta(d.id, { archived: !d.archived });
+        toast(d.archived ? t("已放回会议列表", "Moved back to the list") : t("已归档", "Archived"));
+      } else if (act === "audio") {
+        if (!(await confirmBox(t("删除这场会议的录音？", "Delete this meeting's recording?"), t("录音会移到废纸篓，转写和纪要保留，以后就不能回听了。", "The recording moves to the Trash; the transcript and minutes stay, but you can't play it back."), t("删除录音", "Delete recording"))))
+          return;
+        stopAudio();
+        const r = await deleteAudio(d.id);
+        toast(t(`录音已移到废纸篓，腾出 ${fmtBytes(r.freed_bytes)}`, `Recording moved to the Trash — freed ${fmtBytes(r.freed_bytes)}`));
+      } else if (act === "delete") {
+        if (!(await confirmBox(t(`删除「${esc(d.title)}」？`, `Delete “${esc(d.title)}”?`), t("录音、转写和纪要会一起移到废纸篓，需要的话可以从废纸篓恢复。", "The recording, transcript and minutes move to the Trash — you can restore them from there."), t("移到废纸篓", "Move to Trash"))))
+          return;
+        stopAudio();
+        await deleteMeeting(d.id);
+        toast(t("已移到废纸篓", "Moved to the Trash"));
+        await refreshMeetings();
+        location.hash = "#/meetings";
+        return;
+      }
+      await refreshMeetings();
+      renderDetail(d.id, true);
+    } catch (e) {
+      toast(errorMessage(e), true);
+    }
+  });
 }
 
 function bindExportMenu(d: MeetingDetail): void {

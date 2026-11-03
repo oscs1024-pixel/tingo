@@ -112,6 +112,7 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
+#[derive(Debug)]
 struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
@@ -124,6 +125,15 @@ type ApiResult<T> = Result<T, ApiError>;
 
 fn bad(msg: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, msg.into())
+}
+
+fn server_error(msg: impl Into<String>) -> ApiError {
+    ApiError(StatusCode::INTERNAL_SERVER_ERROR, msg.into())
+}
+
+/// 会议有进行中的任务（录音、转写、生成纪要……）时的提示
+fn busy_msg() -> &'static str {
+    tr("这场会议正在处理，等它完成", "This meeting is being processed. Wait for it to finish")
 }
 
 fn not_found() -> ApiError {
@@ -201,6 +211,191 @@ impl AppState {
         Ok(path)
     }
 
+    /// 这场会议有没有进行中的任务（模型下载不算，它的 meeting 字段是模型编号）
+    fn meeting_busy(&self, id: &str) -> bool {
+        self.jobs.lock().unwrap().iter().any(|j| j.busy() && j.kind != "models" && j.meeting == id)
+    }
+
+    /// 会议文件夹，且这场会议没有进行中的任务（否则 409）
+    fn idle_folder(&self, id: &str) -> ApiResult<PathBuf> {
+        let dir = self.folder(id)?;
+        if self.meeting_busy(id) {
+            return Err(ApiError(StatusCode::CONFLICT, busy_msg().into()));
+        }
+        Ok(dir)
+    }
+
+    /// 把一批文件挨个移到废纸篓，返回移走的字节数；遇到失败就停下报错
+    fn trash_files(&self, files: &[PathBuf]) -> Result<u64, String> {
+        let mut freed = 0;
+        for f in files {
+            let n = meetings::size_of(f);
+            record::trash(&self.opt.recorder_bin, f)?;
+            freed += n;
+        }
+        Ok(freed)
+    }
+
+    /// 整场会议移到废纸篓，返回会议文件夹的大小
+    fn delete_meeting(&self, id: &str) -> ApiResult<u64> {
+        let dir = self.idle_folder(id)?;
+        let size = meetings::size_of(&dir);
+        record::trash(&self.opt.recorder_bin, &dir).map_err(server_error)?;
+        Ok(size)
+    }
+
+    /// 只把录音（录音.*、system.wav、mic.wav）移到废纸篓，转写、纪要、导出的文件保留。
+    /// 没有录音时：`required` 为 true 报 400，否则当成功（释放 0）。
+    fn delete_audio(&self, id: &str, required: bool) -> ApiResult<u64> {
+        let dir = self.idle_folder(id)?;
+        let files = meetings::audio_files(&dir);
+        if files.is_empty() {
+            if required {
+                return Err(bad(tr("这场会议没有录音文件", "This meeting has no recording")));
+            }
+            return Ok(0);
+        }
+        self.trash_files(&files).map_err(server_error)
+    }
+
+    /// 改 meta.json：只改请求体里给了的字段（title 为 null 或空串 = 恢复默认标题），返回更新后的列表项
+    fn update_meta(&self, id: &str, body: &Value) -> ApiResult<Value> {
+        let dir = self.folder(id)?;
+        let obj = body.as_object().ok_or_else(|| bad(tr("请求格式不对", "Invalid request")))?;
+        let mut meta = meetings::read_meta(&dir);
+        if let Some(t) = obj.get("title") {
+            meta.title = match t {
+                Value::Null => None,
+                Value::String(t) => meetings::normalize_title(Some(t)),
+                _ => return Err(bad(tr("标题要是文字", "The title must be text"))),
+            };
+        }
+        if let Some(t) = obj.get("tags") {
+            let tags: Option<Vec<&str>> = t.as_array().and_then(|a| a.iter().map(Value::as_str).collect());
+            let tags = tags.ok_or_else(|| bad(tr("标签要是文字列表", "Tags must be a list of text")))?;
+            meta.tags = meetings::normalize_tags(&tags);
+        }
+        if let Some(a) = obj.get("archived") {
+            meta.archived = a.as_bool().ok_or_else(|| bad(tr("archived 要是 true 或 false", "archived must be true or false")))?;
+        }
+        meetings::write_meta(&dir, &meta).map_err(|e| server_error(e.to_string()))?;
+        Ok(serde_json::to_value(meetings::summary(&dir)).unwrap())
+    }
+
+    /// 批量操作：逐个处理，某一个失败不影响其他
+    fn batch(&self, r: &BatchReq) -> ApiResult<Value> {
+        let mut ids: Vec<&str> = Vec::new();
+        for id in &r.ids {
+            if !ids.contains(&id.as_str()) {
+                ids.push(id);
+            }
+        }
+        if ids.is_empty() {
+            return Err(bad(tr("没有选中会议", "No meetings selected")));
+        }
+        let action = r.action.as_str();
+        if !matches!(action, "archive" | "unarchive" | "tag_add" | "tag_remove" | "delete" | "delete_audio") {
+            return Err(bad(tr(&format!("不认识的操作：{action}"), &format!("Unknown action: {action}"))));
+        }
+        let tag = meetings::normalize_tag(r.tag.as_deref().unwrap_or(""));
+        if action.starts_with("tag_") && tag.is_empty() {
+            return Err(bad(tr("要给出标签", "A tag is required")));
+        }
+        let (mut ok, mut freed, mut failed) = (0u64, 0u64, Vec::new());
+        for id in ids {
+            let result = match action {
+                "delete" => self.delete_meeting(id),
+                "delete_audio" => self.delete_audio(id, false),
+                _ => self.folder(id).and_then(|dir| {
+                    let mut meta = meetings::read_meta(&dir);
+                    match action {
+                        "archive" => meta.archived = true,
+                        "unarchive" => meta.archived = false,
+                        "tag_add" => {
+                            meta.tags.push(tag.clone());
+                            meta.tags = meetings::normalize_tags(&meta.tags);
+                        }
+                        _ => meta.tags.retain(|t| *t != tag),
+                    }
+                    meetings::write_meta(&dir, &meta).map_err(|e| server_error(e.to_string()))?;
+                    Ok(0)
+                }),
+            };
+            match result {
+                Ok(n) => {
+                    ok += 1;
+                    freed += n;
+                }
+                Err(ApiError(_, e)) => failed.push(json!({"id": id, "error": e})),
+            }
+        }
+        Ok(json!({"ok": ok, "failed": failed, "freed_bytes": freed}))
+    }
+
+    fn storage(&self) -> Value {
+        let mut v = meetings::storage(&self.opt.root, |id| self.meeting_busy(id));
+        v["models_bytes"] = meetings::size_of(&self.opt.models_dir).into();
+        v["free_bytes"] = meetings::free_bytes(&self.opt.root).into();
+        v
+    }
+
+    /// 清理：残留文件（leftovers），或者 N 天前的会议的录音（audio）。跳过正在处理的会议。
+    fn cleanup(&self, r: &Value) -> ApiResult<Value> {
+        let what = r["what"].as_str().unwrap_or("");
+        let (mut count, mut freed, mut error) = (0u64, 0u64, None::<String>);
+        let mut note = |res: Result<u64, String>, count: &mut u64| match res {
+            Ok(n) => {
+                *count += 1;
+                freed += n;
+            }
+            Err(e) => {
+                eprintln!("清理失败：{e}");
+                error.get_or_insert(e);
+            }
+        };
+        let list = meetings::list(&self.opt.root);
+        match what {
+            "leftovers" => {
+                for m in list.iter().filter(|m| !self.meeting_busy(&m.id)) {
+                    for f in meetings::leftover_files(&self.opt.root.join(&m.id)) {
+                        note(self.trash_files(&[f]), &mut count);
+                    }
+                }
+            }
+            "audio" => {
+                let days = r
+                    .get("older_than_days")
+                    .and_then(Value::as_u64)
+                    .filter(|d| *d <= 3650)
+                    .ok_or_else(|| bad(tr("天数要是 0–3650 的整数", "Days must be a whole number from 0 to 3650")))?;
+                let archived_only = match r.get("archived_only") {
+                    None | Some(Value::Null) => false,
+                    Some(v) => v.as_bool().ok_or_else(|| {
+                        bad(tr("archived_only 要是 true 或 false", "archived_only must be true or false"))
+                    })?,
+                };
+                let cutoff = chrono::Local::now().date_naive() - chrono::Days::new(days);
+                for m in &list {
+                    let dir = self.opt.root.join(&m.id);
+                    let old = days == 0 || meetings::meeting_date(&dir) < cutoff;
+                    if !old || (archived_only && !m.archived) || self.meeting_busy(&m.id) {
+                        continue;
+                    }
+                    let files = meetings::audio_files(&dir);
+                    if !files.is_empty() {
+                        note(self.trash_files(&files), &mut count);
+                    }
+                }
+            }
+            _ => return Err(bad(tr(&format!("不认识的清理项：{what}"), &format!("Unknown cleanup type: {what}")))),
+        }
+        // 一个都没移走（比如这个系统不支持废纸篓）时报错，别让人以为清理过了
+        if let (0, Some(e)) = (count, error) {
+            return Err(server_error(e));
+        }
+        Ok(json!({"ok": true, "count": count, "freed_bytes": freed}))
+    }
+
     /// 登记一个任务。录音同时只能有一场；同一场会议、模型下载各自同时只能有一个任务；其余可以并行
     /// （转写共用一个识别引擎，在引擎里排队；生成纪要主要等网络）。
     fn start_job(&self, job: Job) -> ApiResult<()> {
@@ -213,7 +408,7 @@ impl AppState {
             } else if job.kind == "update" && j.kind == "update" {
                 Some(tr("已经在下载新版了，等它下完", "The update is already downloading. Wait for it to finish"))
             } else if !job.meeting.is_empty() && job.kind != "models" && j.kind != "models" && j.meeting == job.meeting {
-                Some(tr("这场会议正在处理，等它完成", "This meeting is being processed. Wait for it to finish"))
+                Some(busy_msg())
             } else {
                 None
             }
@@ -693,6 +888,60 @@ async fn get_meeting(
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(meeting_json(&s.folder(&id)?)))
+}
+
+/// 整场会议移到废纸篓
+async fn delete_meeting(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    tokio::task::spawn_blocking(move || s.delete_meeting(&id))
+        .await
+        .map_err(|e| server_error(e.to_string()))??;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// 只把录音移到废纸篓
+async fn delete_audio(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let freed = tokio::task::spawn_blocking(move || s.delete_audio(&id, true))
+        .await
+        .map_err(|e| server_error(e.to_string()))??;
+    Ok(Json(json!({"ok": true, "freed_bytes": freed})))
+}
+
+async fn put_meta(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    s.update_meta(&id, &body).map(Json)
+}
+
+#[derive(Deserialize)]
+struct BatchReq {
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    action: String,
+    tag: Option<String>,
+}
+
+async fn post_batch(State(s): State<Shared>, Json(r): Json<BatchReq>) -> ApiResult<Json<Value>> {
+    tokio::task::spawn_blocking(move || s.batch(&r))
+        .await
+        .map_err(|e| server_error(e.to_string()))?
+        .map(Json)
+}
+
+async fn get_storage(State(s): State<Shared>) -> ApiResult<Json<Value>> {
+    tokio::task::spawn_blocking(move || s.storage())
+        .await
+        .map(Json)
+        .map_err(|e| server_error(e.to_string()))
+}
+
+async fn post_cleanup(State(s): State<Shared>, Json(r): Json<Value>) -> ApiResult<Json<Value>> {
+    tokio::task::spawn_blocking(move || s.cleanup(&r))
+        .await
+        .map_err(|e| server_error(e.to_string()))?
+        .map(Json)
 }
 
 /// 播放用的标准类型。按扩展名猜出来的 audio/m4a 不是标准写法，Chrome 照样能放，
@@ -1665,8 +1914,12 @@ pub fn router(state: Shared) -> Router {
         .route("/api/llm/providers", get(llm_providers))
         .route("/api/llm/models", post(llm_models))
         .route("/api/meetings", get(list_meetings))
-        .route("/api/meetings/{id}", get(get_meeting))
-        .route("/api/meetings/{id}/audio", get(get_audio))
+        .route("/api/meetings/batch", post(post_batch))
+        .route("/api/meetings/{id}", get(get_meeting).delete(delete_meeting))
+        .route("/api/meetings/{id}/audio", get(get_audio).delete(delete_audio))
+        .route("/api/meetings/{id}/meta", put(put_meta))
+        .route("/api/storage", get(get_storage))
+        .route("/api/storage/cleanup", post(post_cleanup))
         .route("/api/meetings/{id}/speakers", put(put_speakers))
         .route("/api/meetings/{id}/minutes", put(put_minutes))
         .route("/api/meetings/{id}/summarize", post(post_summarize))
@@ -1719,6 +1972,233 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::os::unix::fs::PermissionsExt;
+
+    /// 临时会议目录 + 假的录音组件：`trash <路径>` 把东西 mv 进 trash 目录并打印 OK；
+    /// 路径里带 FAIL 的打印 ERROR 失败
+    fn test_state(name: &str) -> (Shared, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("tingo-srv-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, trash, models) = (base.join("root"), base.join("trash"), base.join("models"));
+        for d in [&root, &trash, &models] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(models.join("model.onnx"), vec![0u8; 123]).unwrap();
+        let bin = base.join("fake-recorder");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = trash ] || {{ echo 'ERROR: bad command'; exit 2; }}\n\
+                 case \"$2\" in *FAIL*) echo 'ERROR: 不让删'; exit 1;; esac\n\
+                 d=$(mktemp -d '{}/t.XXXXXX') && mv \"$2\" \"$d/\" && echo OK\n",
+                trash.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let state = AppState::new(Options {
+            root: root.clone(),
+            config_path: base.join("config.toml"),
+            models_dir: models,
+            recorder_bin: bin,
+            version: "0.0.0".into(),
+            sample_dir: base.join("sample"),
+        });
+        (state, root, trash)
+    }
+
+    fn meeting(root: &Path, id: &str, files: &[(&str, usize)]) -> PathBuf {
+        let d = root.join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(TRANSCRIPT_JSON), serde_json::to_string(&Transcript::default()).unwrap()).unwrap();
+        for (f, n) in files {
+            std::fs::write(d.join(f), vec![0u8; *n]).unwrap();
+        }
+        d
+    }
+
+    fn mark_busy(s: &AppState, id: &str) {
+        s.jobs.lock().unwrap().push(Job::new("process", id, "transcribing"));
+    }
+
+    fn status(r: ApiResult<impl std::fmt::Debug>) -> StatusCode {
+        match r {
+            Ok(v) => panic!("expected an error, got {v:?}"),
+            Err(ApiError(code, _)) => code,
+        }
+    }
+
+    #[test]
+    fn routes_build() {
+        let (s, root, _) = test_state("routes");
+        let _ = router(s);
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn put_meta_updates_only_given_fields() {
+        let (s, root, _) = test_state("meta");
+        let a = meeting(&root, "2026-10-01_0900_周会", &[]);
+        std::fs::write(a.join(MINUTES), "# 纪要标题\n").unwrap();
+        let v = s.update_meta("2026-10-01_0900_周会", &json!({"title": " 新标题 ", "tags": ["项目A", "项目A", " "]})).unwrap();
+        assert_eq!((v["title"].clone(), v["tags"].clone(), v["archived"].clone()), (json!("新标题"), json!(["项目A"]), json!(false)));
+        let v = s.update_meta("2026-10-01_0900_周会", &json!({"archived": true})).unwrap();
+        assert_eq!((v["title"].clone(), v["tags"].clone(), v["archived"].clone()), (json!("新标题"), json!(["项目A"]), json!(true)));
+        // null / 空串恢复默认标题，meta.json 里不留 title
+        let v = s.update_meta("2026-10-01_0900_周会", &json!({"title": null})).unwrap();
+        assert_eq!(v["title"], "纪要标题");
+        assert!(!std::fs::read_to_string(a.join(meetings::META)).unwrap().contains("title"));
+        s.update_meta("2026-10-01_0900_周会", &json!({"title": "x"})).unwrap();
+        assert_eq!(s.update_meta("2026-10-01_0900_周会", &json!({"title": ""})).unwrap()["title"], "纪要标题");
+        assert_eq!(status(s.update_meta("2026-10-01_0900_周会", &json!({"tags": "a"}))), StatusCode::BAD_REQUEST);
+        assert_eq!(status(s.update_meta("2026-10-01_0900_周会", &json!({"archived": 1}))), StatusCode::BAD_REQUEST);
+        assert_eq!(status(s.update_meta("nope", &json!({}))), StatusCode::NOT_FOUND);
+        assert_eq!(status(s.update_meta("../root", &json!({}))), StatusCode::NOT_FOUND);
+        // 详情也带 tags、archived、size_bytes
+        let d = meeting_json(&a);
+        assert_eq!((d["tags"].clone(), d["archived"].clone()), (json!(["项目A"]), json!(true)));
+        assert!(d["size_bytes"].as_u64().unwrap() > 0);
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn delete_meeting_and_audio() {
+        let (s, root, trash) = test_state("delete");
+        let a = meeting(&root, "2026-10-01_0900_a", &[("录音.m4a", 100), ("system.wav", 30), ("mic.wav", 20), (MINUTES, 5), ("a.pdf", 5)]);
+        let freed = s.delete_audio("2026-10-01_0900_a", true).unwrap();
+        assert_eq!(freed, 150);
+        let mut left: Vec<String> =
+            std::fs::read_dir(&a).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, vec!["a.pdf", TRANSCRIPT_JSON, MINUTES]);
+        assert_eq!(std::fs::read_dir(&trash).unwrap().count(), 3); // 进了废纸篓，不是删掉
+        // 没有录音：单个删报 400
+        assert_eq!(status(s.delete_audio("2026-10-01_0900_a", true)), StatusCode::BAD_REQUEST);
+        // 正在处理：409
+        meeting(&root, "2026-10-02_0900_b", &[("录音.m4a", 10)]);
+        mark_busy(&s, "2026-10-02_0900_b");
+        assert_eq!(status(s.delete_meeting("2026-10-02_0900_b")), StatusCode::CONFLICT);
+        assert_eq!(status(s.delete_audio("2026-10-02_0900_b", true)), StatusCode::CONFLICT);
+        // 模型下载任务不算占用会议
+        meeting(&root, "2026-10-03_0900_c", &[("录音.m4a", 10)]);
+        s.jobs.lock().unwrap().push(Job::new("models", "2026-10-03_0900_c", "downloading"));
+        s.delete_meeting("2026-10-03_0900_c").unwrap();
+        assert!(!root.join("2026-10-03_0900_c").exists());
+        s.delete_meeting("2026-10-01_0900_a").unwrap();
+        assert!(!a.exists());
+        assert_eq!(status(s.delete_meeting("2026-10-01_0900_a")), StatusCode::NOT_FOUND);
+        // 废纸篓失败：500，文件还在
+        let f = meeting(&root, "2026-10-04_0900_FAIL", &[("录音.m4a", 10)]);
+        assert_eq!(status(s.delete_meeting("2026-10-04_0900_FAIL")), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(f.exists());
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn batch_actions() {
+        let (s, root, _) = test_state("batch");
+        let ids = ["2026-10-01_0900_a", "2026-10-02_0900_b", "2026-10-03_0900_c"];
+        meeting(&root, ids[0], &[("录音.m4a", 100)]);
+        meeting(&root, ids[1], &[]);
+        meeting(&root, ids[2], &[("录音.wav", 50), ("mic.wav", 5)]);
+        let req = |ids: &[&str], action: &str, tag: Option<&str>| BatchReq {
+            ids: ids.iter().map(|s| s.to_string()).collect(),
+            action: action.into(),
+            tag: tag.map(String::from),
+        };
+        // 校验
+        assert_eq!(status(s.batch(&req(&[], "archive", None))), StatusCode::BAD_REQUEST);
+        assert_eq!(status(s.batch(&req(&ids, "explode", None))), StatusCode::BAD_REQUEST);
+        assert_eq!(status(s.batch(&req(&ids, "tag_add", None))), StatusCode::BAD_REQUEST);
+        assert_eq!(status(s.batch(&req(&ids, "tag_add", Some("  ")))), StatusCode::BAD_REQUEST);
+        // 归档：不存在的那个进 failed，其他照样成功；重复的 id 只算一次
+        let v = s.batch(&req(&[ids[0], "nope", ids[1], ids[0]], "archive", None)).unwrap();
+        assert_eq!(v["ok"], 2);
+        assert_eq!(v["failed"].as_array().unwrap().len(), 1);
+        assert_eq!(v["failed"][0]["id"], "nope");
+        assert!(meetings::read_meta(&root.join(ids[0])).archived && meetings::read_meta(&root.join(ids[1])).archived);
+        s.batch(&req(&[ids[1]], "unarchive", None)).unwrap();
+        assert!(!meetings::read_meta(&root.join(ids[1])).archived);
+        // 标签
+        s.batch(&req(&ids, "tag_add", Some(" 周会 "))).unwrap();
+        s.batch(&req(&ids[..2], "tag_add", Some("项目A"))).unwrap();
+        s.batch(&req(&ids, "tag_add", Some("周会"))).unwrap(); // 已经有了不重复加
+        assert_eq!(meetings::read_meta(&root.join(ids[0])).tags, vec!["周会", "项目A"]);
+        s.batch(&req(&ids, "tag_remove", Some("周会"))).unwrap();
+        assert_eq!(meetings::read_meta(&root.join(ids[0])).tags, vec!["项目A"]);
+        assert!(meetings::read_meta(&root.join(ids[2])).tags.is_empty());
+        // 只删录音：没录音的算成功、freed 0；正在处理的进 failed
+        mark_busy(&s, ids[0]);
+        let v = s.batch(&req(&ids, "delete_audio", None)).unwrap();
+        assert_eq!((v["ok"].clone(), v["freed_bytes"].clone()), (json!(2), json!(55)));
+        assert_eq!(v["failed"], json!([{"id": ids[0], "error": busy_msg()}]));
+        assert!(root.join(ids[0]).join("录音.m4a").exists());
+        assert!(!root.join(ids[2]).join("录音.wav").exists() && root.join(ids[2]).join(TRANSCRIPT_JSON).exists());
+        // 删除整场：正在处理的、不存在的进 failed
+        let v = s.batch(&req(&[ids[0], ids[1], "nope"], "delete", None)).unwrap();
+        assert_eq!(v["ok"], 1);
+        assert_eq!(v["failed"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect::<Vec<_>>(), vec![ids[0], "nope"]);
+        assert!(v["freed_bytes"].as_u64().unwrap() > 0);
+        assert!(root.join(ids[0]).exists() && !root.join(ids[1]).exists());
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn storage_endpoint() {
+        let (s, root, _) = test_state("storage");
+        meeting(&root, "2026-10-01_0900_a", &[("录音.m4a", 100), ("system.wav", 30)]);
+        let v = s.storage();
+        assert_eq!(v["count"], 1);
+        assert_eq!((v["audio_bytes"].clone(), v["leftover_bytes"].clone()), (json!(130), json!(30)));
+        assert_eq!(v["models_bytes"], 123);
+        assert!(v["free_bytes"].as_u64().is_some_and(|n| n > 0));
+        assert_eq!(v["root"], json!(root));
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn cleanup_leftovers_and_old_audio() {
+        let (s, root, _) = test_state("cleanup");
+        // 校验
+        for body in [
+            json!({"what": "nope"}),
+            json!({"what": "audio"}),
+            json!({"what": "audio", "older_than_days": -1}),
+            json!({"what": "audio", "older_than_days": 3651}),
+            json!({"what": "audio", "older_than_days": 1.5}),
+            json!({"what": "audio", "older_than_days": "30"}),
+            json!({"what": "audio", "older_than_days": 30, "archived_only": "yes"}),
+        ] {
+            assert_eq!(status(s.cleanup(&body)), StatusCode::BAD_REQUEST, "{body}");
+        }
+        let today = chrono::Local::now().date_naive();
+        let id = |days: u64, name: &str| format!("{}_0900_{name}", (today - chrono::Days::new(days)).format("%Y-%m-%d"));
+        let (old, old_arch, recent, busy) = (id(40, "old"), id(50, "arch"), id(5, "recent"), id(60, "busy"));
+        meeting(&root, &old, &[("录音.m4a", 100), ("system.wav", 10), ("x.part", 1)]);
+        meeting(&root, &old_arch, &[("录音.m4a", 200)]);
+        meeting(&root, &recent, &[("录音.m4a", 300), ("mic.wav", 20)]);
+        meeting(&root, &busy, &[("录音.m4a", 400), ("mic.wav", 40)]);
+        s.update_meta(&old_arch, &json!({"archived": true})).unwrap();
+        mark_busy(&s, &busy);
+        // 残留：old 的 system.wav + x.part、recent 的 mic.wav；busy 的跳过
+        let v = s.cleanup(&json!({"what": "leftovers"})).unwrap();
+        assert_eq!(v, json!({"ok": true, "count": 3, "freed_bytes": 31}));
+        assert!(root.join(&old).join("录音.m4a").exists() && !root.join(&old).join("system.wav").exists());
+        assert!(root.join(&busy).join("mic.wav").exists());
+        // 30 天前、只归档的
+        let v = s.cleanup(&json!({"what": "audio", "older_than_days": 30, "archived_only": true})).unwrap();
+        assert_eq!(v, json!({"ok": true, "count": 1, "freed_bytes": 200}));
+        // 30 天前的全部（busy 跳过）
+        let v = s.cleanup(&json!({"what": "audio", "older_than_days": 30})).unwrap();
+        assert_eq!(v, json!({"ok": true, "count": 1, "freed_bytes": 100}));
+        assert!(root.join(&recent).join("录音.m4a").exists() && root.join(&old).join(TRANSCRIPT_JSON).exists());
+        // 0 = 全部
+        let v = s.cleanup(&json!({"what": "audio", "older_than_days": 0, "archived_only": false})).unwrap();
+        assert_eq!(v, json!({"ok": true, "count": 1, "freed_bytes": 300}));
+        assert!(root.join(&busy).join("录音.m4a").exists());
+        std::fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
 
     #[test]
     fn demo_folder_names() {

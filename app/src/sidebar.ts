@@ -13,6 +13,7 @@ export async function refreshMeetings(): Promise<void> {
   const h = decodeURIComponent(location.hash.slice(1));
   $("#recentList").innerHTML = S.meetings.length
     ? S.meetings
+        .filter((m) => !m.archived) // 归档的不放进"最近"
         .slice(0, 8)
         .map(
           (m) => `

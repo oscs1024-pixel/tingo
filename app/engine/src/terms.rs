@@ -228,7 +228,7 @@ pub fn search(root: &Path, q: &str, lang: Lang) -> Value {
         if minutes_hit || !hits.is_empty() {
             results.push(json!({
                 "id": m.id, "title": m.title, "date": m.date, "time": m.time,
-                "minutes_hit": minutes_hit, "hits": hits,
+                "minutes_hit": minutes_hit, "hits": hits, "archived": m.archived,
             }));
         }
     }
@@ -319,6 +319,7 @@ mod tests {
         assert_eq!(res.len(), 2);
         assert_eq!(res[0]["id"], "2026-10-02_0900_复盘"); // 时间倒序
         assert_eq!(res[0]["minutes_hit"], true);
+        assert_eq!(res[0]["archived"], false); // 归档的会议照样搜，带上 archived
         assert_eq!(res[0]["hits"], json!([]));
         // 第一场：纪要正文里没写（只在代码块里），句子命中听错的写法
         assert_eq!(res[1]["minutes_hit"], false);

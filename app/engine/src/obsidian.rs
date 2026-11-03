@@ -29,7 +29,7 @@ pub fn vaults() -> Vec<(String, String)> {
             })
         })
         .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0)); // 最近打开的在前
+    out.sort_by_key(|b| std::cmp::Reverse(b.0)); // 最近打开的在前
     out.into_iter().map(|(_, n, p)| (n, p)).collect()
 }
 

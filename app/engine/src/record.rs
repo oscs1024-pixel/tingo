@@ -140,6 +140,36 @@ pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
         .to_string())
 }
 
+/// 移到废纸篓（不是彻底删除）。macOS 上交给录音组件的 `trash <路径>`（FileManager.trashItem，
+/// 成功打印 OK，失败打印 ERROR: …）；其它系统有 gio 就用 `gio trash`，否则报不支持。
+pub fn trash(bin: &Path, path: &Path) -> Result<(), String> {
+    let failed = |e: &str| tr(&format!("没能移到废纸篓：{e}"), &format!("Couldn't move to the Trash: {e}")).to_string();
+    if cfg!(target_os = "macos") || bin.is_file() {
+        let out = Command::new(bin).arg("trash").arg(path).stdin(Stdio::null()).output().map_err(|e| failed(&e.to_string()))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        if out.status.success() && text.lines().any(|l| l.trim() == "OK") {
+            return Ok(());
+        }
+        return Err(match text.lines().find_map(|l| l.trim().strip_prefix("ERROR: ")) {
+            Some(e) => e.to_string(), // 录音组件报的错已经说了是"移到废纸篓失败"
+            None => failed(String::from_utf8_lossy(&out.stderr).trim()),
+        });
+    }
+    let Some(gio) = find_in_path("gio") else {
+        return Err(tr("这个系统上没法移到废纸篓", "Moving to the Trash isn't supported on this system").into());
+    };
+    let out = Command::new(gio).arg("trash").arg(path).stdin(Stdio::null()).output().map_err(|e| failed(&e.to_string()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(failed(String::from_utf8_lossy(&out.stderr).trim()))
+    }
+}
+
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
+}
+
 pub const TEXTUTIL: &str = "/usr/bin/textutil";
 
 /// HTML → Word：macOS 自带的 textutil。没有 textutil（非 macOS）时报错。

@@ -45,6 +45,8 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 <p align="center"><img src="docs/screenshots/pdf.png" width="820" alt="PDF export"></p>
 
+**Stay organized.** Tag meetings by project or type and filter the list by tag; archive finished ones (they stay searchable). Select several meetings to tag, archive or delete them at once, and rename any meeting. Deleting always moves things to the Trash, so nothing is lost by accident. Settings → Storage shows what takes space and can drop old recordings (optionally archived ones only) while keeping transcripts and minutes.
+
 **Swappable ASR models.** Paraformer-large (default, fast and accurate for Chinese), SenseVoice (mixed Chinese / English / Japanese / Korean / Cantonese) or Fun-ASR-Nano (most accurate, applies your hotwords during recognition) — downloaded and switched in Settings, all running locally.
 
 ## Install

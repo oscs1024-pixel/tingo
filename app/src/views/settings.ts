@@ -8,6 +8,7 @@ import { isBusy, S } from "../state";
 import { applyLang, type LangPref, renderShell, t } from "../i18n";
 import { checkUpdate, showUpdate } from "../update";
 import { onboarded } from "./welcome";
+import { confirmBox, deleteAudio, fmtBytes } from "../manage";
 import { refreshMeetings } from "../sidebar";
 
 interface Preset {
@@ -219,7 +220,7 @@ export function updateSettingsJob(job: Job, prev: Job): void {
   } else updateAsrProgress(job);
 }
 
-type Tab = "llm" | "asr" | "record" | "lang" | "hotwords" | "push" | "obsidian" | "about";
+type Tab = "llm" | "asr" | "record" | "lang" | "hotwords" | "push" | "obsidian" | "storage" | "about";
 
 interface Ctx {
   c: Config;
@@ -236,6 +237,7 @@ const tabs = (): { id: Tab; name: string; icon: keyof typeof ICON }[] => [
   { id: "hotwords", name: t("热词", "Hotwords"), icon: "spark" },
   { id: "push", name: t("推送到群", "Share to chat"), icon: "send" },
   { id: "obsidian", name: "Obsidian", icon: "vault" },
+  { id: "storage", name: t("存储", "Storage"), icon: "folder" },
   { id: "about", name: t("运行环境", "About"), icon: "monitor" },
 ];
 
@@ -269,6 +271,10 @@ function subtitle(tab: Tab, x: Ctx): string {
       return c.obsidian.vault
         ? c.obsidian.vault.split("/").filter(Boolean).pop() + (c.obsidian.auto ? t(" · 自动存", " · auto") : "")
         : t("未设置", "Not set");
+    case "storage":
+      return S.meetings.length
+        ? t(`${S.meetings.length} 场 · ${fmtBytes(S.meetings.reduce((n, m) => n + (m.size_bytes ?? 0), 0))}`, `${S.meetings.length} meetings · ${fmtBytes(S.meetings.reduce((n, m) => n + (m.size_bytes ?? 0), 0))}`)
+        : t("还没有会议", "No meetings yet");
     case "record": {
       const n = c.auto_stop_silence_min ?? 10;
       return n ? t(`${n} 分钟没声音自动结束`, `Auto-stop after ${n} min of silence`) : t("手动结束", "Stop manually");
@@ -352,11 +358,12 @@ export async function renderSettings(tab: string = "llm"): Promise<void> {
   PANELS[cur](x);
 }
 
-const PANELS: Record<Tab, (x: Ctx) => void> = {
+const PANELS: Record<Tab, (x: Ctx) => void | Promise<void>> = {
   llm: panelLlm,
   asr: panelAsr,
   lang: panelLang,
   record: panelRecord,
+  storage: panelStorage,
   hotwords: panelHotwords,
   push: panelPush,
   obsidian: panelObsidian,
@@ -403,6 +410,113 @@ function panelAsr(x: Ctx): void {
     };
   });
   drawAsr();
+}
+
+interface Storage {
+  root: string;
+  count: number;
+  meetings_bytes: number;
+  audio_bytes: number;
+  leftover_bytes: number;
+  models_bytes: number | null;
+  free_bytes: number;
+  largest: { id: string; title: string; date: string; bytes: number; audio_bytes: number; archived: boolean }[];
+}
+
+async function panelStorage(): Promise<void> {
+  const panel = $("#sPanel");
+  panel.innerHTML = `<h2>${t("存储", "Storage")}</h2><p class="hint">${t("正在统计…", "Calculating…")}</p>`;
+  let st: Storage;
+  try {
+    st = await api<Storage>("/api/storage");
+  } catch (e) {
+    panel.innerHTML = `<h2>${t("存储", "Storage")}</h2><p class="hint">${esc(errorMessage(e))}</p>`;
+    return;
+  }
+  const other = Math.max(0, st.meetings_bytes - st.audio_bytes);
+  const total = st.meetings_bytes + (st.models_bytes ?? 0);
+  const pct = (n: number) => (total ? Math.max(0.5, (n / total) * 100) : 0).toFixed(1);
+  panel.innerHTML = `
+    <h2>${t("存储", "Storage")}</h2>
+    <p class="hint">${t(`会议保存在 ${esc(st.root)}，磁盘还剩 ${fmtBytes(st.free_bytes)}。删除的东西都会进废纸篓，清空废纸篓后才真正腾出空间。`, `Meetings live in ${esc(st.root)}; ${fmtBytes(st.free_bytes)} free on this disk. Everything deleted goes to the Trash — empty it to actually free the space.`)}</p>
+    <div class="st-bar">
+      <i class="a" style="width:${pct(st.audio_bytes)}%"></i><i class="b" style="width:${pct(other)}%"></i>${st.models_bytes ? `<i class="c" style="width:${pct(st.models_bytes)}%"></i>` : ""}
+    </div>
+    <div class="st-legend">
+      <span><i class="a"></i>${t("录音", "Recordings")} <b>${fmtBytes(st.audio_bytes)}</b></span>
+      <span><i class="b"></i>${t("转写、纪要和导出的文件", "Transcripts, minutes & exports")} <b>${fmtBytes(other)}</b></span>
+      ${st.models_bytes != null ? `<span><i class="c"></i>${t("识别模型", "Speech models")} <b>${fmtBytes(st.models_bytes)}</b></span>` : ""}
+    </div>
+
+    <h3 class="st-h">${t("清理", "Clean up")}</h3>
+    <div class="st-row">
+      <div><b>${t("残留文件", "Leftover files")}</b><small>${t("合成录音失败前留下的原始音轨、没下完的临时文件", "Raw tracks left behind when merging failed, unfinished temp files")}</small></div>
+      <button class="btn" id="stLeft" ${st.leftover_bytes ? "" : "disabled"}>${st.leftover_bytes ? t(`清理 ${fmtBytes(st.leftover_bytes)}`, `Clean ${fmtBytes(st.leftover_bytes)}`) : t("没有残留", "Nothing to clean")}</button>
+    </div>
+    <div class="st-row">
+      <div><b>${t("删除旧会议的录音", "Delete old recordings")}</b><small>${t("只删录音，转写和纪要都留着，照样能看、能搜", "Only the audio — transcripts and minutes stay viewable and searchable")}</small>
+        <div class="st-opts">${segChoice("stDays", "90", [
+          ["30", "30 天前", "> 30 days"],
+          ["90", "90 天前", "> 90 days"],
+          ["180", "半年前", "> 6 months"],
+          ["365", "一年前", "> 1 year"],
+        ])}<button class="toggle" id="stArch">${t("只处理已归档的", "Archived only")}</button></div></div>
+      <button class="btn" id="stAudio">${t("删除录音", "Delete recordings")}</button>
+    </div>
+
+    <h3 class="st-h">${t(`最占空间的会议（共 ${st.count} 场）`, `Largest meetings (${st.count} total)`)}</h3>
+    <div class="st-list">${
+      st.largest.length
+        ? st.largest
+            .map(
+              (m) => `<div class="st-item"><a href="#/m/${encodeURIComponent(m.id)}"><b>${esc(m.title)}</b>${m.archived ? `<span class="arch-badge">${t("已归档", "Archived")}</span>` : ""}<small>${esc(m.date)} · ${fmtBytes(m.bytes)}${m.audio_bytes ? t(`，录音 ${fmtBytes(m.audio_bytes)}`, `, audio ${fmtBytes(m.audio_bytes)}`) : ""}</small></a>
+              ${m.audio_bytes ? `<button class="btn ghost" data-audio="${esc(m.id)}">${t("只删录音", "Delete audio")}</button>` : ""}</div>`,
+            )
+            .join("")
+        : `<p class="hint">${t("还没有会议", "No meetings yet")}</p>`
+    }</div>`;
+  const days = bindSeg("stDays");
+  $("#stArch").onclick = () => $("#stArch").classList.toggle("on");
+  const run = async (body: unknown, what: string) => {
+    try {
+      const r = await api<{ count: number; freed_bytes: number }>("/api/storage/cleanup", { json: body });
+      if (!r.count) {
+        toast(t("没有符合条件的会议，什么都没删", "Nothing matched — nothing was deleted"));
+        return;
+      }
+      toast(t(`已把 ${r.count} ${what}移到废纸篓，腾出 ${fmtBytes(r.freed_bytes)}`, `Moved ${r.count} to the Trash — freed ${fmtBytes(r.freed_bytes)}`));
+      await refreshMeetings();
+      panelStorage();
+    } catch (e) {
+      toast(errorMessage(e), true);
+    }
+  };
+  $("#stLeft").onclick = () => run({ what: "leftovers" }, t("个文件", ""));
+  $("#stAudio").onclick = async () => {
+    const n = Number(days());
+    const archivedOnly = $("#stArch").classList.contains("on");
+    const ok = await confirmBox(
+      t(`删除 ${n} 天前${archivedOnly ? "已归档" : ""}会议的录音？`, `Delete recordings of ${archivedOnly ? "archived " : ""}meetings older than ${n} days?`),
+      t("录音会移到废纸篓，转写和纪要保留，以后就不能回听这些会议了。", "Recordings move to the Trash; transcripts and minutes stay, but you can't play those meetings back."),
+      t("删除录音", "Delete recordings"),
+    );
+    if (ok) run({ what: "audio", older_than_days: n, archived_only: archivedOnly }, t("场会议的录音", ""));
+  };
+  $$<HTMLButtonElement>("[data-audio]", panel).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        if (!(await confirmBox(t("删除这场会议的录音？", "Delete this meeting's recording?"), t("录音会移到废纸篓，转写和纪要保留。", "The recording moves to the Trash; transcript and minutes stay."), t("删除录音", "Delete recording"))))
+          return;
+        try {
+          const r = await deleteAudio(b.dataset.audio ?? "");
+          toast(t(`腾出 ${fmtBytes(r.freed_bytes)}`, `Freed ${fmtBytes(r.freed_bytes)}`));
+          await refreshMeetings();
+          panelStorage();
+        } catch (e) {
+          toast(errorMessage(e), true);
+        }
+      }),
+  );
 }
 
 function panelRecord(x: Ctx): void {

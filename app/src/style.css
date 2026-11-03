@@ -314,6 +314,58 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .wl-perm .silent b { background: #fffaeb; color: #b54708; }
 .wl-foot { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
 .wl-foot .grow { flex: 1; }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); color: var(--text-2); font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+.tag-chip small { color: var(--muted-2); font-family: var(--num); }
+.tag-chip.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+.tag-chip.sm { height: 22px; padding: 0 8px; font-size: 11.5px; background: var(--seg); border-color: transparent; }
+a.tag-chip.sm:hover { color: var(--blue); }
+.m-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -6px 0 18px; }
+.m-tools .grow { flex: 1; }
+.m-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.card-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: -4px; }
+.m-card { position: relative; }
+.m-card.selecting { cursor: pointer; }
+.m-card.selecting .when { padding-right: 30px; }
+.m-card.selecting:hover { transform: none; }
+.pick-box { position: absolute; top: 14px; right: 14px; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid #c9ccd1; background: var(--card); }
+.m-card.picked { box-shadow: 0 0 0 2px var(--blue); }
+.m-card.picked .pick-box { background: var(--blue); border-color: var(--blue); }
+.m-card.picked .pick-box:after { content: "✓"; color: #fff; font-size: 13px; display: grid; place-items: center; height: 100%; }
+.batch-bar { position: sticky; bottom: 16px; margin-top: 18px; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-pop); }
+.batch-bar[hidden] { display: none; }
+.batch-n { flex: 1; font-size: 13.5px; color: var(--muted); padding-left: 4px; }
+.btn.danger { color: #b42318; border-color: #fecdca; }
+.btn.danger:hover { background: #fef3f2; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.menu button.danger b { color: #b42318; }
+.menu button.danger > svg { color: #f04438; }
+.icon-btn { border: none; background: none; padding: 4px; margin-left: 6px; border-radius: 8px; color: var(--muted-2); vertical-align: middle; opacity: 0; transition: opacity 0.15s; }
+.detail-head h1:hover .icon-btn, .icon-btn:focus { opacity: 1; }
+.icon-btn:hover { background: var(--hover); color: var(--text); }
+.icon-btn svg { width: 18px; height: 18px; }
+.arch-badge { display: inline-block; vertical-align: middle; margin-left: 10px; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--seg); padding: 2px 8px; border-radius: 99px; }
+.tag-pick { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+.tag-pick .tag-chip { cursor: pointer; }
+.st-bar { display: flex; height: 12px; border-radius: 99px; overflow: hidden; background: var(--seg); margin: 14px 0 10px; }
+.st-bar i { display: block; height: 100%; }
+.st-bar .a, .st-legend .a { background: var(--blue); }
+.st-bar .b, .st-legend .b { background: var(--cyan); }
+.st-bar .c, .st-legend .c { background: #a78bfa; }
+.st-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.st-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+.st-legend b { color: var(--text); font-weight: 500; margin-left: 4px; }
+.st-h { font-size: 14px; margin: 26px 0 10px; }
+.st-row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.st-row > div { flex: 1; }
+.st-row b { font-weight: 500; font-size: 14px; display: block; }
+.st-row small { color: var(--muted); font-size: 12.5px; }
+.st-opts { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.st-list { display: grid; gap: 2px; }
+.st-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; }
+.st-item:hover { background: var(--hover); }
+.st-item a { flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.st-item b { font-weight: 500; font-size: 13.5px; }
+.st-item small { display: block; font-size: 12px; color: var(--muted); }
 .s-toggles { display: flex; gap: 8px; flex-wrap: wrap; }
 .toggle[disabled] { opacity: 0.5; cursor: not-allowed; }
 
