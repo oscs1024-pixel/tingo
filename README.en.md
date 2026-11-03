@@ -23,6 +23,8 @@ Tingo records Tencent Meeting / Feishu / Zoom audio plus your mic, transcribes i
 - **English and Chinese.** The app, the minutes and every export work in both languages. English meetings are recognized with SenseVoice, and a Chinese meeting can get English minutes (and vice versa).
 - **12 MB desktop app.** Tauri + Rust, no Python or ffmpeg needed. A live recording is fully transcribed seconds after you hit stop; a 76-minute file imports in about 3.5 minutes on an M1 Pro.
 
+Looking for a **free, open-source, local alternative to Otter.ai, Granola, Fireflies.ai or Fathom** — an AI meeting note taker that never uploads your audio? That's what Tingo is for.
+
 > The meetings, names and numbers in the screenshots are fictional demo data.
 
 ## Highlights
@@ -67,6 +69,16 @@ Audio and transcripts stay on your machine. When generating minutes, the **trans
 ## How it works
 
 ScreenCaptureKit records system audio and mic → audio is chunked at pauses while recording → VAD → ASR (Paraformer / SenseVoice / Fun-ASR-Nano via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)) → punctuation → CAM++ speaker embeddings → spectral clustering → LLM minutes (map-reduce for long meetings, dates resolved, glossary to fix homophones) → every fishbone citation is checked against the transcript. Engine comparison notes: [`spike/sherpa/RESULTS.md`](spike/sherpa/RESULTS.md) (in Chinese).
+
+## FAQ
+
+**How do I record and transcribe a Zoom / Teams / Google Meet call on Mac?** Hit record in Tingo. It captures system audio (the other side) and your microphone at the same time — no BlackHole or virtual audio device needed. You can also drop in recordings exported by the meeting app.
+
+**Is my audio uploaded?** No. Transcription and speaker separation run on your Mac. Only the transcript text goes to the LLM you configure — use a local Ollama model and nothing leaves the machine.
+
+**Which LLMs are supported?** Any OpenAI-compatible API (OpenAI, Gemini, DeepSeek, Qwen, Ollama, …) and the Anthropic (Claude) API.
+
+**Does it work for English meetings?** Yes. Switch the speech model to SenseVoice and the app and minutes to English in Settings.
 
 ## Development
 

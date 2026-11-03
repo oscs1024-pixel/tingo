@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tingo 听过 — 免费开源的本地 AI 会议纪要工具（Mac）</title>
+<meta name="description" content="Tingo 是免费开源的 Mac 会议纪要工具：录下腾讯会议、飞书、Zoom 的声音，在本机转文字、区分说话人，用你选的大模型自动生成会议纪要、待办和原因分析鱼骨图，每条结论都对得上原话，录音不上传。Otter、飞书妙记、通义听悟的本地替代。">
+<meta name="keywords" content="会议纪要,AI会议纪要,会议记录,会议录音转文字,语音转文字,录音转文字,本地语音识别,离线语音识别,说话人分离,区分说话人,腾讯会议录音,飞书会议录音,Zoom录音转文字,会议助手,Mac录音软件,开源,FunASR,SenseVoice,DeepSeek,Ollama,Obsidian,飞书妙记替代,通义听悟替代,讯飞听见替代,Otter替代">
+<link rel="canonical" href="https://tancheng33.github.io/tingo/">
+<link rel="alternate" hreflang="zh-CN" href="https://tancheng33.github.io/tingo/">
+<link rel="alternate" hreflang="en" href="https://tancheng33.github.io/tingo/en.html">
+<link rel="alternate" hreflang="x-default" href="https://tancheng33.github.io/tingo/en.html">
+<link rel="icon" href="assets/tingo-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/tingo-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Tingo 听过 — 免费开源的本地 AI 会议纪要工具（Mac）">
+<meta property="og:description" content="Tingo 是免费开源的 Mac 会议纪要工具：录下腾讯会议、飞书、Zoom 的声音，在本机转文字、区分说话人，用你选的大模型自动生成会议纪要、待办和原因分析鱼骨图，每条结论都对得上原话，录音不上传。Otter、飞书妙记、通义听悟的本地替代。">
+<meta property="og:url" content="https://tancheng33.github.io/tingo/">
+<meta property="og:image" content="https://tancheng33.github.io/tingo/og.png">
+<meta property="og:locale" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://tancheng33.github.io/tingo/og.png">
+<script type="application/ld+json">[{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Tingo 听过", "operatingSystem": "macOS 13+", "applicationCategory": "BusinessApplication", "description": "Tingo 是免费开源的 Mac 会议纪要工具：录下腾讯会议、飞书、Zoom 的声音，在本机转文字、区分说话人，用你选的大模型自动生成会议纪要、待办和原因分析鱼骨图，每条结论都对得上原话，录音不上传。Otter、飞书妙记、通义听悟的本地替代。", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "downloadUrl": "https://github.com/tancheng33/tingo/releases/latest", "url": "https://tancheng33.github.io/tingo/", "image": "https://tancheng33.github.io/tingo/assets/tingo-icon.png", "license": "https://opensource.org/licenses/MIT", "codeRepository": "https://github.com/tancheng33/tingo"}, {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "怎么把腾讯会议、飞书、Zoom 的会议录下来并转成文字？", "acceptedAnswer": {"@type": "Answer", "text": "打开 Tingo 点录音，会同时录下系统声音和你的麦克风，不用装虚拟声卡。会议软件导出的录音、录屏也可以直接拖进窗口。"}}, {"@type": "Question", "name": "会议录音会上传吗？", "acceptedAnswer": {"@type": "Answer", "text": "不会。识别、区分说话人都在你的 Mac 上完成。生成纪要时只把转写文字发给你选的大模型；用本地 Ollama 的话这一步也不出本机。"}}, {"@type": "Question", "name": "支持哪些大模型？", "acceptedAnswer": {"@type": "Answer", "text": "任何 OpenAI 兼容接口（DeepSeek、通义千问、OpenAI、Gemini、Kimi、本地 Ollama 等）和 Anthropic（Claude）接口。"}}, {"@type": "Question", "name": "能区分不同的人说的话吗？", "acceptedAnswer": {"@type": "Answer", "text": "能，按声纹自动区分说话人，改名后纪要会按新名字重新生成。"}}, {"@type": "Question", "name": "英文会议能用吗？", "acceptedAnswer": {"@type": "Answer", "text": "能。界面和纪要都支持英文；中文会议也能直接出英文纪要。"}}, {"@type": "Question", "name": "要花钱吗？", "acceptedAnswer": {"@type": "Answer", "text": "Tingo 本身免费开源（MIT 许可）。用云端大模型生成纪要会产生该服务的调用费用，用本地 Ollama 则完全免费。"}}]}]</script>
+<style>
+:root{--bg:#fafafc;--card:#fff;--line:#e9e9ed;--text:#0a0a0a;--muted:#6b7076;--blue:#1f4bff;--cyan:#34c6f4;--ink:#0e1430}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0b0f1e;--card:#121831;--line:#232b4a;--text:#eef1fb;--muted:#9aa3bf}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}
+a{color:inherit}.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+nav{display:flex;align-items:center;gap:10px;padding:18px 0}
+nav img{width:30px;height:30px}nav b{font-size:18px;letter-spacing:.3px}nav small{color:var(--muted);font-weight:500}
+nav .sp{flex:1}nav a.l{font-size:14px;color:var(--muted);text-decoration:none;margin-left:18px}nav a.l:hover{color:var(--text)}
+.hero{text-align:center;padding:56px 0 30px;position:relative}
+.hero:before{content:"";position:absolute;inset:-40px -10% auto;height:520px;z-index:-1;background:radial-gradient(40% 50% at 30% 30%,#c9d6ff99,transparent),radial-gradient(40% 50% at 75% 40%,#bfefff99,transparent);filter:blur(10px)}
+.pill{display:inline-flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);border:1px solid var(--line);background:var(--card);border-radius:99px;padding:4px 14px}
+.pill:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--blue)}
+h1{font-size:clamp(36px,6.2vw,68px);line-height:1.12;margin:22px 0 14px;letter-spacing:-.02em;font-weight:700}
+.sub{max-width:720px;margin:0 auto;color:var(--muted);font-size:clamp(16px,2vw,19px)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:30px 0 10px}
+.btn{display:inline-flex;align-items:center;gap:8px;height:48px;padding:0 24px;border-radius:99px;font-weight:600;text-decoration:none;font-size:15px;border:1px solid var(--line);background:var(--card)}
+.btn.p{background:#000;color:#fff;border-color:#000}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .btn.p{background:#fff;color:#000}}
+.req{font-size:13px;color:var(--muted)}
+.shot{margin:34px auto 0;border-radius:18px;overflow:hidden;border:1px solid var(--line);box-shadow:0 30px 80px -30px rgba(16,24,64,.35)}
+.shot img{display:block;width:100%;height:auto}
+section{padding:64px 0 0}h2{font-size:clamp(24px,3.4vw,34px);margin:0 0 22px;letter-spacing:-.01em;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--muted);font-size:14.5px}
+.lead{max-width:760px;margin:-8px auto 22px;text-align:center;color:var(--muted)}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+figure img{display:block;width:100%;height:auto}figcaption{font-size:13.5px;color:var(--muted);padding:10px 14px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px}
+th,td{padding:12px 16px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+tr:last-child td{border-bottom:none}th{font-weight:600}td:nth-child(2),th:nth-child(2){color:var(--blue);font-weight:600}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600}details p{margin:10px 0 0;color:var(--muted)}
+footer{padding:60px 0 40px;text-align:center;color:var(--muted);font-size:13.5px}
+@media (max-width:640px){nav a.l{margin-left:10px}.hero{padding-top:30px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><img src="assets/tingo-icon.svg" alt="Tingo logo"><b>Tingo</b><small>听过</small><span class="sp"></span>
+<a class="l" href="https://github.com/tancheng33/tingo">GitHub</a><a class="l" href="en.html" hreflang="en">English</a></nav>
+<header class="hero">
+<span class="pill">本地转写 · 录音不出本机 · 免费开源</span>
+<h1>开过的会，都听过。</h1>
+<p class="sub">录下会议，在你的 Mac 上转文字、分清谁说了什么，再由你选的大模型整理成纪要——每条结论都带时间戳，点一下就能听到原话。</p>
+<div class="cta"><a class="btn p" href="https://github.com/tancheng33/tingo/releases/latest">下载 macOS 版</a><a class="btn" href="https://github.com/tancheng33/tingo">★ 在 GitHub 查看</a></div>
+<div class="req">免费 · Apple 芯片 · macOS 13+</div>
+<div class="shot"><img src="screenshots/detail.png" alt="Tingo 听过 — 免费开源的本地 AI 会议纪要工具（Mac）" width="2880" height="1800" fetchpriority="high"></div>
+</header>
+<section><h2>为中文会议做的会议纪要工具</h2><div class="grid"><div class="card"><h3>录音不出本机</h3><p>语音识别、区分说话人都在本地完成，不上传录音；配合本地 Ollama 可以全程断网。</p></div><div class="card"><h3>直接录线上会议</h3><p>同时录系统声音和麦克风，腾讯会议、飞书、Zoom 里对方的声音都能录到，不用装虚拟声卡。</p></div><div class="card"><h3>结论有出处</h3><p>纪要每条都带时间戳，点一下跳回录音那一秒；&quot;下周三&quot;这类说法换算成具体日期。</p></div><div class="card"><h3>鱼骨图揪出空话</h3><p>讨论原因时自动画鱼骨图，每个分支绑着原话，一句都对不上的标成&quot;无原文依据&quot;。</p></div><div class="card"><h3>不用等</h3><p>录完马上能开下一场，转写和纪要在后台进行，能看着大模型一节一节写纪要。</p></div><div class="card"><h3>导出与分享</h3><p>PDF、Obsidian 笔记、Excalidraw 画板、飞书 / 钉钉 / 企业微信群、Markdown。</p></div></div></section>
+<section><h2>原因分析鱼骨图：一眼看出谁在说空话</h2><p class="lead">会上讨论了&quot;为什么&quot;，纪要里就多一张鱼骨图。每个分支都统计引用了多少原文，大模型给的引用在转写里找不到的，直接标红。</p>
+<div class="shot" style="margin-top:0"><img src="screenshots/fishbone.png" alt="原因分析鱼骨图：一眼看出谁在说空话" loading="lazy" width="1984" height="1018"></div></section>
+<section><h2>更多截图</h2><div class="shots"><figure><img src="screenshots/home.png" alt="录完就能开下一场，后台任务一目了然" loading="lazy" width="2880" height="1800"><figcaption>录完就能开下一场，后台任务一目了然</figcaption></figure><figure><img src="screenshots/generating.png" alt="看着纪要一节一节写出来" loading="lazy" width="2880" height="1800"><figcaption>看着纪要一节一节写出来</figcaption></figure><figure><img src="screenshots/transcript.png" alt="按声纹区分说话人" loading="lazy" width="2880" height="1800"><figcaption>按声纹区分说话人</figcaption></figure><figure><img src="screenshots/pdf.png" alt="导出 A4 PDF" loading="lazy" width="2880" height="1800"><figcaption>导出 A4 PDF</figcaption></figure></div></section>
+<section><h2>和其他会议纪要工具比</h2><div class="tbl"><table><tr><th></th><th>Tingo</th><th>飞书妙记 / 通义听悟等</th><th>Otter / Granola 等</th></tr><tr><td>录音存放</td><td>只在本机</td><td>云端</td><td>云端</td></tr><tr><td>中文识别</td><td>FunASR，中文专用</td><td>好</td><td>以英文为主</td></tr><tr><td>纪要用的模型</td><td>自己选，可完全本地</td><td>平台指定</td><td>平台指定</td></tr><tr><td>结论追溯原话</td><td>每条带时间戳，鱼骨图核实引用</td><td>部分支持</td><td>部分支持</td></tr><tr><td>费用</td><td>免费开源</td><td>按时长或会员收费</td><td>订阅制</td></tr></table></div></section>
+<section><h2>常见问题</h2><details><summary>怎么把腾讯会议、飞书、Zoom 的会议录下来并转成文字？</summary><p>打开 Tingo 点录音，会同时录下系统声音和你的麦克风，不用装虚拟声卡。会议软件导出的录音、录屏也可以直接拖进窗口。</p></details><details><summary>会议录音会上传吗？</summary><p>不会。识别、区分说话人都在你的 Mac 上完成。生成纪要时只把转写文字发给你选的大模型；用本地 Ollama 的话这一步也不出本机。</p></details><details><summary>支持哪些大模型？</summary><p>任何 OpenAI 兼容接口（DeepSeek、通义千问、OpenAI、Gemini、Kimi、本地 Ollama 等）和 Anthropic（Claude）接口。</p></details><details><summary>能区分不同的人说的话吗？</summary><p>能，按声纹自动区分说话人，改名后纪要会按新名字重新生成。</p></details><details><summary>英文会议能用吗？</summary><p>能。界面和纪要都支持英文；中文会议也能直接出英文纪要。</p></details><details><summary>要花钱吗？</summary><p>Tingo 本身免费开源（MIT 许可）。用云端大模型生成纪要会产生该服务的调用费用，用本地 Ollama 则完全免费。</p></details></section>
+<footer><a href="https://github.com/tancheng33/tingo/releases/latest">下载 macOS 版</a> · <a href="https://github.com/tancheng33/tingo">GitHub</a> · MIT 许可 · 开源在 GitHub<br>截图中的会议均为虚构的演示数据</footer>
+</div>
+</body>
+</html>

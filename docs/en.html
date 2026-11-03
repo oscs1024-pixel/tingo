@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tingo — Free, open-source, local AI meeting notes for Mac</title>
+<meta name="description" content="Tingo is a free, open-source AI meeting note taker for Mac. It records Zoom, Teams, Meet or any call, transcribes on-device, separates speakers and writes minutes, action items and evidence-bound fishbone diagrams with the LLM you choose. Your audio never leaves your Mac. A local alternative to Otter.ai, Granola and Fireflies.">
+<meta name="keywords" content="AI meeting notes,meeting minutes,meeting transcription,AI note taker,local transcription,offline speech to text,speaker diarization,meeting recorder Mac,Zoom transcription,Otter alternative,Granola alternative,Fireflies alternative,open source,privacy,Ollama,Obsidian,Chinese transcription">
+<link rel="canonical" href="https://tancheng33.github.io/tingo/en.html">
+<link rel="alternate" hreflang="zh-CN" href="https://tancheng33.github.io/tingo/">
+<link rel="alternate" hreflang="en" href="https://tancheng33.github.io/tingo/en.html">
+<link rel="alternate" hreflang="x-default" href="https://tancheng33.github.io/tingo/en.html">
+<link rel="icon" href="assets/tingo-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/tingo-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Tingo — Free, open-source, local AI meeting notes for Mac">
+<meta property="og:description" content="Tingo is a free, open-source AI meeting note taker for Mac. It records Zoom, Teams, Meet or any call, transcribes on-device, separates speakers and writes minutes, action items and evidence-bound fishbone diagrams with the LLM you choose. Your audio never leaves your Mac. A local alternative to Otter.ai, Granola and Fireflies.">
+<meta property="og:url" content="https://tancheng33.github.io/tingo/en.html">
+<meta property="og:image" content="https://tancheng33.github.io/tingo/og.png">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://tancheng33.github.io/tingo/og.png">
+<script type="application/ld+json">[{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Tingo", "operatingSystem": "macOS 13+", "applicationCategory": "BusinessApplication", "description": "Tingo is a free, open-source AI meeting note taker for Mac. It records Zoom, Teams, Meet or any call, transcribes on-device, separates speakers and writes minutes, action items and evidence-bound fishbone diagrams with the LLM you choose. Your audio never leaves your Mac. A local alternative to Otter.ai, Granola and Fireflies.", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "downloadUrl": "https://github.com/tancheng33/tingo/releases/latest", "url": "https://tancheng33.github.io/tingo/en.html", "image": "https://tancheng33.github.io/tingo/assets/tingo-icon.png", "license": "https://opensource.org/licenses/MIT", "codeRepository": "https://github.com/tancheng33/tingo"}, {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "How do I record and transcribe a Zoom or Teams call on Mac?", "acceptedAnswer": {"@type": "Answer", "text": "Click record in Tingo. It captures system audio (the other side) and your microphone at the same time, with no BlackHole or virtual audio device. You can also drop in recordings exported by the meeting app."}}, {"@type": "Question", "name": "Is my audio uploaded?", "acceptedAnswer": {"@type": "Answer", "text": "No. Transcription and speaker separation run on your Mac. Only the transcript text goes to the LLM you configure — use local Ollama and nothing leaves your machine."}}, {"@type": "Question", "name": "Which LLMs are supported?", "acceptedAnswer": {"@type": "Answer", "text": "Any OpenAI-compatible API (OpenAI, Gemini, DeepSeek, Qwen, Ollama…) and the Anthropic (Claude) API."}}, {"@type": "Question", "name": "Does it work for English meetings?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Switch the speech model to SenseVoice and set the app and minutes to English in Settings."}}, {"@type": "Question", "name": "Is it free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, Tingo is free and open source (MIT). Cloud LLMs bill you for their API usage; local Ollama costs nothing."}}]}]</script>
+<style>
+:root{--bg:#fafafc;--card:#fff;--line:#e9e9ed;--text:#0a0a0a;--muted:#6b7076;--blue:#1f4bff;--cyan:#34c6f4;--ink:#0e1430}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0b0f1e;--card:#121831;--line:#232b4a;--text:#eef1fb;--muted:#9aa3bf}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}
+a{color:inherit}.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+nav{display:flex;align-items:center;gap:10px;padding:18px 0}
+nav img{width:30px;height:30px}nav b{font-size:18px;letter-spacing:.3px}nav small{color:var(--muted);font-weight:500}
+nav .sp{flex:1}nav a.l{font-size:14px;color:var(--muted);text-decoration:none;margin-left:18px}nav a.l:hover{color:var(--text)}
+.hero{text-align:center;padding:56px 0 30px;position:relative}
+.hero:before{content:"";position:absolute;inset:-40px -10% auto;height:520px;z-index:-1;background:radial-gradient(40% 50% at 30% 30%,#c9d6ff99,transparent),radial-gradient(40% 50% at 75% 40%,#bfefff99,transparent);filter:blur(10px)}
+.pill{display:inline-flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);border:1px solid var(--line);background:var(--card);border-radius:99px;padding:4px 14px}
+.pill:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--blue)}
+h1{font-size:clamp(36px,6.2vw,68px);line-height:1.12;margin:22px 0 14px;letter-spacing:-.02em;font-weight:700}
+.sub{max-width:720px;margin:0 auto;color:var(--muted);font-size:clamp(16px,2vw,19px)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:30px 0 10px}
+.btn{display:inline-flex;align-items:center;gap:8px;height:48px;padding:0 24px;border-radius:99px;font-weight:600;text-decoration:none;font-size:15px;border:1px solid var(--line);background:var(--card)}
+.btn.p{background:#000;color:#fff;border-color:#000}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .btn.p{background:#fff;color:#000}}
+.req{font-size:13px;color:var(--muted)}
+.shot{margin:34px auto 0;border-radius:18px;overflow:hidden;border:1px solid var(--line);box-shadow:0 30px 80px -30px rgba(16,24,64,.35)}
+.shot img{display:block;width:100%;height:auto}
+section{padding:64px 0 0}h2{font-size:clamp(24px,3.4vw,34px);margin:0 0 22px;letter-spacing:-.01em;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--muted);font-size:14.5px}
+.lead{max-width:760px;margin:-8px auto 22px;text-align:center;color:var(--muted)}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+figure img{display:block;width:100%;height:auto}figcaption{font-size:13.5px;color:var(--muted);padding:10px 14px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px}
+th,td{padding:12px 16px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+tr:last-child td{border-bottom:none}th{font-weight:600}td:nth-child(2),th:nth-child(2){color:var(--blue);font-weight:600}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600}details p{margin:10px 0 0;color:var(--muted)}
+footer{padding:60px 0 40px;text-align:center;color:var(--muted);font-size:13.5px}
+@media (max-width:640px){nav a.l{margin-left:10px}.hero{padding-top:30px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><img src="assets/tingo-icon.svg" alt="Tingo logo"><b>Tingo</b><small>听过</small><span class="sp"></span>
+<a class="l" href="https://github.com/tancheng33/tingo">GitHub</a><a class="l" href="index.html" hreflang="zh-CN">中文</a></nav>
+<header class="hero">
+<span class="pill">On-device transcription · audio never leaves your Mac · free &amp; open source</span>
+<h1>Every meeting, heard.</h1>
+<p class="sub">Record a meeting, transcribe it on your Mac, tell speakers apart — then let the LLM you choose write the minutes. Every conclusion carries a timestamp that plays back the original words.</p>
+<div class="cta"><a class="btn p" href="https://github.com/tancheng33/tingo/releases/latest">Download for macOS</a><a class="btn" href="https://github.com/tancheng33/tingo">★ View on GitHub</a></div>
+<div class="req">Free · Apple Silicon · macOS 13+</div>
+<div class="shot"><img src="screenshots/detail.png" alt="Tingo — Free, open-source, local AI meeting notes for Mac" width="2880" height="1800" fetchpriority="high"></div>
+</header>
+<section><h2>Meeting notes you can trust</h2><div class="grid"><div class="card"><h3>Audio stays on your Mac</h3><p>Speech recognition and speaker separation run locally. Pair it with Ollama to work fully offline.</p></div><div class="card"><h3>Records any call</h3><p>Captures system audio and your mic at once — Zoom, Teams, Meet, Tencent Meeting, Feishu. No virtual audio driver.</p></div><div class="card"><h3>Every claim has a source</h3><p>Each line of the minutes links to the second it was said. Relative dates are resolved to real dates.</p></div><div class="card"><h3>Fishbone that exposes hand-waving</h3><p>When causes are discussed, Tingo draws a fishbone; branches with no supporting quote are flagged.</p></div><div class="card"><h3>Never wait</h3><p>Start the next meeting right away — transcription and minutes run in the background.</p></div><div class="card"><h3>Export anywhere</h3><p>PDF, Obsidian notes, Excalidraw, Markdown, Feishu / DingTalk / WeCom bots.</p></div></div></section>
+<section><h2>Fishbone diagrams bound to what was actually said</h2><p class="lead">Each branch counts how much original speech backs it. Citations the model made up — timestamps that don&#x27;t exist in the transcript — are marked in red.</p>
+<div class="shot" style="margin-top:0"><img src="screenshots/fishbone.png" alt="Fishbone diagrams bound to what was actually said" loading="lazy" width="1984" height="1018"></div></section>
+<section><h2>More screenshots</h2><div class="shots"><figure><img src="screenshots/home.png" alt="Start the next meeting while minutes are written in the background" loading="lazy" width="2880" height="1800"><figcaption>Start the next meeting while minutes are written in the background</figcaption></figure><figure><img src="screenshots/generating.png" alt="Watch the minutes being written" loading="lazy" width="2880" height="1800"><figcaption>Watch the minutes being written</figcaption></figure><figure><img src="screenshots/transcript.png" alt="Speakers separated by voiceprint" loading="lazy" width="2880" height="1800"><figcaption>Speakers separated by voiceprint</figcaption></figure><figure><img src="screenshots/pdf.png" alt="A4 PDF export" loading="lazy" width="2880" height="1800"><figcaption>A4 PDF export</figcaption></figure></div></section>
+<section><h2>How it compares</h2><div class="tbl"><table><tr><th></th><th>Tingo</th><th>Otter / Granola / Fireflies</th><th>Feishu Minutes / Tongyi Tingwu</th></tr><tr><td>Where audio lives</td><td>Only on your Mac</td><td>Cloud</td><td>Cloud</td></tr><tr><td>Chinese recognition</td><td>FunASR, built for Chinese</td><td>Mostly English</td><td>Good</td></tr><tr><td>Which LLM</td><td>Your choice, can be fully local</td><td>Fixed by vendor</td><td>Fixed by vendor</td></tr><tr><td>Trace claims to quotes</td><td>Timestamps everywhere, verified fishbone</td><td>Partly</td><td>Partly</td></tr><tr><td>Price</td><td>Free &amp; open source</td><td>Subscription</td><td>Per-minute or membership</td></tr></table></div></section>
+<section><h2>FAQ</h2><details><summary>How do I record and transcribe a Zoom or Teams call on Mac?</summary><p>Click record in Tingo. It captures system audio (the other side) and your microphone at the same time, with no BlackHole or virtual audio device. You can also drop in recordings exported by the meeting app.</p></details><details><summary>Is my audio uploaded?</summary><p>No. Transcription and speaker separation run on your Mac. Only the transcript text goes to the LLM you configure — use local Ollama and nothing leaves your machine.</p></details><details><summary>Which LLMs are supported?</summary><p>Any OpenAI-compatible API (OpenAI, Gemini, DeepSeek, Qwen, Ollama…) and the Anthropic (Claude) API.</p></details><details><summary>Does it work for English meetings?</summary><p>Yes. Switch the speech model to SenseVoice and set the app and minutes to English in Settings.</p></details><details><summary>Is it free?</summary><p>Yes, Tingo is free and open source (MIT). Cloud LLMs bill you for their API usage; local Ollama costs nothing.</p></details></section>
+<footer><a href="https://github.com/tancheng33/tingo/releases/latest">Download for macOS</a> · <a href="https://github.com/tancheng33/tingo">GitHub</a> · MIT licensed · open source on GitHub<br>Meetings in the screenshots are fictional demo data</footer>
+</div>
+</body>
+</html>
