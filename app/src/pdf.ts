@@ -35,6 +35,7 @@ h1.title { font-size: 25px; line-height: 1.35; margin: 0 0 10px; font-weight: 65
 .ts { display: inline; border: none; background: #eef2ff; color: #1f4bff; font: 500 11px ui-monospace, Menlo, monospace; padding: 0 5px; border-radius: 5px; margin: 0 2px; vertical-align: 1px; }
 .fishbone { margin: 12px 0 4px; border: 1px solid #e9e9ed; border-radius: 12px; padding: 14px 16px; break-inside: avoid-page; }
 .fishbone.pending, .fb-draw { display: none; }
+.keep { break-inside: avoid-page; page-break-inside: avoid; }
 .fb-head { display: flex; align-items: center; gap: 8px; }
 .fb-head svg { width: 16px; height: 16px; fill: none; stroke: #1f4bff; stroke-width: 1.8; flex: none; }
 .fb-problem { font-weight: 600; font-size: 14.5px; flex: 1; }
@@ -42,10 +43,10 @@ h1.title { font-size: 25px; line-height: 1.35; margin: 0 0 10px; font-weight: 65
 .fb-summary { margin: 2px 0 12px 24px; font-size: 11.5px; color: #6b7076; }
 .fb-summary b { color: #b42318; font-weight: 500; }
 .fb-body { position: relative; display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; row-gap: 8px; align-items: start; }
-.fb-spine { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 2px; margin-left: -1px; background: #dfe5f5; }
+.fb-spine { z-index: 0; position: absolute; left: 50%; top: 4px; bottom: 4px; width: 2px; margin-left: -1px; background: #dfe5f5; }
 .fb-branch { position: relative; background: #f6f7f9; border-radius: 9px; padding: 8px 10px; break-inside: avoid; }
 .fb-branch.right { margin-top: 14px; }
-.fb-branch::after { content: ""; position: absolute; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #1d1d1f; }
+.fb-branch::after { z-index: 1; content: ""; position: absolute; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #1d1d1f; }
 .fb-branch.left::after { right: -16px; }
 .fb-branch.right::after { left: -16px; }
 .fb-branch.lv-none { background: #fff6f5; }
@@ -60,6 +61,19 @@ h1.title { font-size: 25px; line-height: 1.35; margin: 0 0 10px; font-weight: 65
 .fb-quote .ts { margin-left: 0; }
 .fb-who { color: #6b7076; margin-right: 5px; }
 .foot { margin-top: 34px; padding-top: 12px; border-top: 1px solid #e9e9ed; font-size: 11px; color: #a3a7ad; display: flex; justify-content: space-between; }
+`;
+
+/* 打印前把鱼骨图和它上面的小标题包进一个不拆页的容器：标题不会单独留在上一页底部。
+   （对标题设 break-after / page-break-after: avoid 在 WebKit 打印里不生效，"整块不拆"是生效的。） */
+const KEEP_TOGETHER = `
+  document.querySelectorAll(".md h2").forEach((h) => {
+    const next = h.nextElementSibling;
+    if (!next || !next.classList.contains("fishbone")) return;
+    const box = document.createElement("div");
+    box.className = "keep";
+    h.before(box);
+    box.append(h, next);
+  });
 `;
 
 /** 生成导出用的完整 HTML 文档 */
@@ -81,6 +95,7 @@ export function minutesDocument(d: MeetingDetail): string {
     ${speakers ? `<span>参会人<b>${esc(speakers)}</b></span>` : ""}
   </div>
   <div class="md">${body}</div>
+  <script>${KEEP_TOGETHER}</script>
   <div class="foot"><span>由 Tingo 听过 生成 · 录音在本机转写，每条结论后的时间戳对应录音里的原话</span><span>${stamp}</span></div>
 </body></html>`;
 }

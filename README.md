@@ -1,240 +1,211 @@
-<p align="center"><img src="brand/tingo-icon.svg" width="112" alt="Tingo"></p>
+<p align="center"><img src="brand/tingo-icon.svg" width="120" alt="Tingo"></p>
 
 <h1 align="center">Tingo 听过</h1>
 
-<p align="center"><b>开过的会，都听过。</b>本地转写，每条结论都对得上原话。</p>
+<p align="center"><b>开过的会，都听过。</b><br>本地录音、本地转写的中文会议纪要工具，每条结论都对得上原话。</p>
 
-**本地录音 → 中文转写 → 区分说话人 → 一键出会议纪要。** 录音和识别都在你自己的电脑上完成，纪要用你自己选的大模型生成（可以是本地 Ollama，全程不出本机）。
+<p align="center">
+  <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/github/v/release/tancheng33/tingo?label=下载&color=1f4bff" alt="下载"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-000?logo=apple" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/license-MIT-34c6f4" alt="MIT">
+  <a href="README.en.md"><img src="https://img.shields.io/badge/README-English-555" alt="English"></a>
+</p>
 
-```bash
-tingo ui                      # 图形界面
-tingo record -t 周会          # 命令行录音，Ctrl+C 结束，自动出纪要
-tingo run 腾讯会议录制.mp4     # 处理已有的录音/录屏
-```
+<p align="center"><img src="docs/screenshots/detail.png" width="880" alt="会议纪要详情"></p>
 
-> **Tingo** (from 听 *tīng*, "listen") — local-first meeting minutes for Chinese: records system audio + mic on macOS, transcribes with FunASR (Paraformer + CAM++ speaker diarization), and writes structured minutes (decisions, action items with owners and due dates) with any OpenAI-compatible LLM.
+录下腾讯会议、飞书、Zoom 里的声音和你自己的麦克风，在你的电脑上转成文字、分清谁说了什么，再交给你自己选的大模型整理成纪要：议题、决议、带负责人和截止日期的待办、风险，讨论了"为什么"时还会画一张**每个分支都绑着原话的鱼骨图**。
 
-## 为什么做这个
+- **录音不出本机**：识别、区分说话人都在本地完成，不上传录音。纪要可以用 DeepSeek、通义千问这类接口，也可以用本地 Ollama，全程断网。
+- **为中文会议做的**：阿里达摩院 FunASR 的中文识别模型，中文标点、数字、人名都比通用的英文方案好；时间说法（"下周三""月底"）按会议日期换算成具体日子。
+- **结论有出处**：纪要里每一条都带时间戳，点一下跳回录音那一秒；鱼骨图会统计每个分支引用了多少原文，一句都对不上的直接标出来，一眼看出谁在说空话。
+- **桌面 App 12 MB**：Tauri + Rust，不用装 Python 和 ffmpeg。1 小时的会议结束后几秒出转写，76 分钟的录音导入后约 3.5 分钟转完。
 
-Meetily、Hyprnote 这类开源会议助手做得很好，但它们是为英文场景设计的（比如 Meetily 的识别核心是 Whisper / Parakeet）。中文会议有几个问题需要专门处理：
+> 截图里的会议、人名和数据都是虚构的演示内容。
 
-- **中文识别**：用阿里达摩院的 [FunASR](https://github.com/modelscope/FunASR) Paraformer，中文准确率和标点都比 Whisper 好，模型从 ModelScope 下载，国内直连。
-- **谁说了什么**：CAM++ 说话人区分，并在换人处按字重新切分，修正 FunASR 把后一个人开头几个字算给前一个人的问题。
-- **专有名词**：支持热词（人名、项目代号、内部系统名）。
-- **纪要格式**：按国内职场习惯输出议题、决议、待办（事项 / 负责人 / 截止时间）、待定问题，每条附时间戳便于回听核对；"下周三"这类说法会按会议日期换算成具体日期。
-- **发到群里**：一条命令推送到飞书、钉钉、企业微信群机器人。
-- **线上会议**：macOS 上直接录系统声音，不用装 BlackHole 之类的虚拟声卡，腾讯会议、飞书、Zoom 里对方的声音都能录到。
+## 功能
 
-## 输出示例
+### 原因分析鱼骨图：一眼看出哪条是空话
 
-下面是一段约 1 分钟的模拟会议（用 macOS 语音合成生成的两人对话），用本地 Qwen3-8B 生成的纪要：
+会上讨论了"为什么"——转化率为什么掉了、项目为什么延期——纪要里就会多一张鱼骨图。每个分支都绑着它依据的原话，点开能看到是谁在几分几秒说的，点时间戳跳回去听。
 
-```markdown
-# 产品发布及客服系统迁移会议
+每个分支会统计引用了几段、多少字的原文：大模型给的时间戳在转写里对不上的，标成**无原文依据**（红色）；引用太少的标成**依据很少**（橙色）。会上有人凭感觉下的结论，在图上一眼就能看出来。
 
-- 日期：2026-11-02（星期一）
-- 时长：00:52
-- 参会人：李经理、小张
+<p align="center"><img src="docs/screenshots/fishbone.png" width="820" alt="鱼骨图：每个分支绑着原话"></p>
 
-## 一句话总结
-讨论下个月产品发布时间及客服系统迁移方案。
+鱼骨图可以一键导出成 [Excalidraw](https://excalidraw.com) 画板，接着改、拿去汇报：
 
-## 决议
-- 产品上线时间定为11月25日（[00:29]）
+<p align="center"><img src="docs/screenshots/excalidraw.png" width="720" alt="导出到 Excalidraw 的鱼骨图"></p>
 
-## 待办
-| 事项 | 负责人 | 截止时间 | 出处 |
-|---|---|---|---|
-| 提交客服系统迁移方案 | 小张 | 下周三（11月11日） | [00:40] |
-| 修复支付模块 | 小王 | 11月15日 | [00:29] |
-```
+### 不用等：录完就能开下一场
 
-同时会生成带说话人和时间戳的完整转写 `转写.md`：
+结束录音后，转写和纪要在后台进行，首页马上可以开下一场会。侧边栏能看到每个任务进行到哪一步；点进会议，能看着大模型一节一节写纪要——推理模型动笔前要先想一两分钟，这时也会显示"已思考多少字"，不会像卡住了一样。
 
-```markdown
-**李经理** `00:19`
+<p align="center"><img src="docs/screenshots/home.png" width="49%" alt="首页：后台任务"> <img src="docs/screenshots/generating.png" width="49%" alt="纪要生成过程"></p>
 
-那十五号提测的话，二十号上线来得及吗？
+### 谁说了什么
 
-**小张** `00:23`
+边录边转：录音时就在识别，结束后几秒出完整转写。按声纹区分说话人，改个名字，纪要会按新名字重新生成。点任意一句跳到那里回听，播放时当前发言会高亮。
 
-有点紧，我建议把上线推迟到二十五号，留出一周的测试。
-```
+<p align="center"><img src="docs/screenshots/transcript.png" width="820" alt="转写：区分说话人"></p>
+
+### 导出与分享
+
+- **PDF**：A4 排版，鱼骨图把引用的原话直接展开在纸上，可以直接发给没参会的人。
+- **Obsidian**：一场会一篇笔记，日期、时长、参会人写在属性里，鱼骨图存成 Excalidraw 画板嵌在笔记里；可以设成生成纪要后自动存。
+- **飞书 / 钉钉 / 企业微信**：贴一个群机器人的 webhook，一键推送到群里。
+- **Markdown**：复制粘贴到任何地方。
+
+<p align="center"><img src="docs/screenshots/pdf.png" width="820" alt="导出 PDF"></p>
+
+### 识别模型可以换
+
+默认的 Paraformer-large 适合大多数中文会议。会上中英文混着说，可以换成 SenseVoice；要更准、想让人名和项目代号在识别时就认对，可以换成 Fun-ASR-Nano（会直接用上你填的热词）。在设置里下载、切换，都在本地运行。
+
+<p align="center"><img src="docs/screenshots/settings.png" width="820" alt="设置：识别模型"></p>
 
 ## 安装
 
-需要 Python 3.11+ 和 ffmpeg。
+### 桌面 App（推荐）
+
+到 [Releases](https://github.com/tancheng33/tingo/releases/latest) 下载 `Tingo_x.y.z_aarch64.dmg`，拖进「应用程序」。目前只有 Apple 芯片（M1 及以后）的版本，需要 macOS 13 以上；录系统声音需要 macOS 15 以上。
+
+第一次打开时在界面里下载识别模型（约 330 MB：识别模型来自 ModelScope，国内直连；标点和声纹模型来自 GitHub，网络中断会自动续传），之后完全离线可用。
+
+> App 暂时没有用苹果开发者证书签名，第一次打开会提示"无法验证开发者"。在「应用程序」里**右键点 Tingo → 打开**，再点一次「打开」即可；或者在终端运行：
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Tingo.app
+> ```
+
+第一次录音时，macOS 会请求「麦克风」和「屏幕与系统录音」权限（录对方的声音要用到后者），允许即可。
+
+### 命令行
+
+命令行版基于 Python（FunASR），适合放进脚本、批量处理录音。需要 Python 3.11+ 和 ffmpeg：
 
 ```bash
-brew install ffmpeg            # Linux: apt install ffmpeg
-uv tool install git+https://github.com/tancheng33/tingo
-# 或 pipx install git+https://github.com/tancheng33/tingo
-
-tingo doctor                   # 检查环境
+brew install ffmpeg
+uv tool install git+https://github.com/tancheng33/tingo      # 或 pipx install git+…
+tingo doctor                                                 # 检查环境
 ```
-
-首次转写会从 ModelScope 下载识别模型（约 2.1 GB），之后离线可用。
-
-## 配置大模型
-
-转写不需要大模型，生成纪要需要。任何 OpenAI 兼容接口都可以：
 
 ```bash
-tingo config                   # 生成 ~/.config/tingo/config.toml 模板
+tingo record -t 周会 -w "林舟,注册转化"     # 录音（系统声音 + 麦克风），Ctrl+C 结束，自动出纪要
+tingo run ~/Downloads/项目评审.mp4          # 处理已有的录音或录屏
+tingo summarize ~/Documents/Tingo/2026-10-28_1400_复盘 -s "林舟,陈默"   # 改说话人名字后重新生成纪要
+tingo push ~/Documents/Tingo/2026-10-28_1400_复盘                       # 推送到群
+tingo ui                                                     # 打开图形界面
 ```
 
-```toml
-[llm]
-base_url = "https://api.deepseek.com"
-api_key = "sk-..."
-model = "deepseek-chat"
-
-hotwords = ["星河计划", "张晓东", "Kafka"]
-
-[push]
-webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
-```
-
-也可以用环境变量 `TINGO_LLM_BASE_URL`、`TINGO_LLM_API_KEY`、`TINGO_LLM_MODEL`，或直接设置 `DEEPSEEK_API_KEY`。
-
-**本机中转**：装了 Magpie 或 CC Switch（开启「本地代理」，默认端口 15721）的话，设置页会自动探测，一键选用，模型从下拉列表里挑。实测一场 76 分钟的会，DeepSeek V4 Flash 51 秒出纪要，MiniMax-M3.1-Flash 160 秒（细节更多），本地 Qwen3-8B 约 8 分钟。
-
-**完全不出本机**：用 [Ollama](https://ollama.com) 跑本地模型，`base_url = "http://localhost:11434/v1"`、`model = "qwen3:8b"`，不需要 key。本地模型上下文较短，长会议会自动分段提炼再合并。
-
-## 图形界面
-
-```bash
-tingo ui            # 独立窗口（macOS）
-tingo ui --browser  # 在浏览器里打开
-```
-
-- **录音**：填个会议名称，点录音按钮。录音时能看到两路电平（系统声音 / 麦克风）和实时识别出的文字，背景的极光会跟着音量起伏；结束后几秒就出转写。
-- **导入**：把腾讯会议、飞书导出的录音或录屏直接拖进窗口。
-- **会议详情**：纪要和转写两个视图，点任意时间戳跳到那里回听，播放时当前发言会高亮；可以给说话人改名后重新生成纪要，也可以直接编辑纪要。
-- **原因分析鱼骨图**：会上讨论了"为什么"时，纪要里自动画一张鱼骨图。每个分支绑着它依据的原话，点开就能跳回去听；还会统计每个分支引用了多少原文，一句都对不上的标成"无原文依据"，一眼看出哪条是在说空话。可以导出成 Excalidraw 继续改。
-- **存进 Obsidian**：一场会一篇笔记，日期、时长、参会人写在属性里，鱼骨图存成 Excalidraw 画板嵌进笔记；可以设成生成纪要后自动存。
-- **不用等**：结束录音后马上可以开下一场，转写和纪要在后台进行；侧边栏能看到每个任务的进度，点进去能看着纪要一节一节写出来。
-- **设置**：大模型（DeepSeek / 通义千问 / 本地 Ollama 一键切换，带连接测试）、识别模型（桌面版可在 Paraformer、SenseVoice、Fun-ASR-Nano 之间下载切换）、热词、群机器人、Obsidian。
-
-界面只监听 127.0.0.1，不对外开放。
-
-## 用法
-
-```bash
-# 录音（线上会议：系统声音 + 麦克风）
-tingo record -t 周会 -w "星河计划,张晓东" -s "张晓东,李雷"
-
-# 线下会议只录麦克风 / 只旁听线上会议不录自己
-tingo record --no-system
-tingo record --no-mic
-
-# 处理已有文件：wav、mp3、m4a、mp4……
-tingo run ~/Downloads/项目评审.mp4 -d 2026-11-02
-
-# 转写后发现说话人顺序和名字，重新生成纪要（不用重新转写）
-tingo summarize ~/Documents/Tingo/2026-11-02_1430_周会 -s "王总,张晓东,李雷"
-
-# 推送到群
-tingo push ~/Documents/Tingo/2026-11-02_1430_周会
-tingo run 录音.m4a --push
-```
-
-每场会议一个文件夹（默认在 `~/Documents/Tingo/`）：
+每场会议一个文件夹，默认在 `~/Documents/Tingo/`，桌面 App 和命令行共用：
 
 ```
-2026-11-02_1430_周会/
+2026-10-28_1400_注册转化复盘/
 ├── 录音.m4a          # 16 kHz 单声道，1 小时约 30 MB
 ├── 转写.md
-├── transcript.json   # 结构化转写，summarize 用
+├── transcript.json   # 结构化转写
 └── 纪要.md
 ```
 
-`-s` 按**首次发言的先后顺序**给说话人命名，可以留空位：`-s ",李雷"` 只给第二位改名。
+## 配置大模型
+
+转写不需要大模型，生成纪要需要。任何 OpenAI 兼容接口都可以，在设置里点选，带连接测试：
+
+| 选择 | 说明 |
+|---|---|
+| DeepSeek、通义千问（百炼） | 填 API Key 即可。实测 76 分钟的会，DeepSeek V4 Flash 约 50 秒出纪要 |
+| 本机中转（Magpie、CC Switch） | 打开后自动探测，一键选用，模型从列表里挑 |
+| 本地 Ollama | 全程不出本机，不需要 Key。本地模型上下文较短，长会议会自动分段提炼再合并 |
+| 自定义 | 任意 OpenAI 兼容地址 |
+
+配置文件在 `~/.config/tingo/config.toml`，也可以用环境变量 `TINGO_LLM_BASE_URL`、`TINGO_LLM_API_KEY`、`TINGO_LLM_MODEL`。
+
+## 隐私
+
+- 录音和转写只在你的电脑上，识别模型在本地运行。
+- 生成纪要时，**转写文字**会发给你配置的大模型接口；用本地 Ollama 的话这一步也不出本机。
+- 推送到群、存到 Obsidian、导出 PDF 都是你点了才发生。
+- App 内的服务只监听 127.0.0.1，不对外开放。没有任何统计和上报。
 
 ## 工作原理
 
 ```
 录音 ─┬─ 系统声音（ScreenCaptureKit）─┐
-      └─ 麦克风 ──────────────────────┴─ 合成 16 kHz 单声道
+      └─ 麦克风 ──────────────────────┴─ 16 kHz 单声道，边录边按停顿切段
                                               │
-            FunASR：VAD 切分 → Paraformer 识别（热词）→ 标点 → CAM++ 说话人聚类
+          VAD 切分 → 识别（Paraformer / SenseVoice / Fun-ASR-Nano）→ 标点 → CAM++ 声纹
                                               │
-                     按字级时间戳在换人处重新切分句子
+                    谱聚类区分说话人（全场一次，说话人编号前后一致）
                                               │
-                    大模型生成纪要（长会议分段提炼 + 合并）
+          大模型写纪要（长会议分段提炼再合并；日期按会议日换算；术语表纠正同音字）
                                               │
-                            纪要.md ──→ 飞书 / 钉钉 / 企业微信
+               鱼骨图的每个引用对照转写核实 → 纪要.md → PDF / Obsidian / 群
 ```
 
-几个实现细节：
+几个细节：
 
-- **系统声音**：macOS 15+ 用 ScreenCaptureKit 同时录系统声音和麦克风。录音组件是一个 Swift 小程序，首次使用时自动编译（需要 Xcode Command Line Tools）。第一次运行要在「系统设置 → 隐私与安全性 → 屏幕与系统录音」里勾选你的终端。
-- **外放回声**：开着扬声器开会时，麦克风会把对方的声音再录一遍，直接混音会叠成回声、明显拉低识别率。Tingo 在系统声音有人说话时关掉麦克风（并多保持 0.7 秒盖住回声尾巴），只在系统声音安静时用麦克风。代价是双方同时说话时本地一侧会被盖掉；**戴耳机效果最好**。
-- **元信息不交给模型**：纪要里的日期、时长、参会人由程序填写，模型只负责内容，避免编造。
-- **推理模型**：Qwen3、DeepSeek-R1 等输出的 `<think>` 会被过滤。
+- **桌面版**：Tauri 外壳 + Rust 核心库，sherpa-onnx 运行 FunASR 官方 Paraformer-large int8 模型，声纹聚类从 Python 版移植，与之逐秒对比 93.6% 一致。选型过程（比较了 8 套识别引擎）见 [`spike/sherpa/RESULTS.md`](spike/sherpa/RESULTS.md)。
+- **外放回声**：开着扬声器开会时，麦克风会把对方的声音再录一遍。Tingo 在系统声音有人说话时压低麦克风，只在对方安静时用麦克风；双方同时说话时本地一侧会被盖掉，**戴耳机效果最好**。
+- **元信息不交给模型**：纪要里的日期、时长、参会人由程序填写，模型只写内容，避免编造。
+- **推理模型**：DeepSeek-R1、Qwen3 等的思考过程会被过滤，不进纪要。
 
-## 性能
+## 和其他工具比
 
-**边录边转**：`tingo record` 和图形界面录音时，每攒够约 30 秒就在停顿处切一段马上识别，同时截留每段的声纹；按下结束后只处理最后几秒，再用全部声纹做一次说话人聚类，说话人编号全场一致。实测 9.6 分钟的会议结束后 3.8 秒出完整转写；切段不影响识别率。
-
-**说话人聚类**：长会议声纹多（76 分钟约 5300 个），FunASR 超过 2048 个会改用较慢的 UMAP+HDBSCAN。Tingo 抽 1500 个做谱聚类，其余归到最近的说话人：在一场 76 分钟的真实会议上从 20 秒降到 0.3 秒，说话人数一致，与整体聚类的结果 99.4% 吻合。
-
-**处理已有文件**（`tingo run`、导入）同样分段转写：M1 Pro 纯 CPU 约 6.7 倍实时，76 分钟的录音约 11 分钟（整段交给 FunASR 只有约 3.2 倍实时，且越长越慢）。转写时内存峰值约 2.5 GB。
-
-每个环节的耗时记在 `~/.cache/tingo/tingo.log`。
+| | Tingo | 飞书妙记 / 通义听悟等云服务 | Meetily 等开源会议助手 |
+|---|---|---|---|
+| 录音存放 | 只在本机 | 上传到云端 | 本机 |
+| 中文识别 | FunASR（中文专用） | 好 | 以 Whisper / Parakeet 为主，面向英文 |
+| 录线上会议 | 直接录系统声音，不用装虚拟声卡 | 主要服务自家会议平台 | 支持 |
+| 纪要用的模型 | 自己选，可以完全本地 | 平台指定 | 自己选 |
+| 结论能否追溯原话 | 每条带时间戳，鱼骨图核实引用 | 部分支持 | — |
+| 费用 | 免费开源 | 按时长或会员收费 | 免费开源 |
 
 ## 已知限制
 
-- 录系统声音目前只支持 macOS 15+；Linux 只能录麦克风（PulseAudio）；Windows 请先用会议软件录制，再 `tingo run`。
-- 说话人区分在多人抢话、声音相近时会出错，可以用 `summarize -s` 修正名字。
-- 外放时的回声处理是"让路"而不是真正的回声消除，换人处偶尔有一两个字的误识别。
+- 桌面 App 目前只有 Apple 芯片的 macOS 版；录系统声音需要 macOS 15+。命令行版在 Linux 上只能录麦克风，Windows 请先用会议软件录制再导入。
+- 多人抢话、声音相近时说话人可能分错，可以在详情页改名后重新生成纪要。
+- 外放时的回声处理是"让路"而不是真正的回声消除，换人处偶尔有一两个字识别错。
 
 ## 路线图
 
 - [ ] 真正的回声消除（AEC），外放也能达到耳机的效果
-- [ ] 菜单栏 App：一键开始/结束、会议软件启动时提醒录音
+- [ ] 菜单栏快捷录音，会议软件启动时提醒
+- [ ] Windows 版（WASAPI 录系统声音）
 - [ ] 导出到飞书文档 / 钉钉文档
-- [ ] Windows 系统声音录制（WASAPI loopback）
+- [ ] App 签名与公证，双击即可安装
 
-## 开发
+## 参与开发
 
 ```bash
 git clone https://github.com/tancheng33/tingo && cd tingo
+
+# 命令行 / Python 后端
 uv sync
-uv run pytest -m "not slow"   # 不下载模型的单元测试
-uv run pytest                 # 含端到端测试（首次会下载模型）
-```
+uv run pytest -m "not slow"          # 不下载模型的单元测试
 
-界面源码在 `app/`（TypeScript + Vite），构建产物输出到 `src/tingo/web`，随 Python 包一起发布，
-改了界面要重新构建并提交产物：
-
-```bash
+# 界面（TypeScript + Vite），构建产物输出到 src/tingo/web，桌面版和 `tingo ui` 共用
 cd app && pnpm install
-pnpm build                    # 输出到 src/tingo/web；`tingo ui` 用的就是它
-tingo serve --port 8765 &     # 另开后端
-pnpm dev                      # 浏览器打开 http://localhost:1420 热更新开发，接口转给 8765
-```
+pnpm dev                             # 浏览器打开 http://localhost:1420，接口转给 8765 端口的后端
 
-桌面版（`app/`）：Tauri 外壳 + Rust 核心库 `app/engine`（sherpa-onnx 运行 FunASR Paraformer-large int8、
-CAM++ 声纹、谱聚类，移植自本仓库的 Python 版），不依赖 Python 和 ffmpeg。Tingo.app 27 MB，
-首次启动在界面里下载约 330 MB 模型。会议目录和配置文件与命令行版共用。选型过程见 `spike/sherpa/RESULTS.md`。
-
-```bash
-pnpm tauri dev                # 开发窗口
-pnpm tauri build              # 打包 .app / .dmg（未签名）
-cd engine && cargo test       # 核心库测试
+# 桌面版（Tauri + Rust）
+pnpm tauri dev                       # 开发窗口
+pnpm tauri build                     # 打包 .app / .dmg
+cd engine && cargo test              # Rust 核心库测试
 cargo run --release --example serve -- <模型目录> <录音组件> 8765   # 只起后端，配合 pnpm dev
 ```
 
-## 改名说明
-
-项目早期叫 jiyao（纪要）。改名后旧的命令 `jiyao`、环境变量 `JIYAO_*`、配置文件 `~/.config/jiyao/`、会议目录 `~/Documents/jiyao/` 都继续可用，不用搬数据。
+欢迎提 Issue 和 PR。
 
 ## 致谢
 
 - [FunASR](https://github.com/modelscope/FunASR)：语音识别、VAD、标点、说话人模型
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)：桌面版的本地推理
+- [Tauri](https://tauri.app)、[Excalidraw](https://excalidraw.com)
 - [Meetily](https://github.com/Zackriya-Solutions/meetily)、[Hyprnote](https://github.com/fastrepl/anarlog)：本地会议助手的思路
+
+## 改名说明
+
+项目早期叫 jiyao（纪要）。改名后旧的命令 `jiyao`、环境变量 `JIYAO_*`、配置目录 `~/.config/jiyao/`、会议目录 `~/Documents/jiyao/` 都继续可用，不用搬数据。
 
 ## 许可
 
-MIT
+[MIT](LICENSE)
