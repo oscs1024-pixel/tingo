@@ -476,3 +476,12 @@ def test_pdf_export(client, root, opened, monkeypatch):
     monkeypatch.setattr(record, "html_to_pdf", broken)
     r = client.post(f"/api/meetings/{mid}/pdf", json={"html": "<p></p>"})
     assert r.status_code == 500 and r.json()["detail"] == "排版超时"
+
+
+def test_audio_served_with_standard_mime(client, root):
+    mid = "2026-11-02_1430_周会"
+    for f in (root / mid).glob("录音.*"):
+        f.unlink()
+    (root / mid / "录音.m4a").write_bytes(b"\0" * 64)
+    r = client.get(f"/api/meetings/{mid}/audio")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mp4"

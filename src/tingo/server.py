@@ -156,6 +156,19 @@ class ConfigRequest(BaseModel):
     obsidian: ObsidianRequest | None = None  # None 表示不改
 
 
+AUDIO_MIME = {
+    ".m4a": "audio/mp4",
+    ".mp4": "audio/mp4",
+    ".aac": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".mov": "video/quicktime",
+}
+
+
 class PdfRequest(BaseModel):
     html: str
 
@@ -421,7 +434,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         audio = meetings.find_audio(folder(meeting_id))
         if not audio:
             raise HTTPException(404, "没有录音文件")
-        return FileResponse(audio)
+        # 显式给标准类型：按扩展名猜的 m4a 类型在 WKWebView（pywebview 窗口）里可能播不了
+        return FileResponse(audio, media_type=AUDIO_MIME.get(audio.suffix.lower()))
 
     @app.put("/api/meetings/{meeting_id}/speakers")
     def put_speakers(meeting_id: str, req: SpeakersRequest) -> dict:

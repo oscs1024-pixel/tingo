@@ -574,6 +574,21 @@ async fn get_meeting(
     Ok(Json(meeting_json(&s.folder(&id)?)))
 }
 
+/// 播放用的标准类型。按扩展名猜出来的 audio/m4a 不是标准写法，Chrome 照样能放，
+/// 但桌面版用的 WKWebView（Safari 内核）会当成不认识的格式，播放器一直是 --:--。
+fn audio_mime(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "m4a" | "mp4" | "aac" => "audio/mp4",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "ogg" | "opus" => "audio/ogg",
+        "mov" => "video/quicktime",
+        _ => return None,
+    })
+}
+
 async fn get_audio(
     State(s): State<Shared>,
     UrlPath(id): UrlPath<String>,
@@ -581,12 +596,17 @@ async fn get_audio(
 ) -> ApiResult<Response> {
     let audio = meetings::find_audio(&s.folder(&id)?)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "没有录音文件".into()))?;
+    let mime = audio_mime(&audio);
     // ServeFile 支持 Range 请求：播放器拖动进度条时只取需要的那段
-    Ok(ServeFile::new(audio)
+    let mut resp = ServeFile::new(audio)
         .oneshot(req)
         .await
         .map(IntoResponse::into_response)
-        .unwrap_or_else(|e| match e {}))
+        .unwrap_or_else(|e| match e {});
+    if let Some(m) = mime {
+        resp.headers_mut().insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static(m));
+    }
+    Ok(resp)
 }
 
 #[derive(Deserialize)]
