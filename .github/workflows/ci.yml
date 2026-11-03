@@ -34,4 +34,8 @@ jobs:
       - run: pnpm build
       # 界面构建产物随 Python 包发布，必须和源码同步提交
       - run: git diff --exit-code -- ../src/tingo/web
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+      # 在 src-tauri / engine 目录里跑，才会用上 rust-toolchain.toml 固定的版本
+      - run: cargo clippy -- -D warnings
+        working-directory: app/src-tauri
+      - run: cargo test --release --lib
+        working-directory: app/engine
