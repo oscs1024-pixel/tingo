@@ -5,10 +5,10 @@
 <p align="center"><b>Every meeting, heard.</b><br>Local-first meeting minutes for Chinese — and every conclusion links back to what was actually said.</p>
 
 <p align="center">
-  <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/github/v/release/tancheng33/tingo?label=download&color=1f4bff" alt="Download"></a>
+  <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/badge/download-macOS%20app-1f4bff?logo=apple" alt="Download"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B-000?logo=apple" alt="macOS 13+">
   <img src="https://img.shields.io/badge/license-MIT-34c6f4" alt="MIT">
-  <a href="README.md"><img src="https://img.shields.io/badge/README-中文-555" alt="中文"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-555" alt="中文"></a>
 </p>
 
 <p align="center"><img src="docs/screenshots/detail.png" width="880" alt="Meeting minutes"></p>

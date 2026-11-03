@@ -5,7 +5,7 @@
 <p align="center"><b>开过的会，都听过。</b><br>本地录音、本地转写的中文会议纪要工具，每条结论都对得上原话。</p>
 
 <p align="center">
-  <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/github/v/release/tancheng33/tingo?label=下载&color=1f4bff" alt="下载"></a>
+  <a href="https://github.com/tancheng33/tingo/releases/latest"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-macOS%20App-1f4bff?logo=apple" alt="下载"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B-000?logo=apple" alt="macOS 13+">
   <img src="https://img.shields.io/badge/license-MIT-34c6f4" alt="MIT">
   <a href="README.en.md"><img src="https://img.shields.io/badge/README-English-555" alt="English"></a>
