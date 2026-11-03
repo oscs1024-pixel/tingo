@@ -123,7 +123,7 @@ def _client(cfg: LLMConfig):
 
     api_key = cfg.api_key or ("ollama" if _is_local(cfg) else "")
     if not api_key:
-        raise RuntimeError("没有配置 LLM API key：运行 `jiyao config` 查看配置方法，或设置环境变量 JIYAO_LLM_API_KEY")
+        raise RuntimeError("没有配置 LLM API key：运行 `tingo config` 查看配置方法，或设置环境变量 TINGO_LLM_API_KEY")
     return OpenAI(base_url=cfg.base_url, api_key=api_key)
 
 

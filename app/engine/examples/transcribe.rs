@@ -1,6 +1,6 @@
-//! 分段转写一个 16 kHz wav：jiyao-engine 的端到端检查。
+//! 分段转写一个 16 kHz wav：tingo-engine 的端到端检查。
 //! cargo run --release --example transcribe -- <模型目录> <wav> [输出 transcript.json 或 -] [识别模型] [热词…]
-use jiyao_engine::{asr, audio, chunked};
+use tingo_engine::{asr, audio, chunked};
 use std::path::Path;
 use std::time::Instant;
 

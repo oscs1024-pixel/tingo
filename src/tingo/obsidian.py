@@ -128,7 +128,7 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
         fm.append(f"duration: {_yaml_str(fmt_ms(tr.duration_ms))}")
         fm.append(f"speakers: [{', '.join(_yaml_str(tr.name_of(s)) for s in tr.speakers_in_order())}]")
     fm.append("tags: [会议纪要]")
-    fm.append(f"jiyao: {_yaml_str(meeting_id)}")
+    fm.append(f"tingo: {_yaml_str(meeting_id)}")
     fm.append("---\n")
     note = "\n".join(fm) + "".join(body).rstrip() + "\n"
 

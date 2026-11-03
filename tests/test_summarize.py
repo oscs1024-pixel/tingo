@@ -2,9 +2,9 @@ from datetime import date
 
 import pytest
 
-from jiyao import summarize as sm
-from jiyao.config import LLMConfig
-from jiyao.transcript import Sentence, Transcript
+from tingo import summarize as sm
+from tingo.config import LLMConfig
+from tingo.transcript import Sentence, Transcript
 
 
 def _tr(n=2):

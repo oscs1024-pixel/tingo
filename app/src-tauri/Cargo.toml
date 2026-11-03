@@ -1,5 +1,5 @@
 [package]
-name = "jiyao"
+name = "tingo"
 version = "0.1.0"
 description = "纪要：本地中文会议录音、转写与纪要"
 authors = ["stardust <642720202@qq.com>"]
@@ -8,7 +8,7 @@ edition = "2021"
 rust-version = "1.85"
 
 [lib]
-name = "jiyao_lib"
+name = "tingo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-jiyao-engine = { version = "0.1.0", path = "../engine" }
+tingo-engine = { version = "0.1.0", path = "../engine" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
 
 [profile.release]

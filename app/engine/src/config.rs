@@ -1,4 +1,4 @@
-//! 配置：~/.config/jiyao/config.toml，和 Python 版共用同一个文件、同一种格式。
+//! 配置：~/.config/tingo/config.toml，和 Python 版共用同一个文件、同一种格式。
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -77,14 +77,30 @@ struct Raw {
     obsidian: RawObsidian,
 }
 
+/// 读环境变量；改名前的 JIYAO_ 前缀照样认
+pub fn env_var(name: &str) -> Option<String> {
+    [format!("TINGO_{name}"), format!("JIYAO_{name}")]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+}
+
+/// 新位置不存在而改名前（jiyao）的位置存在时，沿用旧位置，老用户的配置和会议不用搬
+pub fn with_legacy(new: PathBuf, old: PathBuf) -> PathBuf {
+    if !new.exists() && old.exists() {
+        old
+    } else {
+        new
+    }
+}
+
 pub fn default_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("JIYAO_CONFIG") {
+    if let Some(p) = env_var("CONFIG") {
         return PathBuf::from(p);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join(".config/jiyao/config.toml")
+    with_legacy(home.join(".config/tingo/config.toml"), home.join(".config/jiyao/config.toml"))
 }
 
 /// 读配置；环境变量优先（与 Python 版相同的几个）。文件不存在或格式不对时用默认值。
@@ -113,22 +129,25 @@ pub fn load(path: &Path) -> Config {
             }
         },
     };
-    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    if let Some(v) = env("JIYAO_LLM_BASE_URL") {
+    let env = |k: &str| match k.strip_prefix("TINGO_") {
+        Some(name) => env_var(name),
+        None => std::env::var(k).ok().filter(|v| !v.is_empty()),
+    };
+    if let Some(v) = env("TINGO_LLM_BASE_URL") {
         cfg.llm.base_url = v;
     }
-    if let Some(v) = env("JIYAO_LLM_MODEL") {
+    if let Some(v) = env("TINGO_LLM_MODEL") {
         cfg.llm.model = v;
     }
-    if let Some(v) = env("JIYAO_LLM_API_KEY") {
+    if let Some(v) = env("TINGO_LLM_API_KEY") {
         cfg.llm.api_key = v;
     } else if cfg.llm.api_key.is_empty() {
         cfg.llm.api_key = env("DEEPSEEK_API_KEY").unwrap_or_default();
     }
-    if let Some(v) = env("JIYAO_WEBHOOK") {
+    if let Some(v) = env("TINGO_WEBHOOK") {
         cfg.webhook = v;
     }
-    if let Some(v) = env("JIYAO_WEBHOOK_SECRET") {
+    if let Some(v) = env("TINGO_WEBHOOK_SECRET") {
         cfg.webhook_secret = v;
     }
     cfg
@@ -143,7 +162,7 @@ fn quote(s: &str) -> String {
 pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
     let words: Vec<String> = cfg.hotwords.iter().map(|w| quote(w)).collect();
     let text = format!(
-        "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n",
+        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n",
         words.join(", "),
         quote(&cfg.llm.base_url),
         quote(&cfg.llm.api_key),
@@ -173,7 +192,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("jiyao-cfg-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("tingo-cfg-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d.join("config.toml")
     }
@@ -210,7 +229,7 @@ mod tests {
 
     #[test]
     fn missing_file_gives_defaults() {
-        let c = load(Path::new("/nonexistent/jiyao.toml"));
+        let c = load(Path::new("/nonexistent/tingo.toml"));
         assert_eq!(c.llm.base_url, "https://api.deepseek.com");
     }
 }

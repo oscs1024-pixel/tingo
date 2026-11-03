@@ -3,7 +3,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from jiyao.record import _read16k, duck_mix, mixdown
+from tingo.record import _read16k, duck_mix, mixdown
 
 SR = 16000
 
@@ -60,7 +60,7 @@ def test_mixdown_without_audio_raises(tmp_path):
 def test_recorder_swift_compiles(tmp_path):
     import shutil
 
-    from jiyao.record import SWIFT_SRC
+    from tingo.record import SWIFT_SRC
 
     if shutil.which("swiftc") is None:
         pytest.skip("没有 swiftc")

@@ -11,8 +11,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 SWIFT_SRC = Path(__file__).with_name("recorder.swift")
-BIN_DIR = Path.home() / ".cache" / "jiyao"
-RECORDER_BIN = BIN_DIR / "jiyao-recorder"
+BIN_DIR = Path.home() / ".cache" / "tingo"
+RECORDER_BIN = BIN_DIR / "tingo-recorder"
 
 
 def system_audio_supported() -> bool:
@@ -104,7 +104,7 @@ def _mic_input() -> list[str]:
         return ["-f", "avfoundation", "-i", ":default"]
     if system == "Linux":
         return ["-f", "pulse", "-i", "default"]
-    raise RuntimeError("当前系统暂不支持直接录音，请先用会议软件录制，再用 `jiyao run <音频文件>` 处理")
+    raise RuntimeError("当前系统暂不支持直接录音，请先用会议软件录制，再用 `tingo run <音频文件>` 处理")
 
 
 def mixdown(out_dir: Path) -> Path:

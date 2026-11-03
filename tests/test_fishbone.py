@@ -1,6 +1,6 @@
-from jiyao import fishbone as fb
-from jiyao.fishbone import NONE, OK, WEAK, Branch
-from jiyao.transcript import Turn
+from tingo import fishbone as fb
+from tingo.fishbone import NONE, OK, WEAK, Branch
+from tingo.transcript import Turn
 
 
 def turns():

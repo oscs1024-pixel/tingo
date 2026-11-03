@@ -1,9 +1,9 @@
-// jiyao-recorder：用 ScreenCaptureKit 录系统声音和麦克风（macOS 15+），也负责把音视频解码成 16 kHz wav。
+// tingo-recorder：用 ScreenCaptureKit 录系统声音和麦克风（macOS 15+），也负责把音视频解码成 16 kHz wav。
 //
-// 录音：jiyao-recorder <输出目录> [--no-mic] [--no-system]
+// 录音：tingo-recorder <输出目录> [--no-mic] [--no-system]
 //   输出 <目录>/system.wav、<目录>/mic.wav；收到 SIGINT/SIGTERM 后收尾退出。
 //   向 stdout 打印一行状态：READY 表示已开始录音，ERROR: … 表示失败。
-// 解码：jiyao-recorder decode <输入文件> <输出.wav>
+// 解码：tingo-recorder decode <输入文件> <输出.wav>
 //   用系统的 AVFoundation 解码 m4a/mp3/wav/aac/flac/mp4/mov 等，输出 16 kHz 单声道 16 位 wav；成功打印 OK。
 
 import AVFoundation
@@ -23,7 +23,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let mic: Track
     let withMic: Bool
     let withSystem: Bool
-    let queue = DispatchQueue(label: "jiyao.recorder")
+    let queue = DispatchQueue(label: "tingo.recorder")
     var stream: SCStream?
     var t0: CMTime?
 
@@ -37,7 +37,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func start() async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first else {
-            throw NSError(domain: "jiyao", code: 1, userInfo: [NSLocalizedDescriptionKey: "找不到显示器"])
+            throw NSError(domain: "tingo", code: 1, userInfo: [NSLocalizedDescriptionKey: "找不到显示器"])
         }
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         let cfg = SCStreamConfiguration()
@@ -179,7 +179,7 @@ func decode(_ input: String, _ output: String) -> Never {
 
 let args = CommandLine.arguments
 if args.count >= 4 && args[1] == "decode" { decode(args[2], args[3]) }
-guard args.count >= 2 else { fail("用法：jiyao-recorder <输出目录> [--no-mic] [--no-system]，或 jiyao-recorder decode <输入> <输出.wav>") }
+guard args.count >= 2 else { fail("用法：tingo-recorder <输出目录> [--no-mic] [--no-system]，或 tingo-recorder decode <输入> <输出.wav>") }
 let outDir = URL(fileURLWithPath: args[1])
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 let recorder = Recorder(outDir: outDir, withMic: !args.contains("--no-mic"), withSystem: !args.contains("--no-system"))

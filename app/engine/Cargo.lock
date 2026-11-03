@@ -1197,30 +1197,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jiyao-engine"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "bzip2 0.6.1",
- "chrono",
- "faer",
- "hmac",
- "libc",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sherpa-onnx",
- "tar",
- "tokio",
- "toml",
- "tower",
- "tower-http 0.7.1",
-]
-
-[[package]]
 name = "jobserver"
 version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2456,6 +2432,30 @@ name = "time-core"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
+
+[[package]]
+name = "tingo-engine"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "bzip2 0.6.1",
+ "chrono",
+ "faer",
+ "hmac",
+ "libc",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sherpa-onnx",
+ "tar",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http 0.7.1",
+]
 
 [[package]]
 name = "tinystr"

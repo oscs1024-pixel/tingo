@@ -248,7 +248,7 @@ def excalidraw(spec: Spec, grounds: list[Grounding]) -> dict:
     return {
         "type": "excalidraw",
         "version": 2,
-        "source": "https://github.com/tancheng33/jiyao",
+        "source": "https://github.com/tancheng33/tingo",
         "elements": c.elements,
         "appState": {"viewBackgroundColor": "#ffffff", "gridSize": None},
         "files": {},

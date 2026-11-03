@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from jiyao import obsidian
-from jiyao.config import ObsidianConfig
-from jiyao.meetings import MINUTES, TRANSCRIPT_JSON
+from tingo import obsidian
+from tingo.config import ObsidianConfig
+from tingo.meetings import MINUTES, TRANSCRIPT_JSON
 
 MINUTES_TEXT = (
     "# 发布评审会\n\n## 原因分析\n```fishbone\n"
@@ -40,7 +40,7 @@ def test_exports_note_with_drawing_and_transcript(tmp_path):
     note = out.note.read_text(encoding="utf-8")
     assert note.startswith('---\ntitle: "发布评审会"\ndate: 2026-11-02\nduration: "00:52"\n')
     assert (
-        'speakers: ["李经理", "小张"]\ntags: [会议纪要]\njiyao: "2026-11-02_1030_发布评审"\n---\n# 发布评审会' in note
+        'speakers: ["李经理", "小张"]\ntags: [会议纪要]\ntingo: "2026-11-02_1030_发布评审"\n---\n# 发布评审会' in note
     )
     assert "![[2026-11-02 发布评审 鱼骨图.excalidraw]]\n\n**为什么延期？**\n" in note
     assert "- **支付有问题** · 引用 1 段 · 21 字\n" in note

@@ -23,7 +23,7 @@ fn main() {
         .collect();
     let emb: Vec<Vec<f32>> = data.chunks(shape[1]).map(|c| c.to_vec()).collect();
     let t = Instant::now();
-    let labels = jiyao_engine::cluster::cluster(&emb);
+    let labels = tingo_engine::cluster::cluster(&emb);
     eprintln!(
         "{} 个声纹，聚类 {:.2}s，{} 人",
         emb.len(),

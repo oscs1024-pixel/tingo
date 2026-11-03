@@ -2255,42 +2255,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jiyao"
-version = "0.1.0"
-dependencies = [
- "jiyao-engine",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
-]
-
-[[package]]
-name = "jiyao-engine"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "bzip2 0.6.1",
- "chrono",
- "faer",
- "hmac",
- "libc",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "sherpa-onnx",
- "tar",
- "tokio",
- "toml 1.1.8+spec-1.1.0",
- "tower",
- "tower-http 0.7.1",
-]
-
-[[package]]
 name = "jni"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4880,6 +4844,42 @@ checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tingo"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tingo-engine",
+ "tokio",
+]
+
+[[package]]
+name = "tingo-engine"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "bzip2 0.6.1",
+ "chrono",
+ "faer",
+ "hmac",
+ "libc",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "sherpa-onnx",
+ "tar",
+ "tokio",
+ "toml 1.1.8+spec-1.1.0",
+ "tower",
+ "tower-http 0.7.1",
 ]
 
 [[package]]

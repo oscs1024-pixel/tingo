@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn growing_wav_reads_float_and_int16() {
-        let dir = std::env::temp_dir().join(format!("jiyao-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tingo-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let write = |name: &str, tag: u16, bits: u16, rate: u32, body: Vec<u8>| {
             let mut v = b"RIFF\xff\xff\xff\xffWAVEfmt ".to_vec();

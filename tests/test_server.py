@@ -3,15 +3,15 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from jiyao import summarize as sm
-from jiyao.server import create_app
-from jiyao.transcript import Sentence, Transcript
+from tingo import summarize as sm
+from tingo.server import create_app
+from tingo.transcript import Sentence, Transcript
 
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
-    monkeypatch.setattr("jiyao.config.CONFIG_PATH", tmp_path / "config.toml")
-    for k in ("JIYAO_LLM_API_KEY", "JIYAO_LLM_BASE_URL", "JIYAO_LLM_MODEL", "DEEPSEEK_API_KEY", "JIYAO_WEBHOOK"):
+    monkeypatch.setattr("tingo.config.CONFIG_PATH", tmp_path / "config.toml")
+    for k in ("TINGO_LLM_API_KEY", "TINGO_LLM_BASE_URL", "TINGO_LLM_MODEL", "DEEPSEEK_API_KEY", "TINGO_WEBHOOK"):
         monkeypatch.delenv(k, raising=False)
     r = tmp_path / "meetings"
     m = r / "2026-11-02_1430_周会"
@@ -65,7 +65,7 @@ def test_rename_speakers_then_clear(client, root):
 
 
 def test_summarize_job_streams_and_saves(client, root, monkeypatch):
-    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
 
     def fake_chat(cfg, prompt, on_token=None, think=True, on_think=None):
         assert "下周五（11月13日）" in prompt
@@ -110,7 +110,7 @@ def gated_chat(monkeypatch):
     """生成纪要卡在 gate 上，直到测试放行；放行前先报一次思考进度"""
     import threading
 
-    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
     gate = threading.Event()
 
     def fake(cfg, prompt, on_token=None, think=True, on_think=None):
@@ -210,7 +210,7 @@ def fake_recorder(monkeypatch):
     """不真的录音：录音组件、边录边转都换成假的；结束录音后的转写卡在 gate 上"""
     import threading
 
-    from jiyao import live, record
+    from tingo import live, record
 
     gate = threading.Event()
 
@@ -249,7 +249,7 @@ def fake_recorder(monkeypatch):
     monkeypatch.setattr(record, "track_level", lambda path, window_s=0.15: 0.5)
     monkeypatch.setattr(record, "mixdown", mixdown)
     monkeypatch.setattr(live, "LiveTranscriber", Live)
-    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
     monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 录音会")
     yield gate
     gate.set()
@@ -330,7 +330,7 @@ def test_static_index_served(client):
 
 
 def test_llm_providers_reports_running_relays(client, monkeypatch):
-    from jiyao import server
+    from tingo import server
 
     running = {"http://127.0.0.1:3425/v1": ["deepseek/deepseek-v4-flash", "minimax-cn/MiniMax-M3.1-Flash"]}
     monkeypatch.setattr(server, "_list_models", lambda base_url, api_key: running.get(base_url))
@@ -372,7 +372,7 @@ FISHBONE_MINUTES = (
 @pytest.fixture
 def opened(monkeypatch):
     calls = []
-    monkeypatch.setattr("jiyao.server._open", lambda target, reveal=False: calls.append((target, reveal)))
+    monkeypatch.setattr("tingo.server._open", lambda target, reveal=False: calls.append((target, reveal)))
     return calls
 
 
@@ -396,7 +396,7 @@ def test_obsidian_export_and_open(client, root, tmp_path, opened):
     (root / mid / "纪要.md").write_text(FISHBONE_MINUTES)
     vault = tmp_path / "vault"
     vault.mkdir()
-    from jiyao import config
+    from tingo import config
 
     cfg = config.load()
     cfg.obsidian.vault = str(vault)
@@ -431,9 +431,9 @@ def test_obsidian_vaults_endpoint(client, tmp_path, monkeypatch):
 
 
 def test_summarize_auto_syncs_to_obsidian(client, root, tmp_path, monkeypatch):
-    from jiyao import config
+    from tingo import config
 
-    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
     monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 新标题\n\n正文")
     cfg = config.load()
     cfg.obsidian.vault = str(tmp_path / "没有这个库")

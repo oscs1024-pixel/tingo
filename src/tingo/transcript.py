@@ -73,7 +73,7 @@ class Transcript:
         return "\n".join(lines)
 
     def title(self) -> str:
-        """`jiyao record` 的录音统一叫 录音.m4a，这时用会议文件夹名（如 2026-11-02_1430_周会）。"""
+        """`tingo record` 的录音统一叫 录音.m4a，这时用会议文件夹名（如 2026-11-02_1430_周会）。"""
         src = Path(self.source)
         return src.parent.name if src.stem == "录音" and src.parent.name else src.stem
 

@@ -1,5 +1,5 @@
 [project]
-name = "jiyao"
+name = "tingo"
 version = "0.1.0"
 description = "本地中文会议录音、转写、说话人区分，一键生成会议纪要（FunASR + 任意 OpenAI 兼容大模型）"
 license = "MIT"
@@ -44,10 +44,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tancheng33/jiyao"
+Homepage = "https://github.com/tancheng33/tingo"
 
 [project.scripts]
-jiyao = "jiyao.cli:main"
+tingo = "tingo.cli:main"
+jiyao = "tingo.cli:main"  # 改名前的命令，留着兼容
 
 [tool.ruff]
 line-length = 120

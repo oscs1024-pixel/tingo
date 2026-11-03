@@ -1,4 +1,4 @@
-from jiyao.asr import _speaker_at, split_by_speaker
+from tingo.asr import _speaker_at, split_by_speaker
 
 # FunASR 的说话人分段：(起秒, 止秒, 说话人)
 SEGMENTS = [(0.0, 10.3, 0), (10.4, 18.0, 1), (19.0, 23.1, 0)]

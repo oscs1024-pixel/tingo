@@ -5,7 +5,7 @@ import urllib.parse
 
 import pytest
 
-from jiyao.push import build_request, detect, tables_to_lists
+from tingo.push import build_request, detect, tables_to_lists
 
 MINUTES = """# 周会
 
@@ -64,7 +64,7 @@ def test_wecom_truncates_to_4096_bytes():
 
 
 def test_fishbone_becomes_list():
-    from jiyao.push import fishbone_to_text
+    from tingo.push import fishbone_to_text
 
     md = '## 原因分析\n```fishbone\n{"problem": "为什么慢？", "branches": [{"title": "页面大", "detail": "6 秒", "refs": ["01:06"]}, {"title": "猜的", "refs": []}]}\n```\n'
     out = fishbone_to_text(md)

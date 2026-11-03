@@ -272,7 +272,7 @@ pub fn excalidraw(spec: &Spec, grounds: &[Grounding]) -> Value {
     json!({
         "type": "excalidraw",
         "version": 2,
-        "source": "https://github.com/tancheng33/jiyao",
+        "source": "https://github.com/tancheng33/tingo",
         "elements": c.elements,
         "appState": {"viewBackgroundColor": "#ffffff", "gridSize": null},
         "files": {},

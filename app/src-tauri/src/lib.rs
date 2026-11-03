@@ -1,17 +1,17 @@
-//! 纪要桌面版外壳。
+//! Tingo 听过 桌面版外壳。
 //!
-//! 后端（识别、录音、纪要、本地接口）由 jiyao-engine 提供，直接在 App 进程里起一个只监听
+//! 后端（识别、录音、纪要、本地接口）由 tingo-engine 提供，直接在 App 进程里起一个只监听
 //! 127.0.0.1 的 HTTP 服务，界面通过 `backend_url` 拿到地址。不再需要 Python 和 ffmpeg。
 //!
-//! - 会议：~/Documents/jiyao（和命令行 / Python 版共用）
-//! - 配置：~/.config/jiyao/config.toml（共用）
-//! - 识别模型：App 数据目录下的 models/，首次使用时在界面里下载
-//! - 录音组件：打包在 App 资源里的 jiyao-recorder（Swift，ScreenCaptureKit + AVFoundation）
+//! - 会议：~/Documents/Tingo（和命令行 / Python 版共用；改名前的 ~/Documents/jiyao 存在时沿用）
+//! - 配置：~/.config/tingo/config.toml（共用；同上沿用 ~/.config/jiyao）
+//! - 识别模型：App 数据目录下的 models/，首次使用时在界面里下载；改名前下载的会搬过来
+//! - 录音组件：打包在 App 资源里的 tingo-recorder（Swift，ScreenCaptureKit + AVFoundation）
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use jiyao_engine::{config, meetings, server};
+use tingo_engine::{config, meetings, server};
 use tauri::{Manager, State};
 
 #[derive(Default)]
@@ -40,13 +40,26 @@ async fn backend_url(state: State<'_, Arc<Backend>>) -> Result<String, String> {
     }
 }
 
+/// 改名前（bundle id 是 io.github.tancheng33.jiyao）下载的识别模型有三百多 MB，搬到新的数据目录，不用重新下载
+fn migrate_models(data: &std::path::Path) {
+    let new = data.join("models");
+    let Some(old) = data.parent().map(|d| d.join("io.github.tancheng33.jiyao/models")) else { return };
+    if !new.exists() && old.is_dir() {
+        let _ = std::fs::create_dir_all(data);
+        if let Err(e) = std::fs::rename(&old, &new) {
+            eprintln!("搬迁旧版识别模型失败：{e}");
+        }
+    }
+}
+
 fn start_backend(app: &tauri::App, state: Arc<Backend>) -> Result<(), String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    migrate_models(&data);
     let recorder = app
         .path()
         .resource_dir()
         .map_err(|e| e.to_string())?
-        .join("jiyao-recorder");
+        .join("tingo-recorder");
     let opt = server::Options {
         root: meetings::default_root(),
         config_path: config::default_path(),

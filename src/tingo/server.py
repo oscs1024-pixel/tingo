@@ -167,8 +167,8 @@ class LLMTestRequest(BaseModel):
 
 
 def create_app(root: Path | None = None) -> FastAPI:
-    root = (root or Path(os.environ.get("JIYAO_ROOT", meetings.DEFAULT_ROOT))).expanduser()
-    app = FastAPI(title="jiyao", docs_url=None, redoc_url=None)
+    root = (root or Path(config.env_var("ROOT") or meetings.DEFAULT_ROOT)).expanduser()
+    app = FastAPI(title="tingo", docs_url=None, redoc_url=None)
     lock = threading.Lock()  # 保护 jobs 列表和录音状态
     jobs: list[Job] = []  # 进行中和刚结束（还没被界面收起）的任务，按开始先后
     state: dict = {"recording": None, "live": None, "hotwords": []}  # 正在进行的那一场录音

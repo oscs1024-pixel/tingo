@@ -2,12 +2,12 @@ import tomllib
 
 import pytest
 
-from jiyao import config
-from jiyao.config import Config, LLMConfig, ObsidianConfig
+from tingo import config
+from tingo.config import Config, LLMConfig, ObsidianConfig
 
 # 桌面版（app/engine/src/config.rs 的 save）写出的文件
 RUST_SAVED = (
-    "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\n"
+    "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\n"
     'hotwords = ["星河", "Kafka"]\n\n[llm]\nbase_url = "http://127.0.0.1:3425/v1"\napi_key = "k\\"q"\n'
     'model = "deepseek/deepseek-v4-flash"\n\n[push]\nwebhook = ""\nsecret = ""\n\n'
     '[obsidian]\nvault = "/Users/a/笔记"\nfolder = "会议"\nauto = false\ntranscript = true\n'
@@ -17,7 +17,7 @@ RUST_SAVED = (
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.toml")
-    for k in ("JIYAO_LLM_API_KEY", "JIYAO_LLM_BASE_URL", "JIYAO_LLM_MODEL", "DEEPSEEK_API_KEY", "JIYAO_WEBHOOK"):
+    for k in ("TINGO_LLM_API_KEY", "TINGO_LLM_BASE_URL", "TINGO_LLM_MODEL", "DEEPSEEK_API_KEY", "TINGO_WEBHOOK"):
         monkeypatch.delenv(k, raising=False)
 
 

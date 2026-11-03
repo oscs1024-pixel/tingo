@@ -1,4 +1,4 @@
-from jiyao.transcript import Sentence, Transcript, fmt_ts
+from tingo.transcript import Sentence, Transcript, fmt_ts
 
 
 def _tr():
@@ -58,5 +58,5 @@ def test_fmt_ts():
 def test_title_uses_meeting_folder_for_recordings():
     tr = _tr()
     assert tr.title() == "周会"
-    tr.source = "/Users/x/Documents/jiyao/2026-11-02_1213_周会/录音.m4a"
+    tr.source = "/Users/x/Documents/tingo/2026-11-02_1213_周会/录音.m4a"
     assert tr.title() == "2026-11-02_1213_周会"

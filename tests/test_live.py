@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jiyao import live as lv
-from jiyao.live import GrowingWav, LiveTranscriber, find_cut
+from tingo import live as lv
+from tingo.live import GrowingWav, LiveTranscriber, find_cut
 
 SR = 16000
 FIXTURE = Path(__file__).parent / "fixtures" / "meeting_zh.wav"
@@ -67,7 +67,7 @@ def test_find_cut_waits_when_no_pause_unless_forced():
 @pytest.mark.slow
 def test_live_matches_offline_speakers_across_chunks(tmp_path, monkeypatch):
     """模拟录音组件边写文件边转写：切成多段后说话人编号仍然全场一致。"""
-    from jiyao.record import _read16k
+    from tingo.record import _read16k
 
     monkeypatch.setattr(lv, "MIN_CHUNK_S", 8.0)  # 52 秒的素材切成好几段
     monkeypatch.setattr(lv, "MAX_CHUNK_S", 16.0)

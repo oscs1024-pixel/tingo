@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "纪要",
+  "productName": "Tingo",
   "version": "0.1.0",
-  "identifier": "io.github.tancheng33.jiyao",
+  "identifier": "io.github.tancheng33.tingo",
   "build": {
-    "frontendDist": "../../src/jiyao/web",
+    "frontendDist": "../../src/tingo/web",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "纪要",
+        "title": "Tingo 听过",
         "width": 1320,
         "height": 860,
         "minWidth": 1000,
@@ -46,7 +46,7 @@
       "entitlements": "Entitlements.plist"
     },
     "resources": {
-      "bin/jiyao-recorder": "jiyao-recorder"
+      "bin/tingo-recorder": "tingo-recorder"
     }
   }
 }

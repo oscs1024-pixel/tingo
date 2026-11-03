@@ -3,9 +3,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from jiyao import summarize as sm
-from jiyao.cli import app
-from jiyao.transcript import Sentence, Transcript
+from tingo import summarize as sm
+from tingo.cli import app
+from tingo.transcript import Sentence, Transcript
 
 runner = CliRunner()
 FIXTURE = Path(__file__).parent / "fixtures" / "meeting_zh.wav"
@@ -13,8 +13,8 @@ FIXTURE = Path(__file__).parent / "fixtures" / "meeting_zh.wav"
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    monkeypatch.setattr("jiyao.config.CONFIG_PATH", tmp_path / "config.toml")
-    for k in ("JIYAO_LLM_API_KEY", "JIYAO_LLM_BASE_URL", "JIYAO_LLM_MODEL", "DEEPSEEK_API_KEY", "JIYAO_WEBHOOK"):
+    monkeypatch.setattr("tingo.config.CONFIG_PATH", tmp_path / "config.toml")
+    for k in ("TINGO_LLM_API_KEY", "TINGO_LLM_BASE_URL", "TINGO_LLM_MODEL", "DEEPSEEK_API_KEY", "TINGO_WEBHOOK"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -25,7 +25,7 @@ def _meeting(tmp_path):
 
 
 def test_summarize_renames_speakers_and_writes_minutes(tmp_path, monkeypatch):
-    monkeypatch.setenv("JIYAO_LLM_API_KEY", "x")
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
     monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 测试会")
     d = _meeting(tmp_path)
     result = runner.invoke(app, ["summarize", str(d), "-s", "张三，李四", "-d", "2026-11-02"])
@@ -51,7 +51,7 @@ def test_push_without_webhook_fails(tmp_path):
 def test_config_writes_template(tmp_path):
     result = runner.invoke(app, ["config"])
     assert result.exit_code == 0
-    assert (tmp_path / "config.toml").read_text().startswith("# jiyao 配置")
+    assert (tmp_path / "config.toml").read_text().startswith("# tingo 配置")
 
 
 @pytest.mark.slow
@@ -69,7 +69,7 @@ def test_run_end_to_end_transcribes_two_speakers(tmp_path):
 
 
 def test_hotwords_read_from_top_level_and_legacy_llm_table(tmp_path):
-    from jiyao import config
+    from tingo import config
 
     config.CONFIG_PATH.write_text('hotwords = ["星河"]\n\n[llm]\nmodel = "m"\n')
     assert config.load().hotwords == ["星河"]

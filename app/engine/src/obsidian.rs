@@ -115,7 +115,7 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
         fm.push(format!("speakers: [{}]", names.join(", ")));
     }
     fm.push("tags: [会议纪要]".into());
-    fm.push(format!("jiyao: {}", yaml_str(&id)));
+    fm.push(format!("tingo: {}", yaml_str(&id)));
     fm.push("---\n".into());
     let mut note = fm.join("\n") + body.trim_end() + "\n";
 
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn exports_note_with_drawing_and_transcript() {
-        let base = std::env::temp_dir().join(format!("jiyao-obs-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("tingo-obs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("meetings/2026-11-02_1030_发布评审");
         let vault = base.join("vault");

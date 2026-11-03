@@ -1,4 +1,4 @@
-/* 和本地服务通信。浏览器 / `jiyao ui` 里是同源；Tauri 窗口里服务地址由外壳告诉我们。 */
+/* 和本地服务通信。浏览器 / `tingo ui` 里是同源；Tauri 窗口里服务地址由外壳告诉我们。 */
 
 export interface Env {
   version: string;

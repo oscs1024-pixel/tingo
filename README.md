@@ -1,14 +1,18 @@
-# jiyao 纪要
+<p align="center"><img src="brand/tingo-icon.svg" width="112" alt="Tingo"></p>
+
+<h1 align="center">Tingo 听过</h1>
+
+<p align="center"><b>开过的会，都听过。</b>本地转写，每条结论都对得上原话。</p>
 
 **本地录音 → 中文转写 → 区分说话人 → 一键出会议纪要。** 录音和识别都在你自己的电脑上完成，纪要用你自己选的大模型生成（可以是本地 Ollama，全程不出本机）。
 
 ```bash
-jiyao ui                      # 图形界面
-jiyao record -t 周会          # 命令行录音，Ctrl+C 结束，自动出纪要
-jiyao run 腾讯会议录制.mp4     # 处理已有的录音/录屏
+tingo ui                      # 图形界面
+tingo record -t 周会          # 命令行录音，Ctrl+C 结束，自动出纪要
+tingo run 腾讯会议录制.mp4     # 处理已有的录音/录屏
 ```
 
-> Local-first meeting minutes for Chinese: records system audio + mic on macOS, transcribes with FunASR (Paraformer + CAM++ speaker diarization), and writes structured minutes (decisions, action items with owners and due dates) with any OpenAI-compatible LLM.
+> **Tingo** (from 听 *tīng*, "listen") — local-first meeting minutes for Chinese: records system audio + mic on macOS, transcribes with FunASR (Paraformer + CAM++ speaker diarization), and writes structured minutes (decisions, action items with owners and due dates) with any OpenAI-compatible LLM.
 
 ## 为什么做这个
 
@@ -63,10 +67,10 @@ Meetily、Hyprnote 这类开源会议助手做得很好，但它们是为英文�
 
 ```bash
 brew install ffmpeg            # Linux: apt install ffmpeg
-uv tool install git+https://github.com/tancheng33/jiyao
-# 或 pipx install git+https://github.com/tancheng33/jiyao
+uv tool install git+https://github.com/tancheng33/tingo
+# 或 pipx install git+https://github.com/tancheng33/tingo
 
-jiyao doctor                   # 检查环境
+tingo doctor                   # 检查环境
 ```
 
 首次转写会从 ModelScope 下载识别模型（约 2.1 GB），之后离线可用。
@@ -76,7 +80,7 @@ jiyao doctor                   # 检查环境
 转写不需要大模型，生成纪要需要。任何 OpenAI 兼容接口都可以：
 
 ```bash
-jiyao config                   # 生成 ~/.config/jiyao/config.toml 模板
+tingo config                   # 生成 ~/.config/tingo/config.toml 模板
 ```
 
 ```toml
@@ -91,7 +95,7 @@ hotwords = ["星河计划", "张晓东", "Kafka"]
 webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
 ```
 
-也可以用环境变量 `JIYAO_LLM_BASE_URL`、`JIYAO_LLM_API_KEY`、`JIYAO_LLM_MODEL`，或直接设置 `DEEPSEEK_API_KEY`。
+也可以用环境变量 `TINGO_LLM_BASE_URL`、`TINGO_LLM_API_KEY`、`TINGO_LLM_MODEL`，或直接设置 `DEEPSEEK_API_KEY`。
 
 **本机中转**：装了 Magpie 或 CC Switch（开启「本地代理」，默认端口 15721）的话，设置页会自动探测，一键选用，模型从下拉列表里挑。实测一场 76 分钟的会，DeepSeek V4 Flash 51 秒出纪要，MiniMax-M3.1-Flash 160 秒（细节更多），本地 Qwen3-8B 约 8 分钟。
 
@@ -100,14 +104,17 @@ webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
 ## 图形界面
 
 ```bash
-jiyao ui            # 独立窗口（macOS）
-jiyao ui --browser  # 在浏览器里打开
+tingo ui            # 独立窗口（macOS）
+tingo ui --browser  # 在浏览器里打开
 ```
 
 - **录音**：填个会议名称，点录音按钮。录音时能看到两路电平（系统声音 / 麦克风）和实时识别出的文字，背景的极光会跟着音量起伏；结束后几秒就出转写。
 - **导入**：把腾讯会议、飞书导出的录音或录屏直接拖进窗口。
 - **会议详情**：纪要和转写两个视图，点任意时间戳跳到那里回听，播放时当前发言会高亮；可以给说话人改名后重新生成纪要，也可以直接编辑纪要。
-- **设置**：大模型（DeepSeek / 通义千问 / 本地 Ollama 一键切换，带连接测试）、热词、群机器人。
+- **原因分析鱼骨图**：会上讨论了"为什么"时，纪要里自动画一张鱼骨图。每个分支绑着它依据的原话，点开就能跳回去听；还会统计每个分支引用了多少原文，一句都对不上的标成"无原文依据"，一眼看出哪条是在说空话。可以导出成 Excalidraw 继续改。
+- **存进 Obsidian**：一场会一篇笔记，日期、时长、参会人写在属性里，鱼骨图存成 Excalidraw 画板嵌进笔记；可以设成生成纪要后自动存。
+- **不用等**：结束录音后马上可以开下一场，转写和纪要在后台进行；侧边栏能看到每个任务的进度，点进去能看着纪要一节一节写出来。
+- **设置**：大模型（DeepSeek / 通义千问 / 本地 Ollama 一键切换，带连接测试）、识别模型（桌面版可在 Paraformer、SenseVoice、Fun-ASR-Nano 之间下载切换）、热词、群机器人、Obsidian。
 
 界面只监听 127.0.0.1，不对外开放。
 
@@ -115,24 +122,24 @@ jiyao ui --browser  # 在浏览器里打开
 
 ```bash
 # 录音（线上会议：系统声音 + 麦克风）
-jiyao record -t 周会 -w "星河计划,张晓东" -s "张晓东,李雷"
+tingo record -t 周会 -w "星河计划,张晓东" -s "张晓东,李雷"
 
 # 线下会议只录麦克风 / 只旁听线上会议不录自己
-jiyao record --no-system
-jiyao record --no-mic
+tingo record --no-system
+tingo record --no-mic
 
 # 处理已有文件：wav、mp3、m4a、mp4……
-jiyao run ~/Downloads/项目评审.mp4 -d 2026-11-02
+tingo run ~/Downloads/项目评审.mp4 -d 2026-11-02
 
 # 转写后发现说话人顺序和名字，重新生成纪要（不用重新转写）
-jiyao summarize ~/Documents/jiyao/2026-11-02_1430_周会 -s "王总,张晓东,李雷"
+tingo summarize ~/Documents/Tingo/2026-11-02_1430_周会 -s "王总,张晓东,李雷"
 
 # 推送到群
-jiyao push ~/Documents/jiyao/2026-11-02_1430_周会
-jiyao run 录音.m4a --push
+tingo push ~/Documents/Tingo/2026-11-02_1430_周会
+tingo run 录音.m4a --push
 ```
 
-每场会议一个文件夹（默认在 `~/Documents/jiyao/`）：
+每场会议一个文件夹（默认在 `~/Documents/Tingo/`）：
 
 ```
 2026-11-02_1430_周会/
@@ -162,23 +169,23 @@ jiyao run 录音.m4a --push
 几个实现细节：
 
 - **系统声音**：macOS 15+ 用 ScreenCaptureKit 同时录系统声音和麦克风。录音组件是一个 Swift 小程序，首次使用时自动编译（需要 Xcode Command Line Tools）。第一次运行要在「系统设置 → 隐私与安全性 → 屏幕与系统录音」里勾选你的终端。
-- **外放回声**：开着扬声器开会时，麦克风会把对方的声音再录一遍，直接混音会叠成回声、明显拉低识别率。jiyao 在系统声音有人说话时关掉麦克风（并多保持 0.7 秒盖住回声尾巴），只在系统声音安静时用麦克风。代价是双方同时说话时本地一侧会被盖掉；**戴耳机效果最好**。
+- **外放回声**：开着扬声器开会时，麦克风会把对方的声音再录一遍，直接混音会叠成回声、明显拉低识别率。Tingo 在系统声音有人说话时关掉麦克风（并多保持 0.7 秒盖住回声尾巴），只在系统声音安静时用麦克风。代价是双方同时说话时本地一侧会被盖掉；**戴耳机效果最好**。
 - **元信息不交给模型**：纪要里的日期、时长、参会人由程序填写，模型只负责内容，避免编造。
 - **推理模型**：Qwen3、DeepSeek-R1 等输出的 `<think>` 会被过滤。
 
 ## 性能
 
-**边录边转**：`jiyao record` 和图形界面录音时，每攒够约 30 秒就在停顿处切一段马上识别，同时截留每段的声纹；按下结束后只处理最后几秒，再用全部声纹做一次说话人聚类，说话人编号全场一致。实测 9.6 分钟的会议结束后 3.8 秒出完整转写；切段不影响识别率。
+**边录边转**：`tingo record` 和图形界面录音时，每攒够约 30 秒就在停顿处切一段马上识别，同时截留每段的声纹；按下结束后只处理最后几秒，再用全部声纹做一次说话人聚类，说话人编号全场一致。实测 9.6 分钟的会议结束后 3.8 秒出完整转写；切段不影响识别率。
 
-**说话人聚类**：长会议声纹多（76 分钟约 5300 个），FunASR 超过 2048 个会改用较慢的 UMAP+HDBSCAN。jiyao 抽 1500 个做谱聚类，其余归到最近的说话人：在一场 76 分钟的真实会议上从 20 秒降到 0.3 秒，说话人数一致，与整体聚类的结果 99.4% 吻合。
+**说话人聚类**：长会议声纹多（76 分钟约 5300 个），FunASR 超过 2048 个会改用较慢的 UMAP+HDBSCAN。Tingo 抽 1500 个做谱聚类，其余归到最近的说话人：在一场 76 分钟的真实会议上从 20 秒降到 0.3 秒，说话人数一致，与整体聚类的结果 99.4% 吻合。
 
-**处理已有文件**（`jiyao run`、导入）同样分段转写：M1 Pro 纯 CPU 约 6.7 倍实时，76 分钟的录音约 11 分钟（整段交给 FunASR 只有约 3.2 倍实时，且越长越慢）。转写时内存峰值约 2.5 GB。
+**处理已有文件**（`tingo run`、导入）同样分段转写：M1 Pro 纯 CPU 约 6.7 倍实时，76 分钟的录音约 11 分钟（整段交给 FunASR 只有约 3.2 倍实时，且越长越慢）。转写时内存峰值约 2.5 GB。
 
-每个环节的耗时记在 `~/.cache/jiyao/jiyao.log`。
+每个环节的耗时记在 `~/.cache/tingo/tingo.log`。
 
 ## 已知限制
 
-- 录系统声音目前只支持 macOS 15+；Linux 只能录麦克风（PulseAudio）；Windows 请先用会议软件录制，再 `jiyao run`。
+- 录系统声音目前只支持 macOS 15+；Linux 只能录麦克风（PulseAudio）；Windows 请先用会议软件录制，再 `tingo run`。
 - 说话人区分在多人抢话、声音相近时会出错，可以用 `summarize -s` 修正名字。
 - 外放时的回声处理是"让路"而不是真正的回声消除，换人处偶尔有一两个字的误识别。
 
@@ -192,24 +199,24 @@ jiyao run 录音.m4a --push
 ## 开发
 
 ```bash
-git clone https://github.com/tancheng33/jiyao && cd jiyao
+git clone https://github.com/tancheng33/tingo && cd tingo
 uv sync
 uv run pytest -m "not slow"   # 不下载模型的单元测试
 uv run pytest                 # 含端到端测试（首次会下载模型）
 ```
 
-界面源码在 `app/`（TypeScript + Vite），构建产物输出到 `src/jiyao/web`，随 Python 包一起发布，
+界面源码在 `app/`（TypeScript + Vite），构建产物输出到 `src/tingo/web`，随 Python 包一起发布，
 改了界面要重新构建并提交产物：
 
 ```bash
 cd app && pnpm install
-pnpm build                    # 输出到 src/jiyao/web；`jiyao ui` 用的就是它
-jiyao serve --port 8765 &     # 另开后端
+pnpm build                    # 输出到 src/tingo/web；`tingo ui` 用的就是它
+tingo serve --port 8765 &     # 另开后端
 pnpm dev                      # 浏览器打开 http://localhost:1420 热更新开发，接口转给 8765
 ```
 
 桌面版（`app/`）：Tauri 外壳 + Rust 核心库 `app/engine`（sherpa-onnx 运行 FunASR Paraformer-large int8、
-CAM++ 声纹、谱聚类，移植自本仓库的 Python 版），不依赖 Python 和 ffmpeg。纪要.app 27 MB，
+CAM++ 声纹、谱聚类，移植自本仓库的 Python 版），不依赖 Python 和 ffmpeg。Tingo.app 27 MB，
 首次启动在界面里下载约 330 MB 模型。会议目录和配置文件与命令行版共用。选型过程见 `spike/sherpa/RESULTS.md`。
 
 ```bash
@@ -218,6 +225,10 @@ pnpm tauri build              # 打包 .app / .dmg（未签名）
 cd engine && cargo test       # 核心库测试
 cargo run --release --example serve -- <模型目录> <录音组件> 8765   # 只起后端，配合 pnpm dev
 ```
+
+## 改名说明
+
+项目早期叫 jiyao（纪要）。改名后旧的命令 `jiyao`、环境变量 `JIYAO_*`、配置文件 `~/.config/jiyao/`、会议目录 `~/Documents/jiyao/` 都继续可用，不用搬数据。
 
 ## 致谢
 

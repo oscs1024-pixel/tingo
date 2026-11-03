@@ -27,7 +27,7 @@ from .meetings import (
 )
 
 app = typer.Typer(
-    help="jiyao 纪要：本地录音、中文转写、说话人区分，一键生成会议纪要。",
+    help="Tingo 听过：本地录音、中文转写、说话人区分，一键生成会议纪要。",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -135,7 +135,7 @@ def _summarize_and_save(tr, out_dir: Path, meeting_date: date, push: bool) -> No
         )
     except Exception as e:  # noqa: BLE001 - LLM 侧错误五花八门，统一提示
         console.print()
-        _fail(f"生成纪要失败：{e}\n转写已保存，配置好后可运行 `jiyao summarize {out_dir}` 重试")
+        _fail(f"生成纪要失败：{e}\n转写已保存，配置好后可运行 `tingo summarize {out_dir}` 重试")
     console.print()
     path = out_dir / MINUTES
     path.write_text(minutes, encoding="utf-8")
@@ -148,7 +148,7 @@ def _push(minutes: str, cfg: config.Config) -> None:
     from .push import detect, send
 
     if not cfg.webhook:
-        _fail("没有配置 webhook：在配置文件 [push] 里填 webhook，或设置环境变量 JIYAO_WEBHOOK")
+        _fail("没有配置 webhook：在配置文件 [push] 里填 webhook，或设置环境变量 TINGO_WEBHOOK")
     try:
         send(cfg.webhook, minutes, cfg.webhook_secret)
     except Exception as e:  # noqa: BLE001
@@ -249,7 +249,7 @@ def record(
             _process(final, out_dir, _split(hotwords), _speaker_names(speakers), started.date(), not no_summary, push)
     except KeyboardInterrupt:
         console.print()
-        _fail(f"已中断处理，录音已保存。继续处理：jiyao run {final} -o {out_dir}")
+        _fail(f"已中断处理，录音已保存。继续处理：tingo run {final} -o {out_dir}")
     finally:
         signal.signal(signal.SIGINT, old_handler)
 
@@ -369,7 +369,7 @@ def doctor() -> None:
         except Exception as e:  # noqa: BLE001
             check(f"大模型 {cfg.llm.model}", False, f"连不上 {cfg.llm.base_url}：{e}")
     else:
-        check("大模型", False, "未配置 API key，运行 `jiyao config`")
+        check("大模型", False, "未配置 API key，运行 `tingo config`")
     raise typer.Exit(0 if ok else 1)
 
 
@@ -427,7 +427,7 @@ def ui(
 def serve(
     port: Annotated[int, typer.Option("--port", help="本地端口，默认自动选")] = 0,
 ) -> None:
-    """只启动本地服务（桌面版外壳用）。启动后打印一行 JIYAO_PORT=端口，父进程退出时自动退出。"""
+    """只启动本地服务（桌面版外壳用）。启动后打印一行 TINGO_PORT=端口，父进程退出时自动退出。"""
     import socket
     import threading
     import time
@@ -447,7 +447,7 @@ def serve(
         if not thread.is_alive():
             _fail("本地服务启动失败")
         time.sleep(0.05)
-    print(f"JIYAO_PORT={port}", flush=True)
+    print(f"TINGO_PORT={port}", flush=True)
 
     parent = os.getppid()
     try:
@@ -462,7 +462,7 @@ def serve(
 @app.command()
 def version() -> None:
     """显示版本。"""
-    console.print(f"jiyao {__version__}")
+    console.print(f"Tingo 听过 {__version__}")
 
 
 def main() -> None:

@@ -143,7 +143,7 @@ fn fetch_all(paths: &ModelPaths, list: &[Download], progress: &mut impl FnMut(u6
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(None)
-        .user_agent("jiyao")
+        .user_agent("tingo")
         .build()
         .map_err(|e| e.to_string())?;
     for d in list {

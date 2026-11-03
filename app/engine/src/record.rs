@@ -123,7 +123,7 @@ pub fn decode(bin: &Path, input: &Path) -> Result<Vec<f32>, String> {
         }
     }
     let tmp = std::env::temp_dir().join(format!(
-        "jiyao-decode-{}-{}.wav",
+        "tingo-decode-{}-{}.wav",
         std::process::id(),
         rand_suffix()
     ));
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn mixdown_writes_m4a_and_cleans_tracks() {
-        let dir = std::env::temp_dir().join(format!("jiyao-mix-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tingo-mix-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let tone: Vec<f32> = (0..SR).map(|i| 0.3 * (i as f32 * 0.05).sin()).collect();
         write_wav16(&dir.join("system.wav"), &tone).unwrap();
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn mixdown_without_audio_fails() {
-        let dir = std::env::temp_dir().join(format!("jiyao-mix-empty-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tingo-mix-empty-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(mixdown(&dir, &dir.join("录音.m4a")).is_err());
         std::fs::remove_dir_all(dir).ok();

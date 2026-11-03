@@ -80,7 +80,7 @@ impl Transcript {
         turns
     }
 
-    /// `jiyao record` 的录音统一叫 录音.m4a，这时用会议文件夹名。
+    /// `tingo record` 的录音统一叫 录音.m4a，这时用会议文件夹名。
     pub fn title(&self) -> String {
         let src = Path::new(&self.source);
         let stem = src

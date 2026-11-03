@@ -15,6 +15,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from .config import env_var
 from .transcript import Sentence, Transcript
 
 ASR_MODEL = "paraformer-zh"  # SeACo-Paraformer，支持热词
@@ -56,12 +57,12 @@ def _load_model():
 
 @contextlib.contextmanager
 def _quiet():
-    """FunASR 会往 stdout/stderr 和 logging 打大量进度和告警，统一吞掉。设 JIYAO_DEBUG=1 可看原始输出。"""
-    if os.environ.get("JIYAO_DEBUG"):
+    """FunASR 会往 stdout/stderr 和 logging 打大量进度和告警，统一吞掉。设 TINGO_DEBUG=1 可看原始输出。"""
+    if env_var("DEBUG"):
         yield
         return
     buf = io.StringIO()
-    # 只压 FunASR 及其依赖的 logger。不能用 logging.disable：那是全局的，会把其他线程里 jiyao 自己的日志也吞掉
+    # 只压 FunASR 及其依赖的 logger。不能用 logging.disable：那是全局的，会把其他线程里 tingo 自己的日志也吞掉
     noisy = [logging.getLogger(n) for n in ("", "funasr", "modelscope", "modelscope_hub", "jieba", "root")]
     levels = [lg.level for lg in noisy]
     for lg in noisy:
@@ -101,7 +102,7 @@ def to_wav16k(src: Path, dst: Path) -> None:
 
 def transcribe(path: Path, hotwords: list[str] | None = None) -> Transcript:
     model = _load_model()
-    with tempfile.TemporaryDirectory(prefix="jiyao-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="tingo-") as tmp:
         wav = Path(tmp) / "audio.wav"
         to_wav16k(path, wav)
         duration = probe_duration_ms(wav)

@@ -23,13 +23,14 @@ static FOLDER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})_(.+)$").unwrap());
 
 pub fn default_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("JIYAO_ROOT") {
+    if let Some(p) = crate::config::env_var("ROOT") {
         return PathBuf::from(p);
     }
-    std::env::var_os("HOME")
+    let docs = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default()
-        .join("Documents/jiyao")
+        .join("Documents");
+    crate::config::with_legacy(docs.join("Tingo"), docs.join("jiyao"))
 }
 
 pub fn new_folder(root: &Path, title: &str, when: NaiveDateTime) -> PathBuf {
@@ -189,7 +190,7 @@ mod tests {
 
     #[test]
     fn folder_naming_and_listing() {
-        let root = std::env::temp_dir().join(format!("jiyao-meet-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("tingo-meet-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let when = NaiveDate::from_ymd_opt(2026, 11, 2)
             .unwrap()

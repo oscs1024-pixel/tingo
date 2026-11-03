@@ -23,7 +23,7 @@ function drawMeetings(q: string): void {
   const box = $maybe("#mList");
   if (!box) return;
   const items = S.meetings.filter((m) => !q || (m.title + m.summary + m.speakers.join("")).includes(q));
-  const root = S.env ? S.env.root.replace(/^\/Users\/[^/]+/, "~") : "~/Documents/jiyao";
+  const root = S.env ? S.env.root.replace(/^\/Users\/[^/]+/, "~") : "~/Documents/tingo";
   $("#mCount").textContent = S.meetings.length ? `共 ${S.meetings.length} 场，存放在 ${root}` : "";
   if (!S.meetings.length) {
     box.innerHTML = `<div class="empty"><h3>还没有会议</h3><div>开一场会，或者把已有的录音拖进窗口</div><a class="btn primary" href="#/">开始录音</a></div>`;

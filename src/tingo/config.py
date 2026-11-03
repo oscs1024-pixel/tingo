@@ -1,4 +1,4 @@
-"""配置：~/.config/jiyao/config.toml，环境变量优先。"""
+"""配置：~/.config/tingo/config.toml，环境变量优先。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,27 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = Path(os.environ.get("JIYAO_CONFIG", Path.home() / ".config" / "jiyao" / "config.toml"))
+
+def env_var(name: str, default: str | None = None) -> str | None:
+    """读环境变量；改名前的 JIYAO_ 前缀照样认。"""
+    for key in (f"TINGO_{name}", f"JIYAO_{name}"):
+        if value := os.environ.get(key):
+            return value
+    return default
+
+
+def with_legacy(new: Path, old: Path) -> Path:
+    """新位置不存在而改名前（jiyao）的位置存在时，沿用旧位置，老用户的配置和会议不用搬。"""
+    return old if not new.exists() and old.exists() else new
+
+
+CONFIG_PATH = Path(
+    env_var("CONFIG")
+    or with_legacy(Path.home() / ".config" / "tingo" / "config.toml", Path.home() / ".config" / "jiyao" / "config.toml")
+)
 
 EXAMPLE = """\
-# jiyao 配置。任一 OpenAI 兼容接口都可以：DeepSeek、通义千问、Kimi、智谱、本地 Ollama……
+# tingo 配置。任一 OpenAI 兼容接口都可以：DeepSeek、通义千问、Kimi、智谱、本地 Ollama……
 
 # 专有名词、人名、项目代号，提高识别准确率（必须写在下面的 [llm] 之前，否则会被当成 llm 的配置）
 hotwords = []
@@ -84,12 +101,11 @@ def load() -> Config:
         ),
     )
 
-    env = os.environ
-    cfg.llm.base_url = env.get("JIYAO_LLM_BASE_URL", cfg.llm.base_url)
-    cfg.llm.model = env.get("JIYAO_LLM_MODEL", cfg.llm.model)
-    cfg.llm.api_key = env.get("JIYAO_LLM_API_KEY") or cfg.llm.api_key or env.get("DEEPSEEK_API_KEY", "")
-    cfg.webhook = env.get("JIYAO_WEBHOOK", cfg.webhook)
-    cfg.webhook_secret = env.get("JIYAO_WEBHOOK_SECRET", cfg.webhook_secret)
+    cfg.llm.base_url = env_var("LLM_BASE_URL", cfg.llm.base_url)
+    cfg.llm.model = env_var("LLM_MODEL", cfg.llm.model)
+    cfg.llm.api_key = env_var("LLM_API_KEY") or cfg.llm.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    cfg.webhook = env_var("WEBHOOK", cfg.webhook)
+    cfg.webhook_secret = env_var("WEBHOOK_SECRET", cfg.webhook_secret)
     return cfg
 
 
@@ -113,7 +129,7 @@ def save(cfg: Config) -> Path:
     """写回配置文件（图形界面的设置页用）。注释不保留，格式与桌面版（Rust）的 save 一致。"""
     words = ", ".join(_toml_str(w) for w in cfg.hotwords)
     text = (
-        "# jiyao 配置，由图形界面写入；也可以直接编辑。\n\n"
+        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n"
         "# 专有名词、人名、项目代号，提高识别准确率\n"
         f"hotwords = [{words}]\n\n"
         "[llm]\n"

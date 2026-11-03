@@ -13,9 +13,10 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
+from .config import with_legacy
 from .transcript import Transcript, fmt_ts
 
-DEFAULT_ROOT = Path.home() / "Documents" / "jiyao"
+DEFAULT_ROOT = with_legacy(Path.home() / "Documents" / "Tingo", Path.home() / "Documents" / "jiyao")
 AUDIO = "录音.m4a"
 MINUTES = "纪要.md"
 TRANSCRIPT_MD = "转写.md"
@@ -43,7 +44,7 @@ def save_transcript(tr: Transcript, out_dir: Path) -> None:
 
 
 def meeting_date(folder: Path) -> date:
-    """文件夹名里的日期优先（jiyao 录的），否则用录音或转写文件的修改时间。"""
+    """文件夹名里的日期优先（tingo 录的），否则用录音或转写文件的修改时间。"""
     m = _FOLDER_RE.match(folder.name)
     if m:
         return date.fromisoformat(m.group(1))
