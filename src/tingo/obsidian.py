@@ -13,6 +13,8 @@ from pathlib import Path
 from . import fishbone, meetings
 from .config import ObsidianConfig
 from .fishbone import NONE, fmt_ms
+from .i18n import doc_is_en
+from .i18n import tr as _t
 from .meetings import MINUTES, TRANSCRIPT_JSON
 from .transcript import Transcript
 
@@ -74,11 +76,16 @@ class Exported:
 def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
     vault = Path(cfg.vault.strip())
     if not cfg.vault.strip() or not vault.is_dir():
-        raise ExportError("还没有设置 Obsidian 库，或者库的文件夹不存在，去设置里选一下")
+        raise ExportError(
+            _t(
+                "还没有设置 Obsidian 库，或者库的文件夹不存在，去设置里选一下",
+                "No Obsidian vault is set, or its folder doesn't exist; choose one in Settings",
+            )
+        )
     try:
         minutes = (meeting_dir / MINUTES).read_text(encoding="utf-8")
     except OSError:
-        raise ExportError("这场会议还没有纪要") from None
+        raise ExportError(_t("这场会议还没有纪要", "This meeting has no minutes yet")) from None
     try:
         tr: Transcript | None = Transcript.load(meeting_dir / TRANSCRIPT_JSON)
     except Exception:  # noqa: BLE001 - 没有转写也能导出纪要
@@ -93,9 +100,11 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise ExportError(f"建不了文件夹 {folder}：{e}") from e
+        raise ExportError(_t(f"建不了文件夹 {folder}：{e}", f"Couldn't create folder {folder}: {e}")) from e
 
-    turns = tr.turns() if tr is not None else []
+    en = doc_is_en(minutes)  # 笔记里的文字跟纪要的语言走
+    colon = ": " if en else "："
+    turns = tr.turns(en) if tr is not None else []
     duration = tr.duration_ms if tr is not None else 2**64 - 1
     body: list[str] = []
     last = 0
@@ -106,39 +115,43 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
         if spec is None:
             continue
         grounds = [fishbone.ground(b, turns, duration) for b in spec.branches]
-        draw_name = f"{name} 鱼骨图{'' if k == 0 else k + 1}"
+        draw_name = f"{name} {'fishbone' if en else '鱼骨图'}{'' if k == 0 else k + 1}"
         path = folder / f"{draw_name}.excalidraw.md"
         try:
-            path.write_text(fishbone.excalidraw_md(fishbone.excalidraw(spec, grounds)), encoding="utf-8")
+            path.write_text(fishbone.excalidraw_md(fishbone.excalidraw(spec, grounds, en)), encoding="utf-8")
         except OSError as e:
             raise ExportError(str(e)) from e
         drawings.append(path)
         body.append(f"![[{draw_name}.excalidraw]]\n\n**{spec.problem}**\n")
         for b, g in zip(spec.branches, grounds, strict=True):
-            detail = f"：{b.detail}" if b.detail else ""
+            detail = f"{colon}{b.detail}" if b.detail else ""
             mark = " ⚠️" if g.level == NONE else ""
-            body.append(f"- **{b.title}**{detail} · {g.label()}{mark}\n")
+            body.append(f"- **{b.title}**{detail} · {g.label(en)}{mark}\n")
             for q in g.quotes:
-                body.append(f"    - `{fmt_ms(q.ms)}` {q.speaker}：{q.text}\n")
+                body.append(f"    - `{fmt_ms(q.ms)}` {q.speaker}{colon}{q.text}\n")
     body.append(minutes[last:])
 
     title = meetings.minutes_title(minutes) or topic
     fm = ["---", f"title: {_yaml_str(title)}", f"date: {date}"]
     if tr is not None:
         fm.append(f"duration: {_yaml_str(fmt_ms(tr.duration_ms))}")
-        fm.append(f"speakers: [{', '.join(_yaml_str(tr.name_of(s)) for s in tr.speakers_in_order())}]")
-    fm.append("tags: [会议纪要]")
+        fm.append(f"speakers: [{', '.join(_yaml_str(tr.name_of(s, en)) for s in tr.speakers_in_order())}]")
+    fm.append("tags: [meeting-notes]" if en else "tags: [会议纪要]")
     fm.append(f"tingo: {_yaml_str(meeting_id)}")
     fm.append("---\n")
     note = "\n".join(fm) + "".join(body).rstrip() + "\n"
 
     if cfg.transcript and tr is not None:
-        note += f"\n## 转写\n\n> [!quote]- 转写全文（{fmt_ms(tr.duration_ms)}，{len(tr.speakers_in_order())} 人）\n"
+        dur, n = fmt_ms(tr.duration_ms), len(tr.speakers_in_order())
+        if en:
+            note += f"\n## Transcript\n\n> [!quote]- Full transcript ({dur}, {n} speakers)\n"
+        else:
+            note += f"\n## 转写\n\n> [!quote]- 转写全文（{dur}，{n} 人）\n"
         for t in turns:
             note += f">\n> **{t.speaker}** `{fmt_ms(t.start_ms)}`\n> {t.text}\n"
     path = folder / f"{name}.md"
     try:
         path.write_text(note, encoding="utf-8")
     except OSError as e:
-        raise ExportError(f"写不进 {path}：{e}") from e
+        raise ExportError(_t(f"写不进 {path}：{e}", f"Couldn't write {path}: {e}")) from e
     return Exported(path, drawings)

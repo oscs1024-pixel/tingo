@@ -1,4 +1,6 @@
-// tingo-recorder：用 ScreenCaptureKit 录系统声音和麦克风（macOS 15+），也负责把音视频解码成 16 kHz wav。
+// tingo-recorder：用 ScreenCaptureKit 录系统声音和麦克风，也负责把音视频解码成 16 kHz wav。
+// 编译时最低系统设为 macOS 13（和 App 一致）。ScreenCaptureKit 录麦克风要 macOS 15，
+// 更早的系统改用 AVAudioEngine 录麦克风；只录麦克风时不碰 ScreenCaptureKit，也就不需要录屏权限。
 //
 // 录音：tingo-recorder <输出目录> [--no-mic] [--no-system]
 //   输出 <目录>/system.wav、<目录>/mic.wav；收到 SIGINT/SIGTERM 后收尾退出。
@@ -22,6 +24,58 @@ final class Track {
     init(url: URL) { self.url = url }
 }
 
+/// macOS 15 以前录麦克风：AVAudioEngine 取输入，转成 48 kHz 单声道 float，和 ScreenCaptureKit 录出来的格式一致
+final class MicEngine {
+    let engine = AVAudioEngine()
+    let track: Track
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+
+    init(track: Track) { self.track = track }
+
+    func start() throws {
+        let input = engine.inputNode
+        let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, let converter = AVAudioConverter(from: inFormat, to: format) else {
+            throw NSError(domain: "tingo", code: 2, userInfo: [NSLocalizedDescriptionKey: "找不到麦克风"])
+        }
+        track.file = try AVAudioFile(forWriting: track.url, settings: format.settings,
+                                     commonFormat: format.commonFormat, interleaved: false)
+        let out = format
+        let ratio = out.sampleRate / inFormat.sampleRate
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buf, _ in
+            guard let self, let file = self.track.file else { return }
+            let cap = AVAudioFrameCount(Double(buf.frameLength) * ratio) + 16
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: out, frameCapacity: cap) else { return }
+            var fed = false
+            var err: NSError?
+            converter.convert(to: pcm, error: &err) { _, status in
+                if fed {
+                    status.pointee = .noDataNow
+                    return nil
+                }
+                fed = true
+                status.pointee = .haveData
+                return buf
+            }
+            if err == nil && pcm.frameLength > 0 {
+                do {
+                    try file.write(from: pcm)
+                    self.track.framesWritten += AVAudioFramePosition(pcm.frameLength)
+                } catch {
+                    fail("写入音频失败：\(error.localizedDescription)")
+                }
+            }
+        }
+        try engine.start()
+    }
+
+    func stop() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        track.file = nil
+    }
+}
+
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let system: Track
     let mic: Track
@@ -30,6 +84,14 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let queue = DispatchQueue(label: "tingo.recorder")
     var stream: SCStream?
     var t0: CMTime?
+    var micEngine: MicEngine?
+
+    /// 麦克风走 ScreenCaptureKit（macOS 15+）还是 AVAudioEngine。TINGO_MIC_ENGINE=1 强制用后者，方便在新系统上测试
+    var micViaStream: Bool {
+        guard withSystem, ProcessInfo.processInfo.environment["TINGO_MIC_ENGINE"] != "1" else { return false }
+        if #available(macOS 15.0, *) { return true }
+        return false
+    }
 
     init(outDir: URL, withMic: Bool, withSystem: Bool) {
         system = Track(url: outDir.appendingPathComponent("system.wav"))
@@ -39,6 +101,12 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func start() async throws {
+        if withMic && !micViaStream {
+            let engine = MicEngine(track: mic)
+            try engine.start()
+            micEngine = engine
+        }
+        guard withSystem else { return }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first else {
             throw NSError(domain: "tingo", code: 1, userInfo: [NSLocalizedDescriptionKey: "找不到显示器"])
@@ -53,7 +121,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         cfg.width = 2
         cfg.height = 2
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        if withMic {
+        if #available(macOS 15.0, *), withMic && micViaStream {
             cfg.captureMicrophone = true
             cfg.microphoneCaptureDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
         }
@@ -63,7 +131,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         if withSystem {
             try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
         }
-        if withMic {
+        if #available(macOS 15.0, *), withMic && micViaStream {
             try s.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue)
         }
         try await s.startCapture()
@@ -72,6 +140,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() async {
         try? await stream?.stopCapture()
+        micEngine?.stop()
         queue.sync {
             system.file = nil
             mic.file = nil
@@ -80,10 +149,12 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
         let track: Track
-        switch type {
-        case .audio: track = system
-        case .microphone: track = mic
-        default: return
+        if type == .audio {
+            track = system
+        } else if #available(macOS 15.0, *), type == .microphone {
+            track = mic
+        } else {
+            return
         }
         guard sb.isValid, let desc = sb.formatDescription,
               var asbd = desc.audioStreamBasicDescription,

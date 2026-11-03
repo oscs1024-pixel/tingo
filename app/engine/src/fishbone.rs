@@ -1,6 +1,8 @@
 //! 纪要里的鱼骨图（```fishbone 代码块，JSON）：解析、对照转写核实引用、画成 Excalidraw。
 //! 引用核实的规则与界面（app/src/fishbone.ts）一致：时间戳落在某段发言里才算引用了这段话。
+//! 图上的文字跟纪要的语言走（见 [`crate::i18n::doc_lang`]）。
 
+use crate::i18n::Lang;
 use crate::transcript::Turn;
 use regex::Regex;
 use serde::Deserialize;
@@ -60,11 +62,15 @@ pub struct Grounding {
 }
 
 impl Grounding {
-    pub fn label(&self) -> String {
-        match self.level {
-            Level::None => "无原文依据".into(),
-            Level::Weak => format!("依据很少 · 引用 {} 段 · {} 字", self.quotes.len(), self.chars),
-            Level::Ok => format!("引用 {} 段 · {} 字", self.quotes.len(), self.chars),
+    pub fn label(&self, lang: Lang) -> String {
+        let (n, c) = (self.quotes.len(), self.chars);
+        match (self.level, lang) {
+            (Level::None, Lang::Zh) => "无原文依据".into(),
+            (Level::Weak, Lang::Zh) => format!("依据很少 · 引用 {n} 段 · {c} 字"),
+            (Level::Ok, Lang::Zh) => format!("引用 {n} 段 · {c} 字"),
+            (Level::None, Lang::En) => "No evidence".into(),
+            (Level::Weak, Lang::En) => format!("Thin evidence · {n} quote(s) · {c} chars"),
+            (Level::Ok, Lang::En) => format!("{n} quote(s) · {c} chars"),
         }
     }
 }
@@ -137,18 +143,41 @@ fn text_width(s: &str, size: f64) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// 按宽度折行（中文没有空格，逐字折）。
+/// 按宽度折行：中文没有空格，逐字折；英文单词不拆开，整个挪到下一行（单词比一行还长时才拆）。
 fn wrap(s: &str, size: f64, max: f64) -> String {
+    let cw = |c: char| if c.is_ascii() { 0.6 } else { 1.0 } * size;
     let mut out = String::new();
     let mut w = 0.0;
     for c in s.chars() {
-        let cw = if c.is_ascii() { 0.6 } else { 1.0 } * size;
-        if w + cw > max && w > 0.0 {
-            out.push('\n');
-            w = 0.0;
+        if w + cw(c) > max && w > 0.0 {
+            let line_start = out.rfind('\n').map_or(0, |i| i + 1);
+            // 正在一个英文单词中间：从这个单词前的空格处折
+            let cut = (c.is_ascii_alphanumeric() && out.ends_with(|p: char| p.is_ascii_alphanumeric()))
+                .then(|| out[line_start..].rfind(' ').map(|i| line_start + i))
+                .flatten()
+                .filter(|&i| i > line_start);
+            match cut {
+                Some(i) => {
+                    let word = out.split_off(i + 1);
+                    out.pop(); // 行尾的空格
+                    out.push('\n');
+                    w = word.chars().map(cw).sum();
+                    out.push_str(&word);
+                }
+                None => {
+                    if out.ends_with(' ') {
+                        out.pop();
+                    }
+                    out.push('\n');
+                    w = 0.0;
+                    if c == ' ' {
+                        continue; // 折行处的空格不要
+                    }
+                }
+            }
         }
         out.push(c);
-        w += cw;
+        w += cw(c);
     }
     out
 }
@@ -227,7 +256,7 @@ impl Canvas {
 
 /// 画一张经典鱼骨图：主骨水平，问题在鱼头（右侧），分支上下交替斜插在主骨上，
 /// 每个分支下面写着引用统计和引用的原话；没有原文依据的分支画成红色。
-pub fn excalidraw(spec: &Spec, grounds: &[Grounding]) -> Value {
+pub fn excalidraw(spec: &Spec, grounds: &[Grounding], lang: Lang) -> Value {
     const COL: f64 = 300.0; // 每对分支占的宽度
     const RISE: f64 = 150.0; // 斜骨的高度
     const SLANT: f64 = 110.0;
@@ -248,9 +277,9 @@ pub fn excalidraw(spec: &Spec, grounds: &[Grounding]) -> Value {
         if !b.detail.is_empty() {
             parts.push((wrap(&b.detail, 14.0, TEXT_W), 14.0, MUTED));
         }
-        parts.push((g.label(), 13.0, color(g.level)));
+        parts.push((g.label(lang), 13.0, color(g.level)));
         for q in g.quotes.iter().take(3) {
-            let s = format!("{} {}：{}", fmt_ms(q.ms), q.speaker, clip(&q.text, 28));
+            let s = format!("{} {}{}{}", fmt_ms(q.ms), q.speaker, lang.pick("：", ": "), clip(&q.text, 28));
             parts.push((wrap(&s, 12.0, TEXT_W), 12.0, MUTED));
         }
         let gap = 6.0;
@@ -326,7 +355,7 @@ mod tests {
         let spec = bl[0].1.clone().unwrap();
         assert_eq!(spec.branches.len(), 2); // 空标题的分支丢掉
         let g: Vec<_> = spec.branches.iter().map(|b| ground(b, &turns(), 52000)).collect();
-        let d = excalidraw(&spec, &g);
+        let d = excalidraw(&spec, &g, Lang::Zh);
         let els = d["elements"].as_array().unwrap();
         let texts: Vec<&str> = els.iter().filter_map(|e| e["text"].as_str()).collect();
         assert!(texts.contains(&"为什么延期？"));
@@ -339,5 +368,32 @@ mod tests {
         assert_eq!(ids.len(), els.len());
         let md = excalidraw_md(&d);
         assert!(md.contains("excalidraw-plugin: parsed") && md.contains("为什么延期？ ^jy"));
+    }
+
+    #[test]
+    fn english_labels_and_drawing() {
+        let b = |refs: &[&str]| Branch { title: "t".into(), detail: String::new(), refs: refs.iter().map(|s| s.to_string()).collect() };
+        let t = turns();
+        assert_eq!(ground(&b(&["00:09"]), &t, 52000).label(Lang::En), "1 quote(s) · 21 chars");
+        assert_eq!(ground(&b(&["00:48"]), &t, 52000).label(Lang::En), "Thin evidence · 1 quote(s) · 5 chars");
+        assert_eq!(ground(&b(&[]), &t, 52000).label(Lang::En), "No evidence");
+        assert_eq!(ground(&b(&["00:09"]), &t, 52000).label(Lang::Zh), "引用 1 段 · 21 字");
+        assert_eq!(ground(&b(&["00:48"]), &t, 52000).label(Lang::Zh), "依据很少 · 引用 1 段 · 5 字");
+        let spec = parse("{\"problem\": \"Why the delay?\", \"branches\": [{\"title\": \"Payment bugs\", \"refs\": [\"00:09\"]}, {\"title\": \"Guess\", \"refs\": []}]}").unwrap();
+        let g: Vec<_> = spec.branches.iter().map(|b| ground(b, &t, 52000)).collect();
+        let d = excalidraw(&spec, &g, Lang::En);
+        let texts: Vec<&str> = d["elements"].as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
+        assert!(texts.contains(&"No evidence"));
+        assert!(texts.iter().any(|t| t.starts_with("00:09 小张: ")));
+    }
+
+    #[test]
+    fn wrap_keeps_english_words_whole() {
+        let out = wrap("the payment module still has two open bugs", 10.0, 100.0);
+        assert!(out.lines().all(|l| !l.starts_with(' ') && !l.ends_with(' ')));
+        assert_eq!(out.replace('\n', " "), "the payment module still has two open bugs");
+        assert!(out.lines().all(|l| text_width(l, 10.0) <= 100.0));
+        // 中文照旧逐字折
+        assert_eq!(wrap("一二三四五", 10.0, 30.0), "一二三\n四五");
     }
 }

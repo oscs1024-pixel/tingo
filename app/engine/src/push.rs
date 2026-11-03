@@ -1,9 +1,12 @@
 //! 把纪要推送到飞书 / 钉钉 / 企业微信群机器人。Python 版 push.py 的移植。
+//! 卡片标题、鱼骨图、截断提示跟纪要的语言走；报错跟界面语言走。
 
 use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::i18n::{doc_lang, tr, Lang};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Platform {
@@ -15,9 +18,9 @@ pub enum Platform {
 impl Platform {
     pub fn name(self) -> &'static str {
         match self {
-            Platform::Feishu => "飞书",
-            Platform::Dingtalk => "钉钉",
-            Platform::Wecom => "企业微信",
+            Platform::Feishu => tr("飞书", "Feishu"),
+            Platform::Dingtalk => tr("钉钉", "DingTalk"),
+            Platform::Wecom => tr("企业微信", "WeCom"),
         }
     }
 }
@@ -34,14 +37,21 @@ pub fn detect(webhook: &str) -> Result<Platform, String> {
     } else if host.contains("weixin.qq.com") {
         Ok(Platform::Wecom)
     } else {
-        Err(format!(
-            "认不出这个 webhook 属于哪个平台：{host}（支持飞书、钉钉、企业微信）"
-        ))
+        Err(tr(
+            &format!("认不出这个 webhook 属于哪个平台：{host}（支持飞书、钉钉、企业微信）"),
+            &format!("Can't tell which platform this webhook belongs to: {host} (Feishu, DingTalk and WeCom are supported)"),
+        )
+        .into())
     }
 }
 
 /// 钉钉、企业微信的 markdown 不支持表格，把表格转成列表。
 pub fn tables_to_lists(md: &str) -> String {
+    let lang = doc_lang(md);
+    let (colon, open, close, comma) = match lang {
+        Lang::Zh => ("：", "（", "）", "，"),
+        Lang::En => (": ", " (", ")", ", "),
+    };
     let mut out = Vec::new();
     let mut header: Option<Vec<String>> = None;
     for line in md.lines() {
@@ -64,13 +74,13 @@ pub fn tables_to_lists(md: &str) -> String {
                         .skip(1)
                         .zip(cells.iter().skip(1))
                         .filter(|(_, c)| !c.is_empty())
-                        .map(|(h, c)| format!("{h}：{c}"))
+                        .map(|(h, c)| format!("{h}{colon}{c}"))
                         .collect();
                     let first = cells.first().cloned().unwrap_or_default();
                     out.push(if extra.is_empty() {
                         format!("- {first}")
                     } else {
-                        format!("- {first}（{}）", extra.join("，"))
+                        format!("- {first}{open}{}{close}", extra.join(comma))
                     });
                 }
             }
@@ -84,16 +94,24 @@ pub fn tables_to_lists(md: &str) -> String {
 
 /// 纪要里的鱼骨图是 ```fishbone 代码块（JSON），群消息里换成可读的列表。
 pub fn fishbone_to_text(md: &str) -> String {
+    let en = doc_lang(md).is_en();
     static FENCE: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)```fishbone\s*\n(.*?)\n```").unwrap());
     FENCE
         .replace_all(md, |c: &regex::Captures| {
             let Ok(fb) = serde_json::from_str::<serde_json::Value>(&c[1]) else { return String::new() };
-            let mut lines = vec![format!("**{}**", fb["problem"].as_str().unwrap_or("原因分析"))];
+            let problem = if en { "Root Cause Analysis" } else { "原因分析" };
+            let mut lines = vec![format!("**{}**", fb["problem"].as_str().unwrap_or(problem))];
             for b in fb["branches"].as_array().into_iter().flatten() {
                 let refs: Vec<&str> = b["refs"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).collect();
-                let detail = b["detail"].as_str().filter(|d| !d.is_empty()).map(|d| format!("：{d}")).unwrap_or_default();
-                let src = if refs.is_empty() { "（无原文依据）".to_string() } else { format!("（{}）", refs.join("、")) };
+                let sep = if en { ": " } else { "：" };
+                let detail = b["detail"].as_str().filter(|d| !d.is_empty()).map(|d| format!("{sep}{d}")).unwrap_or_default();
+                let src = match (refs.is_empty(), en) {
+                    (true, false) => "（无原文依据）".to_string(),
+                    (true, true) => " (no evidence)".to_string(),
+                    (false, false) => format!("（{}）", refs.join("、")),
+                    (false, true) => format!(" ({})", refs.join(", ")),
+                };
                 lines.push(format!("- {}{detail}{src}", b["title"].as_str().unwrap_or("")));
             }
             lines.join("\n")
@@ -101,7 +119,7 @@ pub fn fishbone_to_text(md: &str) -> String {
         .into_owned()
 }
 
-fn truncate(text: &str, max_bytes: usize) -> String {
+fn truncate(text: &str, max_bytes: usize, lang: Lang) -> String {
     if text.len() <= max_bytes {
         return text.to_string();
     }
@@ -109,13 +127,13 @@ fn truncate(text: &str, max_bytes: usize) -> String {
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n\n……（内容过长已截断）", &text[..end])
+    format!("{}\n\n{}", &text[..end], lang.pick("……（内容过长已截断）", "…(truncated)"))
 }
 
 fn title(md: &str) -> String {
     md.lines()
         .find_map(|l| l.strip_prefix("# ").map(|t| t.trim().to_string()))
-        .unwrap_or_else(|| "会议纪要".into())
+        .unwrap_or_else(|| doc_lang(md).pick("会议纪要", "Meeting Minutes").into())
 }
 
 fn hmac_b64(key: &[u8], msg: &[u8]) -> String {
@@ -132,6 +150,7 @@ pub fn build_request(
     now: f64,
 ) -> Result<(String, serde_json::Value), String> {
     let platform = detect(webhook)?;
+    let lang = doc_lang(minutes);
     let t = title(minutes);
     let minutes = &fishbone_to_text(minutes);
     if platform == Platform::Feishu {
@@ -140,7 +159,7 @@ pub fn build_request(
             "card": {
                 "schema": "2.0",
                 "header": {"title": {"tag": "plain_text", "content": t}, "template": "blue"},
-                "body": {"elements": [{"tag": "markdown", "content": truncate(minutes, 25000)}]},
+                "body": {"elements": [{"tag": "markdown", "content": truncate(minutes, 25000, lang)}]},
             },
         });
         if !secret.is_empty() {
@@ -167,12 +186,12 @@ pub fn build_request(
         }
         return Ok((
             url,
-            serde_json::json!({"msgtype": "markdown", "markdown": {"title": t, "text": truncate(&text, 18000)}}),
+            serde_json::json!({"msgtype": "markdown", "markdown": {"title": t, "text": truncate(&text, 18000, lang)}}),
         ));
     }
     Ok((
         webhook.to_string(),
-        serde_json::json!({"msgtype": "markdown", "markdown": {"content": truncate(&text, 4000)}}),
+        serde_json::json!({"msgtype": "markdown", "markdown": {"content": truncate(&text, 4000, lang)}}),
     ))
 }
 
@@ -190,7 +209,7 @@ pub fn send(webhook: &str, minutes: &str, secret: &str) -> Result<Platform, Stri
         .post(url)
         .json(&body)
         .send()
-        .map_err(|e| format!("推送失败：{e}"))?;
+        .map_err(|e| tr(&format!("推送失败：{e}"), &format!("Push failed: {e}")).to_string())?;
     let status = resp.status();
     let data: serde_json::Value = resp.json().unwrap_or_default();
     let code = data
@@ -199,7 +218,7 @@ pub fn send(webhook: &str, minutes: &str, secret: &str) -> Result<Platform, Stri
         .and_then(|c| c.as_i64())
         .unwrap_or(0);
     if !status.is_success() || code != 0 {
-        return Err(format!("推送失败：{status} {data}"));
+        return Err(tr(&format!("推送失败：{status} {data}"), &format!("Push failed: {status} {data}")).into());
     }
     detect(webhook)
 }
@@ -276,5 +295,24 @@ mod tests {
         .unwrap();
         let content = b["markdown"]["content"].as_str().unwrap();
         assert!(content.len() <= 4096 && content.ends_with("（内容过长已截断）"));
+    }
+
+    #[test]
+    fn english_minutes_push_in_english() {
+        let md = "# Release review\n\n## Summary\nShip next week.\n\n## Action Items\n| Item | Owner | Due | Source |\n|---|---|---|---|\n| Fix payment | Wang | Nov 15 | [00:29] |\n\n## Root Cause Analysis\n```fishbone\n{\"problem\": \"Why slow?\", \"branches\": [{\"title\": \"Big page\", \"detail\": \"6 s\", \"refs\": [\"01:06\", \"01:10\"]}, {\"title\": \"Guess\", \"refs\": []}]}\n```\n";
+        let out = fishbone_to_text(md);
+        assert!(out.contains("**Why slow?**\n- Big page: 6 s (01:06, 01:10)\n- Guess (no evidence)"));
+        assert!(tables_to_lists(md).contains("- Fix payment (Owner: Wang, Due: Nov 15, Source: [00:29])"));
+        assert_eq!(title("## Summary\nx"), "Meeting Minutes");
+        assert_eq!(title("## 一句话总结\nx"), "会议纪要");
+        let (_, b) = build_request(
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x",
+            &format!("# Long\n\n## Summary\n{}", "word ".repeat(2000)),
+            "",
+            0.0,
+        )
+        .unwrap();
+        let content = b["markdown"]["content"].as_str().unwrap();
+        assert!(content.len() <= 4096 && content.ends_with("\n\n…(truncated)"));
     }
 }

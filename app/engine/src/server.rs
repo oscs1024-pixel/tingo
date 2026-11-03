@@ -2,6 +2,7 @@
 //!
 //! 同一时间只跑一个任务（下载模型 / 录音 / 转写 / 生成纪要），界面轮询 /api/job 拿进度。
 //! 重活（识别、调大模型、下载）都在独立线程里跑，HTTP 处理只读写状态。
+//! 提示文字按界面语言（请求头 X-Tingo-Lang，见 [`crate::i18n`]）给中文或英文。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ use tower_http::services::ServeFile;
 use crate::asr::{AsrKind, Engine, ModelPaths};
 use crate::chunked::{transcribe_samples, LiveTranscriber};
 use crate::config::{self, Config};
+use crate::i18n::{self, tr, Lang};
 use crate::meetings::{self, AUDIO, MINUTES, TRANSCRIPT_JSON};
 use crate::{fishbone, obsidian};
 use crate::record::{self, Recorder};
@@ -115,7 +117,7 @@ fn bad(msg: impl Into<String>) -> ApiError {
 }
 
 fn not_found() -> ApiError {
-    ApiError(StatusCode::NOT_FOUND, "找不到这场会议".into())
+    ApiError(StatusCode::NOT_FOUND, tr("找不到这场会议", "Meeting not found").into())
 }
 
 impl AppState {
@@ -141,10 +143,16 @@ impl AppState {
     fn engine(&self) -> Result<Arc<Engine>, String> {
         let paths = self.model_paths();
         let kind = paths.active();
-        // Fun-ASR-Nano 在加载时就要拿到热词
-        let hot = if kind == AsrKind::FunAsrNano { self.config().hotwords } else { Vec::new() };
+        let cfg = self.config();
+        // Fun-ASR-Nano 在加载时就要拿到热词；SenseVoice、Fun-ASR-Nano 加载时定下会议语言
+        let hot = if kind == AsrKind::FunAsrNano { cfg.hotwords } else { Vec::new() };
+        let lang = if kind.uses_language() { cfg.asr_language } else { String::new() };
         let current = || {
-            self.engine.lock().unwrap().clone().filter(|e| e.kind == kind && e.hotwords == hot)
+            self.engine
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|e| e.kind == kind && e.hotwords == hot && e.language == lang)
         };
         if let Some(e) = current() {
             return Ok(e);
@@ -154,13 +162,17 @@ impl AppState {
             return Ok(e);
         }
         if !paths.base_ready() || !paths.asr_ready(kind) {
-            return Err("识别模型还没有下载，先在首页下载（约 330 MB）".into());
+            return Err(tr(
+                "识别模型还没有下载，先在首页下载（约 330 MB）",
+                "The speech recognition model isn't downloaded yet. Download it on the home page first (about 330 MB)",
+            )
+            .into());
         }
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().clamp(2, 4) as i32)
             .unwrap_or(4);
         *self.engine.lock().unwrap() = None; // 先放掉旧模型的内存
-        let e = Arc::new(Engine::load(&paths, kind, &hot, threads)?);
+        let e = Arc::new(Engine::load(&paths, kind, &hot, &lang, threads)?);
         *self.engine.lock().unwrap() = Some(e.clone());
         Ok(e)
     }
@@ -184,11 +196,11 @@ impl AppState {
         let mut jobs = self.jobs.lock().unwrap();
         let conflict = jobs.iter().filter(|j| j.busy()).find_map(|j| {
             if job.kind == "record" && j.state == "recording" {
-                Some("已经在录音了，先结束这一场")
+                Some(tr("已经在录音了，先结束这一场", "Already recording. Stop the current one first"))
             } else if job.kind == "models" && j.kind == "models" {
-                Some("已经在下载模型了，等它下完")
+                Some(tr("已经在下载模型了，等它下完", "A model is already downloading. Wait for it to finish"))
             } else if !job.meeting.is_empty() && job.kind != "models" && j.kind != "models" && j.meeting == job.meeting {
-                Some("这场会议正在处理，等它完成")
+                Some(tr("这场会议正在处理，等它完成", "This meeting is being processed. Wait for it to finish"))
             } else {
                 None
             }
@@ -239,6 +251,7 @@ impl AppState {
             &cfg.llm,
             meetings::meeting_date(dir),
             &hotwords,
+            &cfg.minutes_language,
             Hooks {
                 on_token: &mut |t| self.update(id, |j| j.minutes.push_str(t)),
                 on_stage: &mut |s| {
@@ -255,9 +268,10 @@ impl AppState {
         self.update(id, |j| j.minutes = text);
         if cfg.obsidian.auto && !cfg.obsidian.vault.trim().is_empty() {
             // 自动存进 Obsidian；失败不影响纪要本身，只提示一下
+            // 界面认"没能" / "Couldn't"开头的提示为出错
             let notice = match obsidian::export(&cfg.obsidian, dir) {
-                Ok(_) => "纪要已同步到 Obsidian".to_string(),
-                Err(e) => format!("没能同步到 Obsidian：{e}"),
+                Ok(_) => i18n::tr("纪要已同步到 Obsidian", "Minutes synced to Obsidian").to_string(),
+                Err(e) => i18n::tr(&format!("没能同步到 Obsidian：{e}"), &format!("Couldn't sync to Obsidian: {e}")).to_string(),
             };
             self.update(id, |j| j.notice = notice);
         }
@@ -275,7 +289,7 @@ impl AppState {
         });
         self.update(id, |j| j.stage.clear());
         if tr.sentences.is_empty() {
-            return Err("没有识别出任何语音".into());
+            return Err(i18n::tr("没有识别出任何语音", "No speech was recognized").into());
         }
         meetings::save_transcript(&tr, dir).map_err(|e| e.to_string())?;
         self.run_summarize(id, &tr, dir, extra)
@@ -349,7 +363,7 @@ fn config_json(s: &AppState) -> Value {
     } else if key.is_empty() {
         String::new()
     } else {
-        "已设置".into()
+        tr("已设置", "Set").into()
     };
     json!({
         "base_url": c.llm.base_url,
@@ -365,6 +379,9 @@ fn config_json(s: &AppState) -> Value {
             "auto": c.obsidian.auto,
             "transcript": c.obsidian.transcript,
         },
+        "ui_language": c.ui_language,
+        "minutes_language": c.minutes_language,
+        "asr_language": c.asr_language,
         "path": s.opt.config_path,
     })
 }
@@ -384,6 +401,25 @@ struct ConfigReq {
     webhook: String,
     secret: Option<String>,
     obsidian: Option<ObsidianReq>,
+    /// 三个语言选项（auto | zh | en），不传就不改
+    ui_language: Option<String>,
+    minutes_language: Option<String>,
+    asr_language: Option<String>,
+}
+
+/// 设置页传来的语言选项；不认识的值报错
+fn language_field(v: Option<String>, slot: &mut String) -> ApiResult<()> {
+    if let Some(v) = v {
+        let v = v.trim().to_ascii_lowercase();
+        if !config::LANGUAGES.contains(&v.as_str()) {
+            return Err(bad(tr(
+                &format!("不支持的语言：{v}（可选 auto、zh、en）"),
+                &format!("Unsupported language: {v} (use auto, zh or en)"),
+            )));
+        }
+        *slot = v;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -422,6 +458,9 @@ async fn put_config(State(s): State<Shared>, Json(r): Json<ConfigReq>) -> ApiRes
             transcript: o.transcript,
         };
     }
+    language_field(r.ui_language, &mut c.ui_language)?;
+    language_field(r.minutes_language, &mut c.minutes_language)?;
+    language_field(r.asr_language, &mut c.asr_language)?;
     config::save(&s.opt.config_path, &c).map_err(|e| bad(e.to_string()))?;
     Ok(Json(config_json(&s)))
 }
@@ -465,7 +504,7 @@ async fn test_llm(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Value>
         .ok()
         .flatten();
     Json(match ids {
-        None => json!({"ok": false, "message": "连不上：接口地址或 API Key 不对"}),
+        None => json!({"ok": false, "message": tr("连不上：接口地址或 API Key 不对", "Couldn't connect: check the API URL or API key")}),
         // Ollama 列出的模型名带 :latest
         Some(ids)
             if !ids.is_empty()
@@ -473,9 +512,14 @@ async fn test_llm(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Value>
                 && !ids.contains(&format!("{model}:latest")) =>
         {
             let some: Vec<&str> = ids.iter().take(8).map(String::as_str).collect();
-            json!({"ok": false, "message": format!("连上了，但没有模型 {model}。可用：{}", some.join("、"))})
+            let message = tr(
+                &format!("连上了，但没有模型 {model}。可用：{}", some.join("、")),
+                &format!("Connected, but there is no model {model}. Available: {}", some.join(", ")),
+            )
+            .to_string();
+            json!({"ok": false, "message": message})
         }
-        Some(_) => json!({"ok": true, "message": "连接正常"}),
+        Some(_) => json!({"ok": true, "message": tr("连接正常", "Connection OK")}),
     })
 }
 
@@ -493,11 +537,17 @@ async fn llm_models(State(s): State<Shared>, Json(r): Json<LlmReq>) -> Json<Valu
 fn local_providers() -> Vec<Value> {
     vec![
         json!({"id": "magpie", "name": "Magpie", "base_url": "http://127.0.0.1:3425/v1", "api_key": "magpie",
-               "recommended": "deepseek/deepseek-v4-flash", "hint": "Magpie 没有在运行：打开 Magpie 应用后再试"}),
+               "recommended": "deepseek/deepseek-v4-flash",
+               "hint": tr("Magpie 没有在运行：打开 Magpie 应用后再试", "Magpie isn't running: open the Magpie app and try again")}),
         json!({"id": "ccswitch", "name": "CC Switch", "base_url": "http://127.0.0.1:15721/v1", "api_key": "cc-switch",
-               "recommended": "", "hint": "CC Switch 的本地代理没有打开：在 CC Switch 设置里开启「本地代理」（默认端口 15721）"}),
-        json!({"id": "ollama", "name": "本地 Ollama", "base_url": "http://localhost:11434/v1", "api_key": "",
-               "recommended": "", "hint": "Ollama 没有在运行，或者还没有下载模型"}),
+               "recommended": "",
+               "hint": tr(
+                   "CC Switch 的本地代理没有打开：在 CC Switch 设置里开启「本地代理」（默认端口 15721）",
+                   "CC Switch's local proxy is off: turn on \"Local Proxy\" in CC Switch settings (default port 15721)",
+               )}),
+        json!({"id": "ollama", "name": tr("本地 Ollama", "Local Ollama"), "base_url": "http://localhost:11434/v1", "api_key": "",
+               "recommended": "",
+               "hint": tr("Ollama 没有在运行，或者还没有下载模型", "Ollama isn't running, or no model has been pulled yet")}),
     ]
 }
 
@@ -595,7 +645,7 @@ async fn get_audio(
     req: Request,
 ) -> ApiResult<Response> {
     let audio = meetings::find_audio(&s.folder(&id)?)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "没有录音文件".into()))?;
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, tr("没有录音文件", "No recording file").into()))?;
     let mime = audio_mime(&audio);
     // ServeFile 支持 Range 请求：播放器拖动进度条时只取需要的那段
     let mut resp = ServeFile::new(audio)
@@ -620,7 +670,7 @@ async fn put_speakers(
     Json(r): Json<SpeakersReq>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    let mut tr = Transcript::load(&dir.join(TRANSCRIPT_JSON)).map_err(|_| bad("还没有转写"))?;
+    let mut tr = Transcript::load(&dir.join(TRANSCRIPT_JSON)).map_err(|_| bad(tr("还没有转写", "No transcript yet")))?;
     tr.speaker_names = tr
         .speakers_in_order()
         .into_iter()
@@ -654,7 +704,7 @@ async fn post_summarize(
 ) -> ApiResult<Json<Job>> {
     let dir = s.folder(&id)?;
     let tr = Transcript::load(&dir.join(TRANSCRIPT_JSON))
-        .map_err(|_| bad("还没有转写，不能生成纪要"))?;
+        .map_err(|_| bad(tr("还没有转写，不能生成纪要", "No transcript yet, so minutes can't be generated")))?;
     let job = Job::new("summarize", &id, "summarizing");
     s.start_job(job.clone())?;
     spawn_job(&s, &job.id, move |st, id| st.run_summarize(id, &tr, &dir, &[]));
@@ -666,7 +716,7 @@ async fn post_process(
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<Json<Job>> {
     let dir = s.folder(&id)?;
-    let audio = meetings::find_audio(&dir).ok_or_else(|| bad("没有录音文件"))?;
+    let audio = meetings::find_audio(&dir).ok_or_else(|| bad(tr("没有录音文件", "No recording file")))?;
     let job = Job::new("process", &id, "loading");
     s.start_job(job.clone())?;
     spawn_job(&s, &job.id, move |st, id| st.run_process(id, &audio, &dir, &[]));
@@ -680,18 +730,21 @@ async fn post_push(
     let dir = s.folder(&id)?;
     let cfg = s.config();
     if cfg.webhook.is_empty() {
-        return Err(bad("还没有配置群机器人 webhook，去设置里填一下"));
+        return Err(bad(tr(
+            "还没有配置群机器人 webhook，去设置里填一下",
+            "No group bot webhook configured yet. Add one in Settings",
+        )));
     }
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad("还没有纪要"))?;
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes()))?;
     let platform = tokio::task::spawn_blocking(move || {
         push::send(&cfg.webhook, &minutes, &cfg.webhook_secret)
     })
     .await
     .map_err(|e| bad(e.to_string()))?
     .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
-    Ok(Json(
-        json!({"ok": true, "message": format!("已推送到{}群", platform.name())}),
-    ))
+    let name = platform.name();
+    let message = tr(&format!("已推送到{name}群"), &format!("Pushed to the {name} group")).to_string();
+    Ok(Json(json!({"ok": true, "message": message})))
 }
 
 async fn obsidian_vaults() -> Json<Value> {
@@ -728,25 +781,40 @@ async fn post_obsidian(
 /// 可以拖进 excalidraw.com 或用 Obsidian 的 Excalidraw 插件继续改。
 async fn post_excalidraw(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad("还没有纪要"))?;
-    let tr = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok();
-    let turns = tr.as_ref().map(|t| t.turns()).unwrap_or_default();
-    let duration = tr.as_ref().map(|t| t.duration_ms).unwrap_or(u64::MAX);
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes()))?;
+    // 画板上的文字、文件名跟纪要的语言走
+    let lang = i18n::doc_lang(&minutes);
+    let transcript = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok().map(|t| t.localized(lang));
+    let turns = transcript.as_ref().map(|t| t.turns()).unwrap_or_default();
+    let duration = transcript.as_ref().map(|t| t.duration_ms).unwrap_or(u64::MAX);
     let specs: Vec<_> = fishbone::blocks(&minutes).into_iter().filter_map(|(_, s)| s).collect();
     if specs.is_empty() {
-        return Err(bad("这份纪要里没有鱼骨图"));
+        return Err(bad(tr("这份纪要里没有鱼骨图", "These minutes have no fishbone diagram")));
     }
     let mut paths = Vec::new();
     for (k, spec) in specs.iter().enumerate() {
         let grounds: Vec<_> = spec.branches.iter().map(|b| fishbone::ground(b, &turns, duration)).collect();
-        let name = if k == 0 { "鱼骨图.excalidraw".to_string() } else { format!("鱼骨图{}.excalidraw", k + 1) };
-        let p = dir.join(name);
-        let text = serde_json::to_string_pretty(&fishbone::excalidraw(spec, &grounds)).unwrap();
+        let p = dir.join(excalidraw_name(k, lang));
+        let text = serde_json::to_string_pretty(&fishbone::excalidraw(spec, &grounds, lang)).unwrap();
         std::fs::write(&p, text).map_err(|e| bad(e.to_string()))?;
         paths.push(p);
     }
     let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&paths[0]).spawn();
     Ok(Json(json!({"ok": true, "paths": paths})))
+}
+
+/// 第 k 张鱼骨图的文件名：鱼骨图.excalidraw、鱼骨图2.excalidraw / fishbone.excalidraw、fishbone2.excalidraw
+fn excalidraw_name(k: usize, lang: Lang) -> String {
+    let base = lang.pick("鱼骨图", "fishbone");
+    if k == 0 {
+        format!("{base}.excalidraw")
+    } else {
+        format!("{base}{}.excalidraw", k + 1)
+    }
+}
+
+fn no_minutes() -> &'static str {
+    tr("还没有纪要", "No minutes yet")
 }
 
 #[derive(Deserialize)]
@@ -761,7 +829,7 @@ async fn post_pdf(
     Json(r): Json<PdfReq>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad("还没有纪要"))?;
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes()))?;
     let title = meetings::minutes_title(&minutes).unwrap_or_else(|| id.splitn(3, '_').nth(2).unwrap_or(&id).to_string());
     let out = dir.join(format!("{}.pdf", obsidian::safe_name(&title)));
     let bin = s.opt.recorder_bin.clone();
@@ -804,7 +872,10 @@ fn yes() -> bool {
 
 async fn record_start(State(s): State<Shared>, Json(r): Json<RecordReq>) -> ApiResult<Json<Job>> {
     if !r.system && !r.mic {
-        return Err(bad("系统声音和麦克风至少开一个"));
+        return Err(bad(tr(
+            "系统声音和麦克风至少开一个",
+            "Turn on at least one of system audio and microphone",
+        )));
     }
     let engine = s.engine().map_err(bad)?; // 边录边转需要模型；没下载就先提示下载
     let system = r.system && system_audio_supported(&s.opt.recorder_bin);
@@ -840,10 +911,10 @@ async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
         .find(|j| j.kind == "record" && j.state == "recording")
         .cloned();
     let Some(job) = job else {
-        return Err(bad("没有正在进行的录音"));
+        return Err(bad(tr("没有正在进行的录音", "Nothing is being recorded")));
     };
     let Some(mut live) = s.recording.lock().unwrap().take() else {
-        return Err(bad("没有正在进行的录音"));
+        return Err(bad(tr("没有正在进行的录音", "Nothing is being recorded")));
     };
     // 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
     s.update(&job.id, |j| j.state = "saving".into());
@@ -867,10 +938,16 @@ async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
                 let mixer =
                     std::thread::spawn(move || record::mixdown(&mix_dir, &mix_dir.join(AUDIO)));
                 let summary = st.run_summarize(id, &tr, &dir, &live.hotwords);
-                let mixed = mixer.join().map_err(|_| "合成录音线程异常".to_string())?;
+                let mixed = mixer
+                    .join()
+                    .map_err(|_| i18n::tr("合成录音线程异常", "The audio mixing thread crashed").to_string())?;
                 summary?;
                 mixed.map_err(|e| {
-                    format!("纪要已生成，但合成录音失败：{e}（原始音轨还在会议文件夹里）")
+                    i18n::tr(
+                        &format!("纪要已生成，但合成录音失败：{e}（原始音轨还在会议文件夹里）"),
+                        &format!("Minutes are ready, but mixing the recording failed: {e} (the raw tracks are still in the meeting folder)"),
+                    )
+                    .to_string()
                 })
             }
             // 边录边转出错或什么都没识别到：合成录音后整段重转
@@ -906,14 +983,14 @@ async fn import_file(State(s): State<Shared>, mut form: Multipart) -> ApiResult<
             _ => {}
         }
     }
-    let data = data.ok_or_else(|| bad("没有收到文件"))?;
+    let data = data.ok_or_else(|| bad(tr("没有收到文件", "No file received")))?;
     let ext = Path::new(&filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     if !meetings::AUDIO_EXTS.contains(&ext.as_str()) {
-        return Err(bad(format!("不支持的文件类型：.{ext}")));
+        return Err(bad(tr(&format!("不支持的文件类型：.{ext}"), &format!("Unsupported file type: .{ext}"))));
     }
     let when = if modified > 0.0 {
         chrono::DateTime::from_timestamp_millis(modified as i64)
@@ -996,7 +1073,7 @@ fn job_json(s: &AppState, job: &Job) -> Value {
                 .unwrap_or_default()
                 .into();
             if let Some(err) = live.recorder.exited() {
-                data["error"] = format!("录音中断：{err}").into();
+                data["error"] = tr(&format!("录音中断：{err}"), &format!("Recording stopped: {err}")).into();
             }
         }
     }
@@ -1018,27 +1095,45 @@ async fn dismiss_one(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> J
 // ---------- 模型下载（桌面版新增） ----------
 
 fn model_kind(id: &str) -> ApiResult<AsrKind> {
-    AsrKind::from_id(id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("没有这个识别模型：{id}")))
+    AsrKind::from_id(id).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            tr(&format!("没有这个识别模型：{id}"), &format!("No such speech recognition model: {id}")).into(),
+        )
+    })
 }
 
 /// 设置页的识别模型列表：哪些下载了、当前用哪个
 async fn list_asr_models(State(s): State<Shared>) -> Json<Value> {
     let paths = s.model_paths();
     let active = paths.active();
+    let english_meetings = s.config().asr_language == "en";
     let list: Vec<Value> = models::catalog()
         .iter()
         .map(|m| {
-            json!({
+            let mut v = json!({
                 "id": m.kind.id(),
                 "name": m.name,
                 "desc": m.desc,
                 "size_mb": m.size / 1_000_000,
                 "ready": paths.asr_ready(m.kind),
                 "active": m.kind == active,
-            })
+            });
+            if m.kind == AsrKind::Paraformer && english_meetings {
+                v["warning"] = paraformer_warning().into();
+            }
+            v
         })
         .collect();
     Json(json!({"active": active.id(), "base_ready": paths.base_ready(), "models": list}))
+}
+
+/// 会议语言选了英文时，提醒 Paraformer 只认中文
+fn paraformer_warning() -> &'static str {
+    tr(
+        "Paraformer 只认中文；英文会议请换成 SenseVoice",
+        "Paraformer only recognizes Chinese; switch to SenseVoice for English meetings",
+    )
 }
 
 /// 下载一个识别模型，下好了直接切过去
@@ -1046,7 +1141,7 @@ async fn download_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -
     let kind = model_kind(&id)?;
     let paths = s.model_paths();
     if paths.base_ready() && paths.asr_ready(kind) {
-        return Err(bad("这个模型已经下载好了"));
+        return Err(bad(tr("这个模型已经下载好了", "This model is already downloaded")));
     }
     let job = Job::new("models", kind.id(), "downloading");
     s.start_job(job.clone())?;
@@ -1067,7 +1162,7 @@ async fn use_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Api
     let kind = model_kind(&id)?;
     let paths = s.model_paths();
     if !paths.asr_ready(kind) {
-        return Err(bad("这个模型还没有下载"));
+        return Err(bad(tr("这个模型还没有下载", "This model isn't downloaded yet")));
     }
     paths.set_active(kind).map_err(|e| bad(e.to_string()))?;
     // 下次转写时按新模型加载；正在进行的转写用的还是旧引擎，不受影响
@@ -1081,10 +1176,13 @@ async fn delete_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> 
     let kind = model_kind(&id)?;
     let paths = s.model_paths();
     if paths.active() == kind {
-        return Err(bad("正在使用这个模型，先切换到别的模型再删除"));
+        return Err(bad(tr(
+            "正在使用这个模型，先切换到别的模型再删除",
+            "This model is in use. Switch to another model before deleting it",
+        )));
     }
     if s.jobs.lock().unwrap().iter().any(|j| j.busy() && j.kind == "models" && j.meeting == kind.id()) {
-        return Err(bad("这个模型正在下载"));
+        return Err(bad(tr("这个模型正在下载", "This model is downloading")));
     }
     models::remove_model(&paths, kind).map_err(bad)?;
     Ok(Json(json!({"ok": true})))
@@ -1092,7 +1190,7 @@ async fn delete_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> 
 
 async fn download_models(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     if s.model_paths().ready() {
-        return Err(bad("模型已经下载好了"));
+        return Err(bad(tr("模型已经下载好了", "The models are already downloaded")));
     }
     let job = Job::new("models", "", "downloading");
     s.start_job(job.clone())?;
@@ -1119,7 +1217,11 @@ pub fn router(state: Shared) -> Router {
             origins.iter().map(|o| HeaderValue::from_static(o)),
         ))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::RANGE]);
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::RANGE,
+            axum::http::HeaderName::from_static(i18n::HEADER),
+        ]);
     Router::new()
         .route("/api/env", get(env))
         .route("/api/config", get(get_config).put(put_config))
@@ -1152,6 +1254,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/models/{id}/use", post(use_model))
         .route("/api/models/{id}", delete(delete_model))
         .layer(axum::extract::DefaultBodyLimit::max(4 << 30)) // 导入的录屏可能有几个 GB
+        .layer(axum::middleware::from_fn(i18n::layer)) // 每个请求都记下界面语言
         .layer(cors)
         .with_state(state)
 }

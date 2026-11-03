@@ -1,5 +1,6 @@
 /* 轮询本地服务的任务列表，驱动首页（录音 / 首次下载模型）、详情页的生成过程、设置页的模型下载和侧边栏的任务列表。 */
 
+import { t } from "./i18n";
 import { api, type Job } from "./api";
 import { toast } from "./dom";
 import { refreshEnv, refreshMeetings } from "./sidebar";
@@ -52,14 +53,17 @@ export async function poll(): Promise<void> {
     changed = true;
     const here = S.detail?.id === j.meeting;
     if (j.kind !== "models" && !here) {
-      if (j.state === "done") toast(`「${jobTitle(j)}」的纪要已生成`);
-      else toast(`「${jobTitle(j)}」没有处理完：${j.error ?? ""}`, true);
+      if (j.state === "done") toast(t(`「${jobTitle(j)}」的纪要已生成`, `Minutes ready: ${jobTitle(j)}`));
+      else toast(t(`「${jobTitle(j)}」没有处理完：${j.error ?? ""}`, `${jobTitle(j)} didn't finish: ${j.error ?? ""}`), true);
     }
-    if (j.state === "done" && j.notice) toast(j.notice, j.notice.startsWith("没能"));
+    if (j.state === "done" && j.notice) toast(j.notice, /^(没能|Couldn't)/.test(j.notice));
   }
   if (changed) {
     refreshMeetings();
-    refreshEnv();
+    // 先拿到最新状态再重画首页：模型刚下完时首页已经按旧状态（"还没下载"）画过一次，不重画就会一直显示"下载模型"
+    refreshEnv().then(() => {
+      if ((!location.hash || location.hash === "#/") && S.job.state === "idle") updateHome(S.job, IDLE, true);
+    });
   }
   const rec = jobs.some((j) => j.state === "recording");
   timer = window.setTimeout(poll, rec ? 160 : jobs.some(isBusy) ? 500 : 2500);

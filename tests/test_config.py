@@ -11,6 +11,7 @@ RUST_SAVED = (
     'hotwords = ["星河", "Kafka"]\n\n[llm]\nbase_url = "http://127.0.0.1:3425/v1"\napi_key = "k\\"q"\n'
     'model = "deepseek/deepseek-v4-flash"\n\n[push]\nwebhook = ""\nsecret = ""\n\n'
     '[obsidian]\nvault = "/Users/a/笔记"\nfolder = "会议"\nauto = false\ntranscript = true\n'
+    '\n[ui]\nlanguage = "auto"\n\n[minutes]\nlanguage = "auto"\n\n[asr]\nlanguage = "zh"\n'
 )
 
 
@@ -40,3 +41,16 @@ def test_obsidian_defaults_when_section_missing():
     config.CONFIG_PATH.write_text('[obsidian]\nvault = "/v"\n')
     assert config.load().obsidian == ObsidianConfig("/v", "会议纪要", True, True)
     assert "obsidian" not in tomllib.loads(config.EXAMPLE)
+
+
+def test_language_sections_roundtrip_and_defaults():
+    cfg = Config(ui_language="en", minutes_language="zh", asr_language="auto")
+    config.save(cfg)
+    text = config.CONFIG_PATH.read_text(encoding="utf-8")
+    assert text.endswith('[ui]\nlanguage = "en"\n\n[minutes]\nlanguage = "zh"\n\n[asr]\nlanguage = "auto"\n')
+    assert text.index("[obsidian]") < text.index("[ui]")
+    assert config.load() == cfg
+    # 老配置没有这三节、或者填了不认识的值：用默认；大小写不敏感
+    config.CONFIG_PATH.write_text('[llm]\nmodel = "m"\n\n[asr]\nlanguage = "fr"\n\n[minutes]\nlanguage = "EN"\n')
+    c = config.load()
+    assert (c.ui_language, c.minutes_language, c.asr_language) == ("auto", "en", "zh")

@@ -1,5 +1,7 @@
 /* 和本地服务通信。浏览器 / `tingo ui` 里是同源；Tauri 窗口里服务地址由外壳告诉我们。 */
 
+import { lang, t } from "./i18n";
+
 export interface Env {
   version: string;
   root: string;
@@ -91,6 +93,11 @@ export interface Config {
   secret_set: boolean;
   path: string;
   obsidian: ObsidianConfig;
+  /** auto | zh | en */
+  ui_language?: string;
+  minutes_language?: string;
+  /** zh | en | auto（会议语言，桌面版识别用） */
+  asr_language?: string;
 }
 
 export interface ObsidianConfig {
@@ -129,14 +136,16 @@ interface ApiOptions extends RequestInit {
 
 export async function api<T = Record<string, unknown>>(path: string, opts: ApiOptions = {}): Promise<T> {
   const { json, ...init } = opts;
+  const headers: Record<string, string> = { "X-Tingo-Lang": lang() }; // 后端按这个语言回提示
   if (json !== undefined) {
     init.method = init.method || "POST";
-    init.headers = { "Content-Type": "application/json" };
+    headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);
   }
+  init.headers = headers;
   const res = await fetch(url(path), init);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `请求失败（${res.status}）`);
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : t(`请求失败（${res.status}）`, `Request failed (${res.status})`));
   return data as T;
 }
 

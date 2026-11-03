@@ -1,5 +1,6 @@
 /* 纪要渲染：只覆盖纪要用到的 Markdown 子集（标题、列表、表格、粗体、行内代码），时间戳变成可点的按钮。 */
 
+import { t } from "./i18n";
 import { esc, tsToMs } from "./dom";
 import { parseFishbone, renderFishbone, type Resolver } from "./fishbone";
 
@@ -15,7 +16,10 @@ function inline(s: string): string {
 
 const LIST = /^\s*([-*]|\d+\.)\s+/;
 
-export function renderMarkdown(md: string, { skipHead = false, resolve }: { skipHead?: boolean; resolve?: Resolver } = {}): string {
+export function renderMarkdown(
+  md: string,
+  { skipHead = false, resolve, en }: { skipHead?: boolean; resolve?: Resolver; en?: boolean } = {},
+): string {
   const lines = md.replace(/\r/g, "").split("\n");
   const out: string[] = [];
   let i = 0;
@@ -36,7 +40,7 @@ export function renderMarkdown(md: string, { skipHead = false, resolve }: { skip
       i++;
       if (lang === "fishbone") {
         const spec = closed ? parseFishbone(body.join("\n")) : null;
-        out.push(spec ? renderFishbone(spec, resolve) : closed ? "" : `<div class="fishbone pending">正在画鱼骨图…</div>`);
+        out.push(spec ? renderFishbone(spec, resolve, en) : closed ? "" : `<div class="fishbone pending">${t("正在画鱼骨图…", "Drawing the fishbone…")}</div>`);
       } else {
         out.push(`<pre><code>${esc(body.join("\n"))}</code></pre>`);
       }
@@ -75,7 +79,7 @@ export function renderMarkdown(md: string, { skipHead = false, resolve }: { skip
       const ordered = /^\s*\d+\./.test(line);
       const items: string[] = [];
       while (i < lines.length && LIST.test(lines[i])) items.push(lines[i++].replace(LIST, ""));
-      const meta = afterH1 && items.some((t) => t.startsWith("日期："));
+      const meta = afterH1 && items.some((x) => /^(日期：|Date:)/.test(x));
       const tag = ordered ? "ol" : "ul";
       if (!(skipHead && meta)) out.push(`<${tag}>${items.map((t) => `<li>${inline(t)}</li>`).join("")}</${tag}>`);
       afterH1 = false;

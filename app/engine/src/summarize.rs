@@ -1,5 +1,6 @@
-//! 用任一 OpenAI 兼容接口把转写整理成中文会议纪要。Python 版 summarize.py 的移植，
+//! 用任一 OpenAI 兼容接口把转写整理成会议纪要（中文或英文）。Python 版 summarize.py 的移植，
 //! 另加一条：热词作为术语表交给模型纠正同音字（这个识别模型不支持热词）。
+//! 英文模板与中文一一对应，章节标题一字不差（界面、推送、Obsidian 都靠它们识别）。
 
 use chrono::{Datelike, Duration as Days, NaiveDate};
 use regex::{Captures, Regex};
@@ -8,6 +9,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::config::LlmConfig;
+use crate::i18n::{self, tr, Lang};
 use crate::transcript::{fmt_ts, Transcript};
 
 const SYSTEM: &str =
@@ -49,7 +51,7 @@ const MINUTES_PROMPT: &str = "下面是一场会议的语音转写，格式为�
 4. 每条要点、决议、待办都附上出处时间戳，便于回听核对。
 5. 某一节没有内容时写\"无\"，不要删掉这一节（「原因分析」除外，见第 7 条）。
 6. 去掉寒暄和口头禅，语言简洁、书面化。
-7. 只有会议里明确分析了某个问题的原因时，才写「原因分析」这一节：每个问题一个 fishbone 代码块（最多两个），每块 2～6 个分支，内容是合法 JSON。refs 填支撑这个原因的原话的时间戳，必须是上面转写里出现过的 [mm:ss]（不带方括号）；找不到原话支撑就留空数组，不要编。没有分析原因的会议，整节省略，不要写\"无\"。{glossary}
+7. 只有会议里明确分析了某个问题的原因时，才写「原因分析」这一节：每个问题一个 fishbone 代码块（最多两个），每块 2～6 个分支，内容是合法 JSON。refs 填支撑这个原因的原话的时间戳，必须是上面转写里出现过的 [mm:ss]（不带方括号）；找不到原话支撑就留空数组，不要编。没有分析原因的会议，整节省略，不要写\"无\"。{glossary}{translate}
 
 转写：
 {transcript}
@@ -58,7 +60,7 @@ const MINUTES_PROMPT: &str = "下面是一场会议的语音转写，格式为�
 const CHUNK_PROMPT: &str = "下面是一场长会议中的一段转写（第 {index}/{total} 段），格式为「[时间戳] 说话人：内容」。会议日期：{meeting_date}。
 
 请提炼这一段的：讨论要点、已拍板的决议、待办（事项/负责人/截止时间）、待定问题与风险。
-每条都附出处时间戳 [mm:ss]，只依据原文，不编造，用简洁的条目输出。{glossary}
+每条都附出处时间戳 [mm:ss]，只依据原文，不编造，用简洁的条目输出。{glossary}{translate}
 
 转写：
 {transcript}
@@ -72,6 +74,106 @@ const REDUCE_PROMPT: &str = "下面是一场长会议按时间顺序分段提炼
 {notes}
 ";
 
+const SYSTEM_EN: &str = "You are a meticulous meeting secretary who turns colloquial meeting transcripts, \
+speech-recognition errors and all, into clear, professional meeting minutes.";
+
+const MINUTES_PROMPT_EN: &str = "Below is the speech-recognition transcript of a meeting, one line per turn in the form \"[timestamp] Speaker: content\". Meeting date: {meeting_date}
+
+Write the meeting minutes using exactly the following Markdown structure, and output nothing else:
+
+# <a short title>
+
+## Summary
+<one sentence>
+
+## Discussion
+### 1. <topic>
+- <key point> ([mm:ss])
+
+## Decisions
+- <what was decided> ([mm:ss])
+
+## Action Items
+| Item | Owner | Due | Source |
+|---|---|---|---|
+| <concrete action> | <name or speaker> | <date> | [mm:ss] |
+
+## Open Questions & Risks
+- <unresolved questions, risks raised>
+
+## Root Cause Analysis
+```fishbone
+{\"problem\": \"<the problem being analyzed, as a question>\", \"branches\": [{\"title\": \"<one cause, 5 words max>\", \"detail\": \"<one-sentence elaboration>\", \"refs\": [\"mm:ss\", \"mm:ss\"]}]}
+```
+
+Rules:
+1. Use only what is in the transcript; do not make anything up. If an owner or a due date was not stated explicitly, write \"Not specified\".
+2. The transcript has recognition errors (homophones, misheard words). Fix obvious ones from context; keep the original wording when unsure.
+3. Chinese relative dates such as \"下周五\" or \"明天\" have already been annotated by the program with the actual date, e.g. \"下周五（11月13日）\"; use the date in the brackets instead of working it out yourself. For any other relative date (e.g. \"next Wednesday\", \"the 15th\"), keep the original wording and add the actual date in parentheses, looked up in the calendar above, e.g. \"next Wednesday (Nov 4)\".
+4. End every key point, decision and action item with its source timestamp, so it can be checked against the recording.
+5. If a section has nothing, write \"None\" rather than dropping the section (except \"Root Cause Analysis\", see rule 7).
+6. Leave out small talk and filler words; keep the language concise and formal.
+7. Only include the \"Root Cause Analysis\" section when the meeting explicitly analyzed the causes of a problem: one fishbone code block per problem (at most two), 2-6 branches each, valid JSON. In refs, put the timestamps of the lines that support the cause; they must be [mm:ss] timestamps that appear in the transcript below (without the brackets). If no line supports it, leave refs as an empty array; do not invent one. If the meeting did not analyze causes, omit the whole section; do not write \"None\".{glossary}{translate}
+
+Transcript:
+{transcript}
+";
+
+const CHUNK_PROMPT_EN: &str = "Below is one part (part {index} of {total}) of the transcript of a long meeting, one line per turn in the form \"[timestamp] Speaker: content\". Meeting date: {meeting_date}
+
+Extract from this part: key discussion points, decisions made, action items (item / owner / due date), and open questions & risks.
+End every entry with its source timestamp [mm:ss]. Use only what is in the transcript, do not make anything up, and output concise bullet points.{glossary}{translate}
+
+Transcript:
+{transcript}
+";
+
+const REDUCE_PROMPT_EN: &str = "Below are notes taken part by part, in chronological order, from a long meeting. Merge them into one complete set of meeting minutes: remove duplicates, group points by topic, and keep the source timestamps.
+
+{instructions}
+
+Notes by part:
+{notes}
+";
+
+/// 一种语言的整套提示词
+struct Prompts {
+    system: &'static str,
+    minutes: &'static str,
+    chunk: &'static str,
+    reduce: &'static str,
+    /// 纪要提示词里转写正文从这里开始；合并时只取它前面的格式要求
+    transcript_marker: &'static str,
+}
+
+fn prompts(lang: Lang) -> Prompts {
+    match lang {
+        Lang::Zh => Prompts {
+            system: SYSTEM,
+            minutes: MINUTES_PROMPT,
+            chunk: CHUNK_PROMPT,
+            reduce: REDUCE_PROMPT,
+            transcript_marker: "转写：",
+        },
+        Lang::En => Prompts {
+            system: SYSTEM_EN,
+            minutes: MINUTES_PROMPT_EN,
+            chunk: CHUNK_PROMPT_EN,
+            reduce: REDUCE_PROMPT_EN,
+            transcript_marker: "\nTranscript:\n",
+        },
+    }
+}
+
+/// 转写和纪要不是同一种语言时（手动选了纪要语言），明确要求翻译
+fn translate_note(minutes: Lang, transcript: Lang) -> &'static str {
+    match (minutes, transcript) {
+        (Lang::En, Lang::Zh) => "\n\nThe transcript is in Chinese: write the minutes in English, translating as needed (keep names of people, products and systems as they are).",
+        (Lang::Zh, Lang::En) => "\n\n注意：转写是英文的，纪要一律用中文撰写，需要时翻译（人名、产品名、系统名等专有名词保留原文）。",
+        _ => "",
+    }
+}
+
 const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
 const LOCAL_CHUNK_CHARS: usize = 6000;
 const CHARS_PER_TOKEN: f64 = 1.3;
@@ -81,12 +183,32 @@ fn md(d: NaiveDate) -> String {
     format!("{}月{}日", d.month(), d.day())
 }
 
+/// 英文的月日：Nov 4
+fn md_en(d: NaiveDate) -> String {
+    d.format("%b %-d").to_string()
+}
+
+/// 纪要里的会议日期：2026-10-28（星期三） / 2026-10-28 (Wednesday)
+fn day_line(d: NaiveDate, lang: Lang) -> String {
+    match lang {
+        Lang::Zh => format!("{}（星期{}）", d.format("%Y-%m-%d"), weekday(d)),
+        Lang::En => d.format("%Y-%m-%d (%A)").to_string(),
+    }
+}
+
 fn weekday(d: NaiveDate) -> &'static str {
     WEEKDAYS[d.weekday().num_days_from_monday() as usize]
 }
 
 /// 日期对照表。小模型算"下周五是几号"经常算错，直接给表让它查。
 pub fn calendar_hint(d: NaiveDate) -> String {
+    calendar_hint_in(d, Lang::Zh)
+}
+
+pub fn calendar_hint_in(d: NaiveDate, lang: Lang) -> String {
+    if lang.is_en() {
+        return calendar_hint_en(d);
+    }
     let monday = d - Days::days(d.weekday().num_days_from_monday() as i64);
     let mut lines = vec![
         "日期对照表（每周从周一开始）：".to_string(),
@@ -109,6 +231,30 @@ pub fn calendar_hint(d: NaiveDate) -> String {
             })
             .collect();
         lines.push(format!("- {name}：{}", days.join("、")));
+    }
+    lines.join("\n")
+}
+
+fn calendar_hint_en(d: NaiveDate) -> String {
+    let monday = d - Days::days(d.weekday().num_days_from_monday() as i64);
+    let mut lines = vec![
+        "Calendar (weeks start on Monday):".to_string(),
+        format!(
+            "- Today is {} ({}); tomorrow is {}; the day after tomorrow is {}",
+            md_en(d),
+            d.format("%A"),
+            md_en(d + Days::days(1)),
+            md_en(d + Days::days(2))
+        ),
+    ];
+    for (name, offset) in [("This week", 0), ("Next week", 7), ("The week after next", 14)] {
+        let days: Vec<String> = (0..7)
+            .map(|i| {
+                let x = monday + Days::days(offset + i);
+                format!("{} {}", x.format("%a"), md_en(x))
+            })
+            .collect();
+        lines.push(format!("- {name}: {}", days.join(", ")));
     }
     lines.join("\n")
 }
@@ -157,7 +303,12 @@ pub fn annotate_dates(text: &str, d: NaiveDate) -> String {
         .into_owned()
 }
 
+#[cfg(test)]
 fn glossary(hotwords: &[String]) -> String {
+    glossary_in(hotwords, Lang::Zh)
+}
+
+fn glossary_in(hotwords: &[String], lang: Lang) -> String {
     let words: Vec<&str> = hotwords
         .iter()
         .map(|w| w.trim())
@@ -165,6 +316,12 @@ fn glossary(hotwords: &[String]) -> String {
         .collect();
     if words.is_empty() {
         return String::new();
+    }
+    if lang.is_en() {
+        return format!(
+            "\n8. Proper nouns in this meeting (people, projects, systems): {}. Wherever the transcript has a homophone or near-homophone of one of them, replace it with the exact term.",
+            words.join(", ")
+        );
     }
     format!(
         "\n8. 本场会议涉及的专有名词（人名、项目、系统名）：{}。转写里与它们同音或近音的写法，一律改成这些词。",
@@ -245,6 +402,7 @@ pub fn strip_think(text: &str, partial: bool) -> String {
 /// 思考内容有的放在 reasoning_content / reasoning 字段，有的夹在正文的 <think> 里，两种都算。
 pub fn chat(
     cfg: &LlmConfig,
+    system: &str,
     prompt: &str,
     think: bool,
     mut on_token: impl FnMut(&str),
@@ -257,11 +415,15 @@ pub fn chat(
         cfg.api_key.clone()
     };
     if key.is_empty() {
-        return Err("没有配置大模型的 API Key：在设置里填写".into());
+        return Err(tr(
+            "没有配置大模型的 API Key：在设置里填写",
+            "No API key configured for the language model: add one in Settings",
+        )
+        .into());
     }
     let mut body = serde_json::json!({
         "model": cfg.model,
-        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         "temperature": 0.2,
         "stream": true,
     });
@@ -282,20 +444,35 @@ pub fn chat(
         .bearer_auth(key)
         .json(&body)
         .send()
-        .map_err(|e| format!("连不上大模型（{}）：{e}", cfg.base_url))?;
+        .map_err(|e| {
+            let url = &cfg.base_url;
+            tr(
+                &format!("连不上大模型（{url}）：{e}"),
+                &format!("Couldn't reach the language model ({url}): {e}"),
+            )
+            .to_string()
+        })?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
-        return Err(format!(
-            "大模型返回 {status}：{}",
-            text.chars().take(300).collect::<String>()
-        ));
+        let text: String = text.chars().take(300).collect();
+        return Err(tr(
+            &format!("大模型返回 {status}：{text}"),
+            &format!("The language model returned {status}: {text}"),
+        )
+        .into());
     }
     let mut raw = String::new();
     let mut shown = 0;
     let mut thought = 0usize;
     for line in BufReader::new(resp).lines() {
-        let line = line.map_err(|e| format!("读取大模型输出中断：{e}"))?;
+        let line = line.map_err(|e| {
+            tr(
+                &format!("读取大模型输出中断：{e}"),
+                &format!("Lost the connection while reading the model's output: {e}"),
+            )
+            .to_string()
+        })?;
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
             continue;
         };
@@ -357,29 +534,45 @@ pub struct Hooks<'a> {
     pub on_think: &'a mut dyn FnMut(usize),
 }
 
+/// 纪要语言：配置为 zh / en 时照办；auto 时跟转写的语言（汉字占比 ≥ 0.3 算中文）
+pub fn minutes_lang(setting: &str, tr: &Transcript) -> Lang {
+    i18n::resolve(setting, &transcript_words(tr))
+}
+
+/// 只看说的话，不看说话人名（"说话人1"会把英文会议算成中文）
+fn transcript_words(tr: &Transcript) -> String {
+    tr.sentences.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n")
+}
+
+/// `lang_setting` 是配置里的纪要语言（auto | zh | en）。
 pub fn summarize(
     tr: &Transcript,
     cfg: &LlmConfig,
     meeting_date: NaiveDate,
     hotwords: &[String],
+    lang_setting: &str,
     hooks: Hooks,
 ) -> Result<String, String> {
-    let day = format!(
-        "{}（星期{}）",
-        meeting_date.format("%Y-%m-%d"),
-        weekday(meeting_date)
-    );
-    let dated = format!("{day}\n\n{}", calendar_hint(meeting_date));
-    let gl = glossary(hotwords);
+    let spoken = i18n::detect(&transcript_words(tr));
+    let lang = minutes_lang(lang_setting, tr);
+    let tr = &tr.localized(lang); // 英文纪要里没改名的说话人叫 Speaker N
+    let pr = prompts(lang);
+    let day = day_line(meeting_date, lang);
+    let dated = format!("{day}\n\n{}", calendar_hint_in(meeting_date, lang));
+    let gl = glossary_in(hotwords, lang);
+    let translate = translate_note(lang, spoken);
     let max_chars = default_max_chars(cfg);
-    let text = annotate_dates(&tr.to_prompt_text(), meeting_date);
-    let minutes_prompt = MINUTES_PROMPT
+    let text = annotate_dates(&tr.to_prompt_text_in(lang), meeting_date);
+    let minutes_prompt = pr
+        .minutes
         .replace("{meeting_date}", &dated)
-        .replace("{glossary}", &gl);
+        .replace("{glossary}", &gl)
+        .replace("{translate}", translate);
 
     let body = if text.chars().count() <= max_chars {
         chat(
             cfg,
+            pr.system,
             &minutes_prompt.replace("{transcript}", &text),
             true,
             hooks.on_token,
@@ -390,36 +583,45 @@ pub fn summarize(
         let chunks = split_chunks(&lines, max_chars);
         let mut notes = Vec::new();
         for (i, chunk) in chunks.iter().enumerate() {
-            (hooks.on_stage)(&format!("分段提炼 {}/{}", i + 1, chunks.len()));
-            let p = CHUNK_PROMPT
-                .replace("{index}", &(i + 1).to_string())
-                .replace("{total}", &chunks.len().to_string())
+            let (k, n) = (i + 1, chunks.len());
+            (hooks.on_stage)(tr_stage(k, n).as_str());
+            let p = pr
+                .chunk
+                .replace("{index}", &k.to_string())
+                .replace("{total}", &n.to_string())
                 .replace("{meeting_date}", &dated)
                 .replace("{glossary}", &gl)
+                .replace("{translate}", translate)
                 .replace("{transcript}", chunk);
             // 分段提炼主要是摘条目，不需要思考；最后合并时再思考
-            notes.push(format!(
-                "### 第 {} 段\n{}",
-                i + 1,
-                chat(cfg, &p, false, |_| {}, |_| {})?
-            ));
+            let head = match lang {
+                Lang::Zh => format!("### 第 {k} 段"),
+                Lang::En => format!("### Part {k}"),
+            };
+            notes.push(format!("{head}\n{}", chat(cfg, pr.system, &p, false, |_| {}, |_| {})?));
         }
-        (hooks.on_stage)("合并成纪要");
+        (hooks.on_stage)(i18n::tr("合并成纪要", "Merging into minutes"));
         let instructions = minutes_prompt
-            .split("转写：")
+            .split(pr.transcript_marker)
             .next()
             .unwrap_or("")
             .to_string();
-        let p = REDUCE_PROMPT
+        let p = pr
+            .reduce
             .replace("{instructions}", &instructions)
             .replace("{notes}", &notes.join("\n\n"));
-        chat(cfg, &p, true, hooks.on_token, hooks.on_think)?
+        chat(cfg, pr.system, &p, true, hooks.on_token, hooks.on_think)?
     };
-    Ok(with_meta(&body, tr, &day))
+    Ok(with_meta(&body, tr, &day, lang))
+}
+
+/// 长会议的进度文字（界面靠它认出分段进度）：分段提炼 2/5 / Summarizing part 2/5
+fn tr_stage(i: usize, n: usize) -> String {
+    tr(&format!("分段提炼 {i}/{n}"), &format!("Summarizing part {i}/{n}")).to_string()
 }
 
 /// 会议时间、时长、参会人由程序填，不让模型猜。
-fn with_meta(body: &str, tr: &Transcript, day: &str) -> String {
+fn with_meta(body: &str, tr: &Transcript, day: &str, lang: Lang) -> String {
     let body = strip_fence(body);
     let names: Vec<String> = tr
         .speakers_in_order()
@@ -427,19 +629,19 @@ fn with_meta(body: &str, tr: &Transcript, day: &str) -> String {
         .map(|s| tr.name_of(s))
         .collect();
     let names = if names.is_empty() {
-        "无".to_string()
+        lang.pick("无", "None").to_string()
     } else {
-        names.join("、")
+        names.join(lang.pick("、", ", "))
     };
-    let meta = format!(
-        "- 日期：{day}\n- 时长：{}\n- 参会人：{names}",
-        fmt_ts(tr.duration_ms)
-    );
+    let meta = match lang {
+        Lang::Zh => format!("- 日期：{day}\n- 时长：{}\n- 参会人：{names}", fmt_ts(tr.duration_ms)),
+        Lang::En => format!("- Date: {day}\n- Duration: {}\n- Participants: {names}", fmt_ts(tr.duration_ms)),
+    };
     let (first, rest) = body.split_once('\n').unwrap_or((&body, ""));
     let (title, rest) = if first.starts_with("# ") {
         (first, rest)
     } else {
-        ("# 会议纪要", body.as_str())
+        (lang.pick("# 会议纪要", "# Meeting Minutes"), body.as_str())
     };
     format!("{title}\n\n{meta}\n\n{}\n", rest.trim())
 }
@@ -541,9 +743,97 @@ mod tests {
             "```markdown\n# 周会\n\n## 一句话总结\n好\n```",
             &tr,
             "2026-11-02（星期一）",
+            Lang::Zh,
         );
         assert!(out.starts_with("# 周会\n\n- 日期：2026-11-02（星期一）\n- 时长：01:30\n- 参会人：张三、说话人2\n\n## 一句话总结"));
         assert!(glossary(&["青鸾".into(), " ".into()]).contains("：青鸾。"));
         assert_eq!(glossary(&[]), "");
+    }
+
+    #[test]
+    fn english_template_headings_match_spec() {
+        let lines: Vec<&str> = MINUTES_PROMPT_EN.lines().collect();
+        for h in [
+            "# <a short title>",
+            "## Summary",
+            "## Discussion",
+            "### 1. <topic>",
+            "## Decisions",
+            "## Action Items",
+            "| Item | Owner | Due | Source |",
+            "|---|---|---|---|",
+            "## Open Questions & Risks",
+            "## Root Cause Analysis",
+            "```fishbone",
+        ] {
+            assert!(lines.contains(&h), "缺少 {h}");
+        }
+        // 结构与中文模板一一对应
+        let heads = |t: &str| t.lines().filter(|l| l.starts_with('#')).count();
+        assert_eq!(heads(MINUTES_PROMPT_EN), heads(MINUTES_PROMPT));
+        for t in [MINUTES_PROMPT, MINUTES_PROMPT_EN, CHUNK_PROMPT, CHUNK_PROMPT_EN] {
+            assert!(t.contains("{glossary}{translate}") && t.contains("{transcript}"));
+        }
+        // 合并时截取格式要求的分隔只出现一次
+        assert_eq!(MINUTES_PROMPT_EN.matches(prompts(Lang::En).transcript_marker).count(), 1);
+        assert_eq!(MINUTES_PROMPT.matches(prompts(Lang::Zh).transcript_marker).count(), 1);
+        assert!(glossary_in(&["Kafka".into(), "Atlas".into()], Lang::En).contains(": Kafka, Atlas."));
+        assert_eq!(translate_note(Lang::Zh, Lang::Zh), "");
+        assert_eq!(translate_note(Lang::En, Lang::En), "");
+        assert!(translate_note(Lang::En, Lang::Zh).contains("write the minutes in English, translating as needed"));
+        assert!(translate_note(Lang::Zh, Lang::En).contains("纪要一律用中文撰写"));
+    }
+
+    #[test]
+    fn english_dates_and_meta() {
+        assert_eq!(day_line(d(2026, 10, 28), Lang::En), "2026-10-28 (Wednesday)");
+        assert_eq!(day_line(d(2026, 10, 28), Lang::Zh), "2026-10-28（星期三）");
+        let cal = calendar_hint_in(d(2026, 11, 2), Lang::En);
+        assert!(cal.contains("- Today is Nov 2 (Monday); tomorrow is Nov 3"));
+        assert!(cal.contains("- Next week: Mon Nov 9, Tue Nov 10"));
+        assert_eq!(calendar_hint_in(d(2026, 11, 2), Lang::Zh), calendar_hint(d(2026, 11, 2)));
+        let mut tr = Transcript {
+            source: "m.wav".into(),
+            duration_ms: 7_200_000 - 1000 * 3600,
+            speaker_names: Default::default(),
+            sentences: vec![
+                Sentence { speaker: 0, start_ms: 0, end_ms: 900, text: "Let's ship it.".into() },
+                Sentence { speaker: 1, start_ms: 1000, end_ms: 1900, text: "OK.".into() },
+            ],
+        };
+        tr.rename(&["Lin Zhou".into()]);
+        let tr = tr.localized(Lang::En);
+        let out = with_meta("# Weekly sync\n\n## Summary\nShip it.", &tr, "2026-10-28 (Wednesday)", Lang::En);
+        assert!(out.starts_with(
+            "# Weekly sync\n\n- Date: 2026-10-28 (Wednesday)\n- Duration: 1:00:00\n- Participants: Lin Zhou, Speaker 2\n\n## Summary"
+        ));
+        assert!(with_meta("no title", &Transcript::default(), "x", Lang::En).starts_with("# Meeting Minutes\n\n- Date: x\n- Duration: 00:00\n- Participants: None"));
+    }
+
+    #[test]
+    fn minutes_language_follows_transcript() {
+        let mk = |texts: &[&str]| Transcript {
+            sentences: texts
+                .iter()
+                .enumerate()
+                .map(|(i, t)| Sentence { speaker: i % 2, start_ms: i as u64 * 1000, end_ms: i as u64 * 1000 + 900, text: t.to_string() })
+                .collect(),
+            ..Default::default()
+        };
+        let zh = mk(&["下周五交付 API 网关。", "好，Kafka 那边我来跟。"]);
+        let en = mk(&["We will ship the gateway next Friday.", "Sounds good, I'll own Kafka."]);
+        assert_eq!(minutes_lang("auto", &zh), Lang::Zh);
+        assert_eq!(minutes_lang("auto", &en), Lang::En); // 默认名"说话人1"不算进去
+        assert_eq!(minutes_lang("en", &zh), Lang::En);
+        assert_eq!(minutes_lang("zh", &en), Lang::Zh);
+    }
+
+    #[test]
+    fn stage_text_follows_ui_language() {
+        let _g = i18n::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        i18n::set_ui(Lang::En);
+        assert_eq!(tr_stage(2, 5), "Summarizing part 2/5");
+        i18n::set_ui(Lang::Zh);
+        assert_eq!(tr_stage(2, 5), "分段提炼 2/5");
     }
 }

@@ -70,3 +70,49 @@ def test_fishbone_becomes_list():
     out = fishbone_to_text(md)
     assert "**为什么慢？**\n- 页面大：6 秒（01:06）\n- 猜的（无原文依据）" in out
     assert "```" not in out
+
+
+EN_MINUTES = """# Weekly sync
+
+## Summary
+Fine.
+
+## Action Items
+| Item | Owner | Due | Source |
+|---|---|---|---|
+| Fix payments | Lin | Nov 13 | [00:29] |
+| Draft plan | Chen |  | [00:40] |
+
+## Root Cause Analysis
+```fishbone
+{"problem": "Why slow?", "branches": [{"title": "Big page", "detail": "6 s", "refs": ["01:06", "01:10"]}, {"title": "Guess", "refs": []}]}
+```
+"""
+
+
+def test_english_minutes_follow_doc_language():
+    from tingo.push import fishbone_to_text
+
+    out = fishbone_to_text(EN_MINUTES)
+    assert "**Why slow?**\n- Big page: 6 s (01:06, 01:10)\n- Guess (no evidence)" in out
+    lists = tables_to_lists(EN_MINUTES)
+    assert "- Fix payments (Owner: Lin, Due: Nov 13, Source: [00:29])" in lists
+    assert "- Draft plan (Owner: Chen, Source: [00:40])" in lists
+    _, body = build_request("https://oapi.dingtalk.com/robot/send?access_token=x", EN_MINUTES)
+    assert body["markdown"]["title"] == "Weekly sync" and "(no evidence)" in body["markdown"]["text"]
+    _, body = build_request("https://open.feishu.cn/open-apis/bot/v2/hook/abc", "## Summary\nx")
+    assert body["card"]["header"]["title"]["content"] == "Meeting Minutes"
+
+
+def test_english_truncation_note():
+    _, body = build_request("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", "## Summary\n" + "word " * 2000)
+    content = body["markdown"]["content"]
+    assert len(content.encode()) <= 4096 and content.endswith("\n\n…(truncated)")
+
+
+def test_detect_error_follows_ui_language():
+    from tingo import i18n
+
+    i18n.set_lang("en")
+    with pytest.raises(ValueError, match="Unrecognized webhook platform: example.com"):
+        detect("https://example.com/hook")

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::i18n::Lang;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sentence {
     pub speaker: usize,
@@ -37,6 +39,19 @@ impl Transcript {
             .filter(|n| !n.is_empty())
             .cloned()
             .unwrap_or_else(|| format!("说话人{}", speaker + 1))
+    }
+
+    /// 英文纪要用：没改过名的说话人叫 Speaker N（只是一份拷贝，transcript.json 里照旧是"说话人N"）。
+    pub fn localized(&self, lang: Lang) -> Transcript {
+        let mut t = self.clone();
+        if lang.is_en() {
+            for s in self.speakers_in_order() {
+                if self.speaker_names.get(&s).is_none_or(|n| n.is_empty()) {
+                    t.speaker_names.insert(s, format!("Speaker {}", s + 1));
+                }
+            }
+        }
+        t
     }
 
     /// 按首次发言顺序排列的说话人编号。
@@ -113,9 +128,15 @@ impl Transcript {
 
     /// 喂给大模型的紧凑格式：[mm:ss] 说话人：内容。
     pub fn to_prompt_text(&self) -> String {
+        self.to_prompt_text_in(Lang::Zh)
+    }
+
+    /// 英文提示词里用半角冒号：[mm:ss] Speaker 1: 内容
+    pub fn to_prompt_text_in(&self, lang: Lang) -> String {
+        let sep = lang.pick("：", ": ");
         self.turns()
             .iter()
-            .map(|t| format!("[{}] {}：{}", fmt_ts(t.start_ms), t.speaker, t.text))
+            .map(|t| format!("[{}] {}{sep}{}", fmt_ts(t.start_ms), t.speaker, t.text))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -226,6 +247,17 @@ mod tests {
         t.rename(&["张三".into(), "".into()]);
         assert_eq!(t.name_of(1), "张三");
         assert_eq!(t.name_of(0), "说话人1");
+    }
+
+    #[test]
+    fn english_default_names_only_in_copy() {
+        let mut t = tr();
+        t.rename(&["Alice".into()]);
+        let en = t.localized(Lang::En);
+        assert_eq!((en.name_of(1).as_str(), en.name_of(0).as_str()), ("Alice", "Speaker 1"));
+        assert_eq!(en.to_prompt_text_in(Lang::En).lines().nth(1).unwrap(), "[00:02] Speaker 1: 好的。");
+        assert_eq!(t.name_of(0), "说话人1"); // 原件不变
+        assert_eq!(t.localized(Lang::Zh).name_of(0), "说话人1");
     }
 
     #[test]

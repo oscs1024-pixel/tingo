@@ -102,11 +102,11 @@ pub fn minutes_title(text: &str) -> Option<String> {
         .find_map(|l| l.strip_prefix("# ").map(|t| t.trim().to_string()))
 }
 
-/// 纪要里"一句话总结"下面的那句。
+/// 纪要里"一句话总结"（英文纪要是 Summary）下面的那句。
 pub fn one_liner(text: &str) -> String {
     let mut lines = text.lines();
     while let Some(l) = lines.next() {
-        if l.trim() == "## 一句话总结" {
+        if matches!(l.trim(), "## 一句话总结" | "## Summary") {
             return lines
                 .find(|n| !n.trim().is_empty())
                 .map(|n| n.trim().to_string())

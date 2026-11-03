@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::asr::SR;
 use crate::audio::{duck_mix_default, read_wav16k};
+use crate::i18n::tr;
 
 pub struct Recorder {
     child: Child,
@@ -21,7 +22,11 @@ impl Recorder {
     /// 启动录音组件，等它报告 READY（或出错）。
     pub fn start(bin: &Path, dir: &Path, system: bool, mic: bool) -> Result<Self, String> {
         if !system && !mic {
-            return Err("系统声音和麦克风至少开一个".into());
+            return Err(tr(
+                "系统声音和麦克风至少开一个",
+                "Turn on at least one of system audio and microphone",
+            )
+            .into());
         }
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let mut cmd = Command::new(bin);
@@ -37,7 +42,9 @@ impl Recorder {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("启动录音组件失败：{e}"))?;
+            .map_err(|e| {
+                tr(&format!("启动录音组件失败：{e}"), &format!("Couldn't start the recorder: {e}")).to_string()
+            })?;
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
         stdout.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -46,7 +53,7 @@ impl Recorder {
             let _ = child.wait();
             return Err(line
                 .strip_prefix("ERROR: ")
-                .unwrap_or("录音组件意外退出")
+                .unwrap_or(tr("录音组件意外退出", "The recorder exited unexpectedly"))
                 .to_string());
         }
         let sources = [("system", system), ("mic", mic)]
@@ -78,7 +85,7 @@ impl Recorder {
                 Some(
                     rest.lines()
                         .find_map(|l| l.strip_prefix("ERROR: "))
-                        .unwrap_or("录音组件意外退出")
+                        .unwrap_or(tr("录音组件意外退出", "The recorder exited unexpectedly"))
                         .to_string(),
                 )
             }
@@ -119,7 +126,9 @@ pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
     std::fs::write(&tmp, html).map_err(|e| e.to_string())?;
     let res = Command::new(bin).arg("pdf").arg(&tmp).arg(out).output();
     let _ = std::fs::remove_file(&tmp);
-    let res = res.map_err(|e| format!("启动排版失败：{e}"))?;
+    let res = res.map_err(|e| {
+        tr(&format!("启动排版失败：{e}"), &format!("Couldn't start the PDF renderer: {e}")).to_string()
+    })?;
     if res.status.success() && out.is_file() {
         return Ok(());
     }
@@ -127,7 +136,7 @@ pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
     Err(msg
         .lines()
         .find_map(|l| l.strip_prefix("ERROR: "))
-        .unwrap_or("导出 PDF 失败")
+        .unwrap_or(tr("导出 PDF 失败", "PDF export failed"))
         .to_string())
 }
 
@@ -150,15 +159,15 @@ pub fn decode(bin: &Path, input: &Path) -> Result<Vec<f32>, String> {
         .arg(input)
         .arg(&tmp)
         .output()
-        .map_err(|e| format!("启动解码失败：{e}"))?;
+        .map_err(|e| tr(&format!("启动解码失败：{e}"), &format!("Couldn't start the decoder: {e}")).to_string())?;
     let result = if out.status.success() {
-        read_wav16k(&tmp).ok_or_else(|| "解码结果读不出来".to_string())
+        read_wav16k(&tmp).ok_or_else(|| tr("解码结果读不出来", "Couldn't read the decoded audio").to_string())
     } else {
         let msg = String::from_utf8_lossy(&out.stdout);
         Err(msg
             .lines()
             .find_map(|l| l.strip_prefix("ERROR: "))
-            .unwrap_or("解码失败")
+            .unwrap_or(tr("解码失败", "Decoding failed"))
             .to_string())
     };
     let _ = std::fs::remove_file(&tmp);
@@ -202,7 +211,7 @@ pub fn mixdown(dir: &Path, dest: &Path) -> Result<(), String> {
     let mixed = match (read(&sys), read(&mic)) {
         (Some(s), Some(m)) => duck_mix_default(&s, &m),
         (Some(x), None) | (None, Some(x)) => x,
-        (None, None) => return Err("没有录到任何声音".into()),
+        (None, None) => return Err(tr("没有录到任何声音", "Nothing was recorded").into()),
     };
     let wav = dir.join("mixed.wav");
     write_wav16(&wav, &mixed).map_err(|e| e.to_string())?;
@@ -211,12 +220,14 @@ pub fn mixdown(dir: &Path, dest: &Path) -> Result<(), String> {
         .arg(&wav)
         .arg(dest)
         .output()
-        .map_err(|e| format!("压缩录音失败：{e}"))?;
+        .map_err(|e| tr(&format!("压缩录音失败：{e}"), &format!("Compressing the recording failed: {e}")).to_string())?;
     if !out.status.success() {
-        return Err(format!(
-            "压缩录音失败：{}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(tr(
+            &format!("压缩录音失败：{err}"),
+            &format!("Compressing the recording failed: {err}"),
+        )
+        .into());
     }
     for p in [&wav, &sys, &mic] {
         let _ = std::fs::remove_file(p);

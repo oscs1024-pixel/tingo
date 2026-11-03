@@ -485,3 +485,98 @@ def test_audio_served_with_standard_mime(client, root):
     (root / mid / "录音.m4a").write_bytes(b"\0" * 64)
     r = client.get(f"/api/meetings/{mid}/audio")
     assert r.status_code == 200 and r.headers["content-type"] == "audio/mp4"
+
+
+def test_ui_language_header_switches_messages(client):
+    r = client.get("/api/meetings/nope", headers={"X-Tingo-Lang": "en"})
+    assert r.status_code == 404 and r.json()["detail"] == "Meeting not found"
+    # 不带请求头的请求（比如 <audio> 拉录音）沿用上一次的界面语言
+    assert client.get("/api/meetings/nope").json()["detail"] == "Meeting not found"
+    r = client.post(f"/api/meetings/{MID}/push", headers={"X-Tingo-Lang": "en"})
+    assert r.status_code == 400 and r.json()["detail"] == "No group bot webhook is set; add one in Settings"
+    providers = {p["id"]: p for p in client.get("/api/llm/providers").json()}
+    assert providers["ollama"]["name"] == "Local Ollama" and "isn't running" in providers["ollama"]["hint"]
+    r = client.get("/api/meetings/nope", headers={"X-Tingo-Lang": "zh"})
+    assert r.json()["detail"] == "找不到这场会议"
+    assert {p["id"]: p for p in client.get("/api/llm/providers").json()}["ollama"]["name"] == "本地 Ollama"
+
+
+def test_job_messages_follow_ui_language(client, second, gated_chat):
+    en = {"X-Tingo-Lang": "en"}
+    assert client.post(f"/api/meetings/{MID}/summarize", headers=en).status_code == 200
+    r = client.post(f"/api/meetings/{MID}/summarize", headers=en)
+    assert r.status_code == 409 and r.json()["detail"] == "This meeting is being processed; wait for it to finish"
+    gated_chat.set()
+    wait_all(client)
+
+
+def test_config_language_fields(client, tmp_path):
+    c = client.get("/api/config").json()
+    assert (c["ui_language"], c["minutes_language"], c["asr_language"]) == ("auto", "auto", "zh")
+    body = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "hotwords": [], "webhook": ""}
+    c = client.put("/api/config", json={**body, "ui_language": "en", "minutes_language": "zh"}).json()
+    assert (c["ui_language"], c["minutes_language"], c["asr_language"]) == ("en", "zh", "zh")
+    c = client.put("/api/config", json={**body, "asr_language": "auto"}).json()  # 不传的不改
+    assert (c["ui_language"], c["minutes_language"], c["asr_language"]) == ("en", "zh", "auto")
+    text = (tmp_path / "config.toml").read_text()
+    assert text.endswith('[ui]\nlanguage = "en"\n\n[minutes]\nlanguage = "zh"\n\n[asr]\nlanguage = "auto"\n')
+    r = client.put("/api/config", json={**body, "minutes_language": "fr"}, headers={"X-Tingo-Lang": "en"})
+    assert r.status_code == 400 and r.json()["detail"] == "Unsupported language: fr"
+
+
+def test_minutes_language_setting_used_and_english_stages(client, root, monkeypatch):
+    from tingo import config
+
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
+    seen = []
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None, **kw):
+        seen.append(prompt)
+        return "# New\n\n## Summary\nok"
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    cfg = config.load()
+    cfg.minutes_language = "en"
+    config.save(cfg)
+    client.post(f"/api/meetings/{MID}/summarize", headers={"X-Tingo-Lang": "en"})
+    job = wait_job(client)
+    assert job["state"] == "done", job
+    assert seen[0].startswith(sm.TRANSLATE_TO_EN) and "[00:01] Speaker 2: 好的。" in seen[0]
+    text = (root / MID / "纪要.md").read_text()
+    assert text.startswith(
+        "# New\n\n- Date: 2026-11-02 (Monday)\n- Duration: 00:05\n- Participants: Speaker 1, Speaker 2"
+    )
+
+
+def test_english_obsidian_notice(client, tmp_path, monkeypatch):
+    from tingo import config
+
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# T")
+    cfg = config.load()
+    cfg.obsidian.vault = str(tmp_path / "missing")
+    config.save(cfg)
+    client.post(f"/api/meetings/{MID}/summarize", headers={"X-Tingo-Lang": "en"})
+    assert wait_job(client)["notice"].startswith("Couldn't sync to Obsidian: No Obsidian vault is set")
+    client.post("/api/job/dismiss")
+    (tmp_path / "missing").mkdir()
+    client.post(f"/api/meetings/{MID}/summarize")
+    assert wait_job(client)["notice"] == "Minutes synced to Obsidian"
+
+
+def test_excalidraw_export_english_minutes(client, root, opened):
+    import json
+
+    en = FISHBONE_MINUTES.replace("# 周会\n\n", "# Weekly\n\n## Summary\nok\n\n")
+    (root / MID / "纪要.md").write_text(en + "\n" + en[en.index("```fishbone") :])
+    d = client.post(f"/api/meetings/{MID}/excalidraw").json()
+    assert [p.rsplit("/", 1)[1] for p in d["paths"]] == ["fishbone.excalidraw", "fishbone2.excalidraw"]
+    drawing = json.loads((root / MID / "fishbone.excalidraw").read_text())
+    texts = [e["text"] for e in drawing["elements"] if e["type"] == "text"]
+    assert "Thin evidence · 1 quote(s) · 6 chars" in texts and "No evidence" in texts
+    assert "00:00 Speaker 1: 下周五上线。" in texts
+
+
+def test_meeting_card_reads_english_summary(client, root):
+    (root / MID / "纪要.md").write_text("# Weekly\n\n- Date: 2026-11-02 (Monday)\n\n## Summary\nShip on Friday.\n")
+    assert client.get("/api/meetings").json()[0]["summary"] == "Ship on Friday."

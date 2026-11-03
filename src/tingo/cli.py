@@ -132,6 +132,7 @@ def _summarize_and_save(tr, out_dir: Path, meeting_date: date, push: bool) -> No
             meeting_date=meeting_date,
             on_token=lambda t: console.out(t, end="", highlight=False),
             on_stage=lambda s: console.print(f"[dim]{s}…[/dim]"),
+            language=cfg.minutes_language,
         )
     except Exception as e:  # noqa: BLE001 - LLM 侧错误五花八门，统一提示
         console.print()

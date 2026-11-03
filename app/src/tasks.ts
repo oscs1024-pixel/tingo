@@ -1,5 +1,6 @@
 /* 任务列表：侧边栏"进行中"和首页玻璃面板下方都用它。录音之外的任务都在后台跑，这里看进度、点进去看过程。 */
 
+import { t } from "./i18n";
 import { api, type Job } from "./api";
 import { $maybe, esc, fmt } from "./dom";
 import { isBusy, jobDetail, jobTitle, progressOf, S } from "./state";
@@ -18,7 +19,7 @@ function item(j: Job, big: boolean): string {
       : j.state === "done"
         ? `<span class="task-ok">✓</span>`
         : `<span class="task-err">!</span>`;
-  const detail = rec ? `录音中 ${fmt((j.elapsed ?? 0) * 1000)}` : jobDetail(j);
+  const detail = rec ? `${t("录音中", "Recording")} ${fmt((j.elapsed ?? 0) * 1000)}` : jobDetail(j);
   return `
     <a class="task ${j.state} ${big ? "big" : ""}" href="${linkOf(j)}" data-id="${esc(j.id ?? "")}">
       <span class="task-ico">${icon}</span>
@@ -28,7 +29,7 @@ function item(j: Job, big: boolean): string {
         ${busy && !rec ? `<span class="task-bar"><i style="width:${Math.max(3, pct)}%"></i></span>` : ""}
       </span>
       ${busy && !rec && big ? `<span class="task-pct">${pct}%</span>` : ""}
-      ${!busy && j.id ? `<button class="task-x" data-dismiss="${esc(j.id)}" title="收起">×</button>` : ""}
+      ${!busy && j.id ? `<button class="task-x" data-dismiss="${esc(j.id)}" title="${t("收起", "Dismiss")}">×</button>` : ""}
     </a>`;
 }
 
@@ -55,7 +56,7 @@ export function renderTasks(): void {
   if (side) {
     const list = S.jobs.filter((j) => j.state !== "idle");
     side.hidden = !list.length;
-    const html = list.length ? `<div class="recent-head">进行中</div>${list.map((j) => item(j, false)).join("")}` : "";
+    const html = list.length ? `<div class="recent-head">${t("进行中", "In progress")}</div>${list.map((j) => item(j, false)).join("")}` : "";
     if (side.dataset.html !== html) {
       side.dataset.html = html;
       side.innerHTML = html;

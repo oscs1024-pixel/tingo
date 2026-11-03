@@ -91,3 +91,40 @@ def test_vaults_read_from_obsidian_config(tmp_path, monkeypatch):
         )
     )
     assert obsidian.vaults() == [("新库", str(tmp_path / "新库")), ("旧库", str(tmp_path / "旧库"))]
+
+
+EN_MINUTES_TEXT = (
+    "# Release review\n\n## Summary\nDelayed.\n\n## Root Cause Analysis\n```fishbone\n"
+    '{"problem": "Why late?", "branches": [{"title": "Payments", "detail": "two bugs", "refs": ["00:09"]}, '
+    '{"title": "Guess", "refs": []}]}\n```\n'
+)
+
+
+def test_english_minutes_note_labels(tmp_path):
+    d = make_meeting(tmp_path)
+    data = json.loads((d / TRANSCRIPT_JSON).read_text(encoding="utf-8"))
+    data["speaker_names"] = {"0": "Lin"}  # 第二个人没命名
+    (d / TRANSCRIPT_JSON).write_text(json.dumps(data), encoding="utf-8")
+    (d / MINUTES).write_text(EN_MINUTES_TEXT, encoding="utf-8")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    out = obsidian.export(ObsidianConfig(str(vault)), d)
+    assert out.note == vault / "会议纪要" / "2026-11-02 发布评审.md"  # 默认文件夹不变
+    note = out.note.read_text(encoding="utf-8")
+    assert 'speakers: ["Lin", "Speaker 2"]\ntags: [meeting-notes]\n' in note
+    assert "![[2026-11-02 发布评审 fishbone.excalidraw]]\n\n**Why late?**\n" in note
+    assert "- **Payments**: two bugs · 1 quote(s) · 21 chars\n    - `00:09` Speaker 2: 支付模块" in note
+    assert "- **Guess** · No evidence ⚠️" in note
+    assert "\n## Transcript\n\n> [!quote]- Full transcript (00:52, 2 speakers)\n>\n> **Lin** `00:00`" in note
+    assert "> **Speaker 2** `00:09`" in note and "说话人" not in note
+    assert out.drawings == [vault / "会议纪要" / "2026-11-02 发布评审 fishbone.excalidraw.md"]
+    assert "No evidence ^jy" in out.drawings[0].read_text(encoding="utf-8")
+
+
+def test_export_errors_follow_ui_language(tmp_path):
+    from tingo import i18n
+
+    d = make_meeting(tmp_path)
+    i18n.set_lang("en")
+    with pytest.raises(obsidian.ExportError, match="No Obsidian vault is set"):
+        obsidian.export(ObsidianConfig(str(tmp_path / "nope")), d)

@@ -79,12 +79,19 @@ class Grounding:
     chars: int
     level: str
 
-    def label(self) -> str:
+    def label(self, en: bool = False) -> str:
+        """引用统计。en 跟纪要的语言走（英文纪要用英文），不看界面语言。"""
+        n = len(self.quotes)
+        if en:
+            if self.level == NONE:
+                return "No evidence"
+            stats = f"{n} quote(s) · {self.chars} chars"
+            return f"Thin evidence · {stats}" if self.level == WEAK else stats
         if self.level == NONE:
             return "无原文依据"
         if self.level == WEAK:
-            return f"依据很少 · 引用 {len(self.quotes)} 段 · {self.chars} 字"
-        return f"引用 {len(self.quotes)} 段 · {self.chars} 字"
+            return f"依据很少 · 引用 {n} 段 · {self.chars} 字"
+        return f"引用 {n} 段 · {self.chars} 字"
 
 
 def _ts_ms(t: str) -> int | None:
@@ -209,9 +216,9 @@ class _Canvas:
         self.elements.append(e)
 
 
-def excalidraw(spec: Spec, grounds: list[Grounding]) -> dict:
+def excalidraw(spec: Spec, grounds: list[Grounding], en: bool = False) -> dict:
     """画一张经典鱼骨图：主骨水平，问题在鱼头（右侧），分支上下交替斜插在主骨上，
-    每个分支下面写着引用统计和引用的原话；没有原文依据的分支画成红色。"""
+    每个分支下面写着引用统计和引用的原话；没有原文依据的分支画成红色。en：纪要是英文的。"""
     col_w, rise, slant, text_w = 300.0, 150.0, 110.0, 270.0  # 每对分支占的宽度、斜骨高度
     c = _Canvas()
     cols = float(max(math.ceil(len(spec.branches) / 2), 1))
@@ -228,9 +235,10 @@ def excalidraw(spec: Spec, grounds: list[Grounding]) -> dict:
         parts = [(_wrap(b.title, 20.0, text_w), 20.0, color)]
         if b.detail:
             parts.append((_wrap(b.detail, 14.0, text_w), 14.0, MUTED))
-        parts.append((g.label(), 13.0, color))
+        parts.append((g.label(en), 13.0, color))
+        sep = ": " if en else "："
         for q in g.quotes[:3]:
-            parts.append((_wrap(f"{fmt_ms(q.ms)} {q.speaker}：{_clip(q.text, 28)}", 12.0, text_w), 12.0, MUTED))
+            parts.append((_wrap(f"{fmt_ms(q.ms)} {q.speaker}{sep}{_clip(q.text, 28)}", 12.0, text_w), 12.0, MUTED))
         gap = 6.0
         height = sum(len(_lines(s)) * size * 1.25 + gap for s, size, _ in parts)
         x = tip[0] - 40.0

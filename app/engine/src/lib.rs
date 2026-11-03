@@ -6,6 +6,7 @@ pub mod chunked;
 pub mod cluster;
 pub mod config;
 pub mod fishbone;
+pub mod i18n;
 pub mod meetings;
 pub mod models;
 pub mod obsidian;

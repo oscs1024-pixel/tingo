@@ -1,8 +1,10 @@
 //! 把纪要存进 Obsidian 库：一场会议一篇笔记（带属性），鱼骨图另存为 Excalidraw 画板嵌进笔记，
 //! 转写全文放在折叠的引用块里。重复导出覆盖同名笔记。
+//! 笔记里程序加的文字（标签、转写一节、画板文件名）跟纪要的语言走；报错跟界面语言走。
 
 use crate::config::ObsidianConfig;
 use crate::fishbone::{self, fmt_ms, Level};
+use crate::i18n::{doc_lang, tr, Lang};
 use crate::meetings::{self, MINUTES, TRANSCRIPT_JSON};
 use crate::transcript::Transcript;
 use serde_json::Value;
@@ -65,20 +67,30 @@ pub struct Exported {
 pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
     let vault = PathBuf::from(cfg.vault.trim());
     if cfg.vault.trim().is_empty() || !vault.is_dir() {
-        return Err("还没有设置 Obsidian 库，或者库的文件夹不存在，去设置里选一下".into());
+        return Err(tr(
+            "还没有设置 Obsidian 库，或者库的文件夹不存在，去设置里选一下",
+            "No Obsidian vault is set, or its folder doesn't exist. Pick one in Settings",
+        )
+        .into());
     }
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| "这场会议还没有纪要".to_string())?;
-    let tr = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok();
+    let minutes = std::fs::read_to_string(dir.join(MINUTES))
+        .map_err(|_| tr("这场会议还没有纪要", "This meeting has no minutes yet").to_string())?;
+    let lang = doc_lang(&minutes);
+    // 英文纪要里没改名的说话人叫 Speaker N
+    let transcript = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok().map(|t| t.localized(lang));
     let id = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let date = meetings::meeting_date(dir);
     // 用会议文件夹的标题命名（重新生成纪要标题会变，文件名不跟着变，避免同一场会出现多篇）
     let topic = id.splitn(3, '_').nth(2).unwrap_or(&id);
     let name = safe_name(&format!("{} {}", date.format("%Y-%m-%d"), topic));
     let folder = vault.join(cfg.folder.trim().trim_matches('/'));
-    std::fs::create_dir_all(&folder).map_err(|e| format!("建不了文件夹 {}：{e}", folder.display()))?;
+    std::fs::create_dir_all(&folder).map_err(|e| {
+        let f = folder.display();
+        tr(&format!("建不了文件夹 {f}：{e}"), &format!("Couldn't create folder {f}: {e}")).to_string()
+    })?;
 
-    let turns = tr.as_ref().map(|t| t.turns()).unwrap_or_default();
-    let duration = tr.as_ref().map(|t| t.duration_ms).unwrap_or(u64::MAX);
+    let turns = transcript.as_ref().map(|t| t.turns()).unwrap_or_default();
+    let duration = transcript.as_ref().map(|t| t.duration_ms).unwrap_or(u64::MAX);
     let mut body = String::new();
     let mut last = 0;
     let mut drawings = Vec::new();
@@ -87,17 +99,22 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
         last = range.end;
         let Some(spec) = spec else { continue };
         let grounds: Vec<_> = spec.branches.iter().map(|b| fishbone::ground(b, &turns, duration)).collect();
-        let draw_name = format!("{name} 鱼骨图{}", if k == 0 { String::new() } else { (k + 1).to_string() });
+        let draw_name = format!(
+            "{name} {}{}",
+            lang.pick("鱼骨图", "fishbone"),
+            if k == 0 { String::new() } else { (k + 1).to_string() }
+        );
         let path = folder.join(format!("{draw_name}.excalidraw.md"));
-        std::fs::write(&path, fishbone::excalidraw_md(&fishbone::excalidraw(&spec, &grounds))).map_err(|e| e.to_string())?;
+        std::fs::write(&path, fishbone::excalidraw_md(&fishbone::excalidraw(&spec, &grounds, lang))).map_err(|e| e.to_string())?;
         drawings.push(path);
         body.push_str(&format!("![[{draw_name}.excalidraw]]\n\n**{}**\n", spec.problem));
+        let colon = lang.pick("：", ": ");
         for (b, g) in spec.branches.iter().zip(&grounds) {
-            let detail = if b.detail.is_empty() { String::new() } else { format!("：{}", b.detail) };
+            let detail = if b.detail.is_empty() { String::new() } else { format!("{colon}{}", b.detail) };
             let mark = if g.level == Level::None { " ⚠️" } else { "" };
-            body.push_str(&format!("- **{}**{detail} · {}{mark}\n", b.title, g.label()));
+            body.push_str(&format!("- **{}**{detail} · {}{mark}\n", b.title, g.label(lang)));
             for q in &g.quotes {
-                body.push_str(&format!("    - `{}` {}：{}\n", fmt_ms(q.ms), q.speaker, q.text));
+                body.push_str(&format!("    - `{}` {}{colon}{}\n", fmt_ms(q.ms), q.speaker, q.text));
             }
         }
     }
@@ -109,30 +126,33 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
         format!("title: {}", yaml_str(&title)),
         format!("date: {}", date.format("%Y-%m-%d")),
     ];
-    if let Some(t) = &tr {
+    if let Some(t) = &transcript {
         fm.push(format!("duration: {}", yaml_str(&fmt_ms(t.duration_ms))));
         let names: Vec<String> = t.speakers_in_order().iter().map(|&s| yaml_str(&t.name_of(s))).collect();
         fm.push(format!("speakers: [{}]", names.join(", ")));
     }
-    fm.push("tags: [会议纪要]".into());
+    fm.push(lang.pick("tags: [会议纪要]", "tags: [meeting-notes]").into());
     fm.push(format!("tingo: {}", yaml_str(&id)));
     fm.push("---\n".into());
     let mut note = fm.join("\n") + body.trim_end() + "\n";
 
     if cfg.transcript {
-        if let Some(t) = &tr {
-            note.push_str(&format!(
-                "\n## 转写\n\n> [!quote]- 转写全文（{}，{} 人）\n",
-                fmt_ms(t.duration_ms),
-                t.speakers_in_order().len()
-            ));
+        if let Some(t) = &transcript {
+            let (dur, n) = (fmt_ms(t.duration_ms), t.speakers_in_order().len());
+            note.push_str(&match lang {
+                Lang::Zh => format!("\n## 转写\n\n> [!quote]- 转写全文（{dur}，{n} 人）\n"),
+                Lang::En => format!("\n## Transcript\n\n> [!quote]- Full transcript ({dur}, {n} speakers)\n"),
+            });
             for turn in &turns {
                 note.push_str(&format!(">\n> **{}** `{}`\n> {}\n", turn.speaker, fmt_ms(turn.start_ms), turn.text));
             }
         }
     }
     let path = folder.join(format!("{name}.md"));
-    std::fs::write(&path, note).map_err(|e| format!("写不进 {}：{e}", path.display()))?;
+    std::fs::write(&path, note).map_err(|e| {
+        let p = path.display();
+        tr(&format!("写不进 {p}：{e}"), &format!("Couldn't write {p}: {e}")).to_string()
+    })?;
     Ok(Exported { note: path, drawings })
 }
 
@@ -173,6 +193,42 @@ mod tests {
         assert!(!note.contains("```fishbone"));
         assert!(out.drawings[0].ends_with("2026-11-02 发布评审 鱼骨图.excalidraw.md"));
         assert_eq!(uri(Path::new("/a b/会")), "obsidian://open?path=/a%20b/%E4%BC%9A");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn english_minutes_export_in_english() {
+        let base = std::env::temp_dir().join(format!("tingo-obs-en-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("meetings/2026-11-02_1030_Release_review");
+        let vault = base.join("vault");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&vault).unwrap();
+        let tr: Transcript = serde_json::from_str(
+            r#"{"source":"a.wav","duration_ms":52000,"speaker_names":{"0":"Lin"},
+                "sentences":[{"speaker":0,"start_ms":0,"end_ms":8000,"text":"Let's talk about the release."},
+                             {"speaker":1,"start_ms":9000,"end_ms":18000,"text":"Payments still has two open bugs."}]}"#,
+        )
+        .unwrap();
+        tr.save(&dir.join(TRANSCRIPT_JSON)).unwrap();
+        std::fs::write(
+            dir.join(MINUTES),
+            "# Release review\n\n## Summary\nSlipping.\n\n## Root Cause Analysis\n```fishbone\n{\"problem\": \"Why late?\", \"branches\": [{\"title\": \"Payment bugs\", \"detail\": \"two left\", \"refs\": [\"00:09\"]}, {\"title\": \"Guess\", \"refs\": []}]}\n```\n",
+        )
+        .unwrap();
+        let cfg = ObsidianConfig { vault: vault.to_string_lossy().into(), folder: "Meetings".into(), auto: true, transcript: true };
+        let out = export(&cfg, &dir).unwrap();
+        let note = std::fs::read_to_string(&out.note).unwrap();
+        assert!(note.contains("tags: [meeting-notes]"));
+        assert!(note.contains("speakers: [\"Lin\", \"Speaker 2\"]"));
+        assert!(note.contains("![[2026-11-02 Release_review fishbone.excalidraw]]"));
+        assert!(note.contains("- **Payment bugs**: two left · 1 quote(s) · 33 chars\n    - `00:09` Speaker 2: Payments"));
+        assert!(note.contains("- **Guess** · No evidence ⚠️"));
+        assert!(note.contains("\n## Transcript\n\n> [!quote]- Full transcript (00:52, 2 speakers)\n"));
+        assert!(note.contains("> **Speaker 2** `00:09`"));
+        assert!(out.drawings[0].ends_with("2026-11-02 Release_review fishbone.excalidraw.md"));
+        // transcript.json 里的名字不动
+        assert_eq!(Transcript::load(&dir.join(TRANSCRIPT_JSON)).unwrap().name_of(1), "说话人2");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

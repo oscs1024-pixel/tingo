@@ -69,3 +69,18 @@ def test_wrap_and_lines():
     assert fb._wrap("一二三四五", 20.0, 50.0) == "一二\n三四\n五"
     assert fb._lines("a\r\nb\n") == ["a", "b"] and fb._lines("") == []
     assert fb._text_width("ab\n一", 10.0) == 12.0
+
+
+def test_english_labels_and_drawing():
+    t = turns()
+    g = fb.ground(Branch("t", refs=["00:09"]), t, 52000)
+    assert g.label(en=True) == "1 quote(s) · 21 chars"
+    assert fb.ground(Branch("t", refs=["00:48"]), t, 52000).label(en=True) == "Thin evidence · 1 quote(s) · 5 chars"
+    assert fb.ground(Branch("t", refs=[]), t, 52000).label(en=True) == "No evidence"
+    spec = fb.parse(
+        '{"problem": "Why late?", "branches": [{"title": "Payments", "refs": ["00:09"]}, {"title": "Guess"}]}'
+    )
+    grounds = [fb.ground(b, t, 52000) for b in spec.branches]
+    texts = [e["text"] for e in fb.excalidraw(spec, grounds, en=True)["elements"] if "text" in e]
+    assert "No evidence" in texts and "1 quote(s) · 21 chars" in texts
+    assert any(x.startswith("00:09 小张: ") for x in texts)

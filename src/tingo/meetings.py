@@ -71,10 +71,10 @@ def minutes_title(text: str) -> str | None:
 
 
 def one_liner(text: str) -> str:
-    """纪要里"一句话总结"下面的那句。"""
+    """纪要里"一句话总结"（英文纪要是 Summary）下面的那句。"""
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if line.strip() == "## 一句话总结":
+        if line.strip() in ("## 一句话总结", "## Summary"):
             for nxt in lines[i + 1 :]:
                 if nxt.strip():
                     return nxt.strip()

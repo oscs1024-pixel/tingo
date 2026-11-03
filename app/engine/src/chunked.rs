@@ -264,7 +264,9 @@ impl LiveTranscriber {
     ) -> Result<(Transcript, Timings), String> {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
-            t.join().map_err(|_| "边录边转线程异常退出".to_string())?;
+            t.join().map_err(|_| {
+                crate::i18n::tr("边录边转线程异常退出", "The live transcription thread crashed").to_string()
+            })?;
         }
         let t = Instant::now();
         loop {

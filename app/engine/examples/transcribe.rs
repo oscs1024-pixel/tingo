@@ -9,7 +9,7 @@ fn main() {
     let t = Instant::now();
     let kind = args.get(4).map(|k| asr::AsrKind::from_id(k).expect("识别模型：paraformer / sensevoice / funasr-nano"));
     let hot: Vec<String> = args.iter().skip(5).cloned().collect();
-    let engine = asr::Engine::load(&asr::ModelPaths::new(&args[1]), kind.unwrap_or(asr::AsrKind::Paraformer), &hot, 4)
+    let engine = asr::Engine::load(&asr::ModelPaths::new(&args[1]), kind.unwrap_or(asr::AsrKind::Paraformer), &hot, "zh", 4)
         .expect("加载模型");
     eprintln!("加载 {:.2}s", t.elapsed().as_secs_f64());
     let wav = Path::new(&args[2]);

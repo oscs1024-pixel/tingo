@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::asr::{AsrKind, ModelPaths};
+use crate::i18n::tr;
 
 const MODELSCOPE: &str = "https://modelscope.cn/models/damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx/resolve/master";
 const SHERPA: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
@@ -41,19 +42,28 @@ pub fn catalog() -> [ModelInfo; 3] {
         ModelInfo {
             kind: AsrKind::Paraformer,
             name: "Paraformer-large",
-            desc: "默认。中文准、速度快、内存占用小；热词交给大模型在纪要里纠正",
+            desc: tr(
+                "默认。中文准、速度快、内存占用小；热词交给大模型在纪要里纠正",
+                "Default. Accurate for Chinese, fast, light on memory; hotwords are corrected by the language model in the minutes. Chinese only",
+            ),
             size: paraformer_downloads().iter().map(|d| d.size).sum(),
         },
         ModelInfo {
             kind: AsrKind::SenseVoice,
             name: "SenseVoice",
-            desc: "多语种：中、英、日、韩、粤语混着说也能认；纯中文会议的错字比默认模型多一些",
+            desc: tr(
+                "多语种：中、英、日、韩、粤语混着说也能认；纯中文会议的错字比默认模型多一些",
+                "Multilingual: Chinese, English, Japanese, Korean and Cantonese, even mixed; a few more errors than the default on all-Chinese meetings",
+            ),
             size: 165_783_878,
         },
         ModelInfo {
             kind: AsrKind::FunAsrNano,
             name: "Fun-ASR-Nano",
-            desc: "最准、断句最自然，识别时直接用上热词（人名、项目代号）；速度约为默认的 1/4，内存约 2 GB",
+            desc: tr(
+                "最准、断句最自然，识别时直接用上热词（人名、项目代号）；速度约为默认的 1/4，内存约 2 GB",
+                "Most accurate with the most natural sentence breaks, and uses hotwords (names, project code names) while recognizing; about 1/4 the speed of the default, about 2 GB of memory",
+            ),
             size: 841_730_611,
         },
     ]
@@ -121,14 +131,18 @@ pub fn ensure_model(paths: &ModelPaths, kind: AsrKind, mut progress: impl FnMut(
     if paths.base_ready() && paths.asr_ready(kind) {
         Ok(())
     } else {
-        Err("模型解压完了但文件不全，删掉后重新下载试试".into())
+        Err(tr(
+            "模型解压完了但文件不全，删掉后重新下载试试",
+            "The model was unpacked but some files are missing; delete it and download again",
+        )
+        .into())
     }
 }
 
 /// 删除一个可选的识别模型（默认的 Paraformer 不删）
 pub fn remove_model(paths: &ModelPaths, kind: AsrKind) -> Result<(), String> {
     if kind == AsrKind::Paraformer {
-        return Err("默认模型不能删除".into());
+        return Err(tr("默认模型不能删除", "The default model can't be deleted").into());
     }
     fs::remove_dir_all(paths.asr_dir(kind)).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e.to_string()) })
 }
@@ -181,7 +195,11 @@ pub fn ensure(paths: &ModelPaths, mut progress: impl FnMut(u64, u64)) -> Result<
     if paths.ready() {
         Ok(())
     } else {
-        Err("模型准备完了但文件不全，请删除模型目录后重试".into())
+        Err(tr(
+            "模型准备完了但文件不全，请删除模型目录后重试",
+            "The models were prepared but some files are missing; delete the models folder and try again",
+        )
+        .into())
     }
 }
 
@@ -263,7 +281,11 @@ fn fetch(
         fs::rename(&part, dest).map_err(|e| e.to_string())?;
         return Ok(());
     }
-    Err(format!("下载失败（{url}）：{last_err}"))
+    Err(tr(
+        &format!("下载失败（{url}）：{last_err}"),
+        &format!("Download failed ({url}): {last_err}"),
+    )
+    .into())
 }
 
 /// FunASR 官方 Paraformer ONNX → sherpa-onnx：补元数据、词表改成 "符号 编号" 一行一个。
@@ -274,11 +296,13 @@ pub fn prepare_paraformer(src: &Path, dst: &Path) -> Result<(), String> {
         return Ok(());
     }
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    let mvn = fs::read_to_string(src.join("am.mvn")).map_err(|e| format!("读 am.mvn：{e}"))?;
+    let mvn = fs::read_to_string(src.join("am.mvn"))
+        .map_err(|e| tr(&format!("读 am.mvn：{e}"), &format!("Reading am.mvn: {e}")).to_string())?;
     let tokens: Vec<String> = serde_json::from_str(
-        &fs::read_to_string(src.join("tokens.json")).map_err(|e| format!("读 tokens.json：{e}"))?,
+        &fs::read_to_string(src.join("tokens.json"))
+            .map_err(|e| tr(&format!("读 tokens.json：{e}"), &format!("Reading tokens.json: {e}")).to_string())?,
     )
-    .map_err(|e| format!("tokens.json 格式不对：{e}"))?;
+    .map_err(|e| tr(&format!("tokens.json 格式不对：{e}"), &format!("tokens.json is malformed: {e}")).to_string())?;
     let lines: String = tokens
         .iter()
         .enumerate()
@@ -296,7 +320,8 @@ pub fn prepare_paraformer(src: &Path, dst: &Path) -> Result<(), String> {
         ("version", "1".to_string()),
     ];
     let tmp = dst.join("model.int8.onnx.tmp");
-    fs::copy(src.join("paraformer.onnx"), &tmp).map_err(|e| format!("复制模型：{e}"))?;
+    fs::copy(src.join("paraformer.onnx"), &tmp)
+        .map_err(|e| tr(&format!("复制模型：{e}"), &format!("Copying the model: {e}")).to_string())?;
     let mut f = OpenOptions::new()
         .append(true)
         .open(&tmp)
@@ -318,14 +343,20 @@ fn join(v: &[f32]) -> String {
 
 /// am.mvn 里 `<AddShift>` / `<Rescale>` 后面方括号中的向量。
 fn mvn_vector(mvn: &str, tag: &str) -> Result<Vec<f32>, String> {
-    let after = mvn.split_once(tag).ok_or(format!("am.mvn 里没有 {tag}"))?.1;
+    let after = mvn
+        .split_once(tag)
+        .ok_or_else(|| tr(&format!("am.mvn 里没有 {tag}"), &format!("{tag} not found in am.mvn")).to_string())?
+        .1;
     let body = after
         .split_once('[')
         .and_then(|(_, b)| b.split_once(']'))
-        .ok_or(format!("{tag} 格式不对"))?
+        .ok_or_else(|| tr(&format!("{tag} 格式不对"), &format!("{tag} is malformed")).to_string())?
         .0;
     body.split_whitespace()
-        .map(|x| x.parse().map_err(|_| format!("{tag} 里有非数字：{x}")))
+        .map(|x| {
+            x.parse()
+                .map_err(|_| tr(&format!("{tag} 里有非数字：{x}"), &format!("Non-number in {tag}: {x}")).to_string())
+        })
         .collect()
 }
 
@@ -361,7 +392,9 @@ fn extract_punct(tar_bz2: &Path, dst: &Path) -> Result<(), String> {
         return Ok(());
     }
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    let f = File::open(tar_bz2).map_err(|e| format!("打开标点模型包：{e}"))?;
+    let f = File::open(tar_bz2).map_err(|e| {
+        tr(&format!("打开标点模型包：{e}"), &format!("Opening the punctuation model archive: {e}")).to_string()
+    })?;
     let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(f));
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
@@ -372,7 +405,7 @@ fn extract_punct(tar_bz2: &Path, dst: &Path) -> Result<(), String> {
             return fs::rename(&tmp, &model).map_err(|e| e.to_string());
         }
     }
-    Err("标点模型包里没有 model.int8.onnx".into())
+    Err(tr("标点模型包里没有 model.int8.onnx", "model.int8.onnx not found in the punctuation model archive").into())
 }
 
 /// 解压 sherpa-onnx 的模型包：去掉最外层目录，跳过示例音频和说明。先解到临时目录，完整了再改名。
@@ -380,7 +413,8 @@ fn extract_dir(tar_bz2: &Path, dst: &Path) -> Result<(), String> {
     let tmp = dst.with_extension("tmp");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let f = File::open(tar_bz2).map_err(|e| format!("打开模型包：{e}"))?;
+    let f = File::open(tar_bz2)
+        .map_err(|e| tr(&format!("打开模型包：{e}"), &format!("Opening the model archive: {e}")).to_string())?;
     let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(f));
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;

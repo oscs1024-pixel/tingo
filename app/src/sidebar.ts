@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { api, type Env, type MeetingSummary } from "./api";
 import { $, esc } from "./dom";
 import { S } from "./state";
@@ -20,7 +21,7 @@ export async function refreshMeetings(): Promise<void> {
         </a>`,
         )
         .join("")
-    : `<div class="r-empty">还没有会议</div>`;
+    : `<div class="r-empty">${t("还没有会议", "No meetings yet")}</div>`;
 }
 
 export async function refreshEnv(): Promise<void> {
@@ -33,10 +34,16 @@ export async function refreshEnv(): Promise<void> {
   const rows: [string, string][] = [
     [
       e.model_loaded || e.model_cached ? "" : "warn",
-      e.model_loaded ? "识别模型已加载" : e.model_cached ? "识别模型已就绪" : e.models_downloadable ? "识别模型未下载" : "首次转写会下载模型",
+      e.model_loaded
+        ? t("识别模型已加载", "Speech model loaded")
+        : e.model_cached
+          ? t("识别模型已就绪", "Speech model ready")
+          : e.models_downloadable
+            ? t("识别模型未下载", "Speech model not downloaded")
+            : t("首次转写会下载模型", "Model downloads on first use"),
     ],
-    [e.llm_ready ? "" : "bad", e.llm_ready ? e.llm_model : "未配置大模型"],
-    [e.system_audio ? "" : "warn", e.system_audio ? "可录系统声音" : "仅能录麦克风"],
+    [e.llm_ready ? "" : "bad", e.llm_ready ? e.llm_model : t("未配置大模型", "No LLM configured")],
+    [e.system_audio ? "" : "warn", e.system_audio ? t("可录系统声音", "System audio available") : t("仅能录麦克风", "Microphone only")],
   ];
   $("#envBox").innerHTML =
     rows.map(([c, t]) => `<div class="env-row"><span class="env-dot ${c}"></span><span>${esc(t)}</span></div>`).join("") +

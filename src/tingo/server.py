@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, config, meetings
+from . import __version__, config, i18n, meetings
 from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
 from .summarize import is_ollama
@@ -58,6 +58,15 @@ LOCAL_PROVIDERS = [
         "hint": "Ollama 没有在运行，或者还没有下载模型",
     },
 ]
+
+# 界面是英文时替换上面的 name / hint
+LOCAL_PROVIDERS_EN = {
+    "magpie": {"hint": "Magpie isn't running: open the Magpie app and try again"},
+    "ccswitch": {
+        "hint": 'CC Switch\'s local proxy is off: enable "Local Proxy" in CC Switch settings (default port 15721)'
+    },
+    "ollama": {"name": "Local Ollama", "hint": "Ollama isn't running, or no model has been downloaded yet"},
+}
 
 
 def _list_models(base_url: str, api_key: str) -> list[str] | None:
@@ -154,6 +163,9 @@ class ConfigRequest(BaseModel):
     webhook: str = ""
     secret: str | None = None
     obsidian: ObsidianRequest | None = None  # None 表示不改
+    ui_language: str | None = None  # auto | zh | en，None 表示不改
+    minutes_language: str | None = None  # auto | zh | en
+    asr_language: str | None = None  # zh | en | auto
 
 
 AUDIO_MIME = {
@@ -193,16 +205,16 @@ def create_app(root: Path | None = None) -> FastAPI:
     def folder(meeting_id: str) -> Path:
         path = (root / meeting_id).resolve()
         if path.parent != root.resolve() or not path.is_dir():
-            raise HTTPException(404, "找不到这场会议")
+            raise HTTPException(404, i18n.tr("找不到这场会议", "Meeting not found"))
         return path
 
     def conflict(new: Job, j: Job) -> str | None:
         if new.kind == "record" and j.state == "recording":
-            return "已经在录音了，先结束这一场"
+            return i18n.tr("已经在录音了，先结束这一场", "Already recording; stop the current recording first")
         if new.kind == "models" and j.kind == "models":
-            return "已经在下载模型了，等它下完"
+            return i18n.tr("已经在下载模型了，等它下完", "Models are already downloading; wait for it to finish")
         if new.meeting and new.kind != "models" and j.kind != "models" and j.meeting == new.meeting:
-            return "这场会议正在处理，等它完成"
+            return i18n.tr("这场会议正在处理，等它完成", "This meeting is being processed; wait for it to finish")
         return None
 
     def start_job(job: Job) -> None:
@@ -263,6 +275,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             on_token=on_token,
             on_stage=on_stage,
             on_think=on_think,
+            language=cfg.minutes_language,
         )
         (out / MINUTES).write_text(text, encoding="utf-8")
         job.minutes = text
@@ -273,9 +286,9 @@ def create_app(root: Path | None = None) -> FastAPI:
 
             try:
                 obsidian.export(cfg.obsidian, out)
-                job.notice = "纪要已同步到 Obsidian"
+                job.notice = i18n.tr("纪要已同步到 Obsidian", "Minutes synced to Obsidian")
             except Exception as e:  # noqa: BLE001
-                job.notice = f"没能同步到 Obsidian：{e}"
+                job.notice = i18n.tr(f"没能同步到 Obsidian：{e}", f"Couldn't sync to Obsidian: {e}")
                 log.warning("%s 同步到 Obsidian 失败：%s", out.name, e)
 
     def run_process(job: Job, audio: Path, out: Path, hotwords: list[str]) -> None:
@@ -295,7 +308,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             job.stage = ""
             log.info("%s 文件转写完成：%s，%.0f 秒", out.name, fmt_ts(tr.duration_ms), time.time() - t)
             if not tr.sentences:
-                raise RuntimeError("没有识别出任何语音")
+                raise RuntimeError(i18n.tr("没有识别出任何语音", "No speech was recognized"))
             meetings.save_transcript(tr, out)
             run_summarize(job, tr, out)
             finish(job)
@@ -330,11 +343,14 @@ def create_app(root: Path | None = None) -> FastAPI:
             "base_url": cfg.llm.base_url,
             "model": cfg.llm.model,
             "api_key_set": bool(key),
-            "api_key_hint": f"{key[:3]}…{key[-4:]}" if len(key) > 10 else ("已设置" if key else ""),
+            "api_key_hint": f"{key[:3]}…{key[-4:]}" if len(key) > 10 else (i18n.tr("已设置", "set") if key else ""),
             "hotwords": cfg.hotwords,
             "webhook": cfg.webhook,
             "secret_set": bool(cfg.webhook_secret),
             "obsidian": asdict(cfg.obsidian),
+            "ui_language": cfg.ui_language,
+            "minutes_language": cfg.minutes_language,
+            "asr_language": cfg.asr_language,
             "path": str(config.CONFIG_PATH),
         }
 
@@ -355,6 +371,22 @@ def create_app(root: Path | None = None) -> FastAPI:
             if vault.startswith("~/") and home is not None:
                 vault = f"{home}/{vault[2:]}"  # 设置页里可以填 ~/…
             cfg.obsidian = config.ObsidianConfig(vault, o.folder.strip().strip("/"), o.auto, o.transcript)
+        for value, allowed in (
+            (req.ui_language, config.UI_LANGUAGES),
+            (req.minutes_language, config.MINUTES_LANGUAGES),
+            (req.asr_language, config.ASR_LANGUAGES),
+        ):
+            if value is not None and value not in allowed:
+                raise HTTPException(
+                    400,
+                    i18n.tr(f"不支持的语言：{value}（可选 {'、'.join(allowed)}）", f"Unsupported language: {value}"),
+                )
+        if req.ui_language is not None:
+            cfg.ui_language = req.ui_language
+        if req.minutes_language is not None:
+            cfg.minutes_language = req.minutes_language
+        if req.asr_language is not None:
+            cfg.asr_language = req.asr_language
         config.save(cfg)
         return get_config()
 
@@ -365,8 +397,14 @@ def create_app(root: Path | None = None) -> FastAPI:
 
         with ThreadPoolExecutor(len(LOCAL_PROVIDERS)) as pool:
             found = list(pool.map(lambda p: _list_models(p["base_url"], p["api_key"]), LOCAL_PROVIDERS))
+        en = i18n.is_en()
         return [
-            {**p, "running": models is not None, "models": models or []}
+            {
+                **p,
+                **(LOCAL_PROVIDERS_EN.get(p["id"], {}) if en else {}),
+                "running": models is not None,
+                "models": models or [],
+            }
             for p, models in zip(LOCAL_PROVIDERS, found, strict=True)
         ]
 
@@ -385,11 +423,17 @@ def create_app(root: Path | None = None) -> FastAPI:
             client = OpenAI(base_url=req.base_url, api_key=key or "ollama", timeout=15)
             ids = [m.id for m in client.models.list().data]
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "message": f"连不上：{e}"}
+            return {"ok": False, "message": i18n.tr(f"连不上：{e}", f"Couldn't connect: {e}")}
         # Ollama 列出的模型名带 :latest
         if ids and req.model not in ids and f"{req.model}:latest" not in ids:
-            return {"ok": False, "message": f"连上了，但没有模型 {req.model}。可用：{'、'.join(ids[:8])}"}
-        return {"ok": True, "message": "连接正常"}
+            return {
+                "ok": False,
+                "message": i18n.tr(
+                    f"连上了，但没有模型 {req.model}。可用：{'、'.join(ids[:8])}",
+                    f"Connected, but there is no model {req.model}. Available: {', '.join(ids[:8])}",
+                ),
+            }
+        return {"ok": True, "message": i18n.tr("连接正常", "Connection OK")}
 
     # ---------- 会议 ----------
 
@@ -433,7 +477,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     def get_audio(meeting_id: str) -> FileResponse:
         audio = meetings.find_audio(folder(meeting_id))
         if not audio:
-            raise HTTPException(404, "没有录音文件")
+            raise HTTPException(404, i18n.tr("没有录音文件", "No recording file"))
         # 显式给标准类型：按扩展名猜的 m4a 类型在 WKWebView（pywebview 窗口）里可能播不了
         return FileResponse(audio, media_type=AUDIO_MIME.get(audio.suffix.lower()))
 
@@ -455,7 +499,9 @@ def create_app(root: Path | None = None) -> FastAPI:
     def post_summarize(meeting_id: str) -> dict:
         path = folder(meeting_id)
         if not (path / TRANSCRIPT_JSON).exists():
-            raise HTTPException(400, "还没有转写，不能生成纪要")
+            raise HTTPException(
+                400, i18n.tr("还没有转写，不能生成纪要", "No transcript yet, so minutes can't be generated")
+            )
         job = Job("summarize", meeting_id, "summarizing")
         start_job(job)
 
@@ -476,7 +522,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         path = folder(meeting_id)
         audio = meetings.find_audio(path)
         if not audio:
-            raise HTTPException(400, "没有录音文件")
+            raise HTTPException(400, i18n.tr("没有录音文件", "No recording file"))
         job = Job("process", meeting_id, "loading")
         start_job(job)
         reply = asdict(job)
@@ -490,14 +536,23 @@ def create_app(root: Path | None = None) -> FastAPI:
         path = folder(meeting_id)
         cfg = config.load()
         if not cfg.webhook:
-            raise HTTPException(400, "还没有配置群机器人 webhook，去设置里填一下")
+            raise HTTPException(
+                400,
+                i18n.tr(
+                    "还没有配置群机器人 webhook，去设置里填一下", "No group bot webhook is set; add one in Settings"
+                ),
+            )
         if not (path / MINUTES).exists():
-            raise HTTPException(400, "还没有纪要")
+            raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
         try:
             send(cfg.webhook, (path / MINUTES).read_text(encoding="utf-8"), cfg.webhook_secret)
         except Exception as e:
-            raise HTTPException(502, f"推送失败：{e}") from e
-        name = {"feishu": "飞书", "dingtalk": "钉钉", "wecom": "企业微信"}[detect(cfg.webhook)]
+            raise HTTPException(502, i18n.tr(f"推送失败：{e}", f"Push failed: {e}")) from e
+        platform_id = detect(cfg.webhook)
+        if i18n.is_en():
+            name = {"feishu": "Feishu", "dingtalk": "DingTalk", "wecom": "WeCom"}[platform_id]
+            return {"ok": True, "message": f"Pushed to the {name} group"}
+        name = {"feishu": "飞书", "dingtalk": "钉钉", "wecom": "企业微信"}[platform_id]
         return {"ok": True, "message": f"已推送到{name}群"}
 
     @app.post("/api/meetings/{meeting_id}/reveal")
@@ -534,22 +589,24 @@ def create_app(root: Path | None = None) -> FastAPI:
 
         path = folder(meeting_id)
         if not (path / MINUTES).exists():
-            raise HTTPException(400, "还没有纪要")
+            raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
         minutes = (path / MINUTES).read_text(encoding="utf-8")
+        en = i18n.doc_is_en(minutes)  # 文件名和图上的文字跟纪要的语言走
         try:
-            tr: Transcript | None = Transcript.load(path / TRANSCRIPT_JSON)
+            transcript: Transcript | None = Transcript.load(path / TRANSCRIPT_JSON)
         except Exception:  # noqa: BLE001
-            tr = None
-        turns = tr.turns() if tr is not None else []
-        duration = tr.duration_ms if tr is not None else 2**64 - 1
+            transcript = None
+        turns = transcript.turns(en) if transcript is not None else []
+        duration = transcript.duration_ms if transcript is not None else 2**64 - 1
         specs = [s for _, s in fishbone.blocks(minutes) if s is not None]
         if not specs:
-            raise HTTPException(400, "这份纪要里没有鱼骨图")
+            raise HTTPException(400, i18n.tr("这份纪要里没有鱼骨图", "These minutes have no fishbone diagram"))
         paths = []
+        stem = "fishbone" if en else "鱼骨图"
         for k, spec in enumerate(specs):
             grounds = [fishbone.ground(b, turns, duration) for b in spec.branches]
-            p = path / ("鱼骨图.excalidraw" if k == 0 else f"鱼骨图{k + 1}.excalidraw")
-            p.write_text(fishbone.dumps(fishbone.excalidraw(spec, grounds)), encoding="utf-8")
+            p = path / (f"{stem}.excalidraw" if k == 0 else f"{stem}{k + 1}.excalidraw")
+            p.write_text(fishbone.dumps(fishbone.excalidraw(spec, grounds, en)), encoding="utf-8")
             paths.append(str(p))
         _open(paths[0], reveal=True)
         return {"ok": True, "paths": paths}
@@ -561,7 +618,7 @@ def create_app(root: Path | None = None) -> FastAPI:
 
         path = folder(meeting_id)
         if not (path / MINUTES).exists():
-            raise HTTPException(400, "还没有纪要")
+            raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
         minutes = (path / MINUTES).read_text(encoding="utf-8")
         title = meetings.minutes_title(minutes) or (meeting_id.split("_", 2)[-1] or meeting_id)
         out = path / f"{obsidian.safe_name(title)}.pdf"
@@ -585,7 +642,9 @@ def create_app(root: Path | None = None) -> FastAPI:
         from .record import Recording, system_audio_supported
 
         if not req.system and not req.mic:
-            raise HTTPException(400, "系统声音和麦克风至少开一个")
+            raise HTTPException(
+                400, i18n.tr("系统声音和麦克风至少开一个", "Turn on at least one of system audio and microphone")
+            )
         system = req.system and system_audio_supported()
         out = meetings.new_folder(root, req.title)
         job = Job(
@@ -616,7 +675,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             job = next((j for j in jobs if j.kind == "record" and j.state == "recording"), None)
             rec = state["recording"]
             if job is None or rec is None:
-                raise HTTPException(400, "没有正在进行的录音")
+                raise HTTPException(400, i18n.tr("没有正在进行的录音", "No recording in progress"))
             # 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
             job.state = "saving"
             reply = asdict(job)  # 后台线程马上会改状态，回给界面的固定是 saving
@@ -674,7 +733,13 @@ def create_app(root: Path | None = None) -> FastAPI:
                 run_summarize(job, tr, out)
                 mixer.join()
                 if mix_error:
-                    raise RuntimeError(f"纪要已生成，但合成录音失败：{mix_error[0]}（原始音轨还在会议文件夹里）")
+                    raise RuntimeError(
+                        i18n.tr(
+                            f"纪要已生成，但合成录音失败：{mix_error[0]}（原始音轨还在会议文件夹里）",
+                            f"Minutes are ready, but mixing the recording failed: {mix_error[0]} "
+                            "(the raw tracks are still in the meeting folder)",
+                        )
+                    )
                 finish(job)
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
@@ -690,7 +755,9 @@ def create_app(root: Path | None = None) -> FastAPI:
     ) -> dict:
         name = Path(file.filename or "录音.m4a")
         if name.suffix.lower() not in meetings.AUDIO_EXTS:
-            raise HTTPException(400, f"不支持的文件类型：{name.suffix}")
+            raise HTTPException(
+                400, i18n.tr(f"不支持的文件类型：{name.suffix}", f"Unsupported file type: {name.suffix}")
+            )
         when = datetime.fromtimestamp(modified / 1000) if modified else datetime.now()
         out = meetings.new_folder(root, title or name.stem, when)
         job = Job("process", out.name, "saving")
@@ -757,6 +824,13 @@ def create_app(root: Path | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def ui_language(request, call_next):
+        # 前端每个请求都带界面语言；不带的（比如 <audio> 拉录音）沿用上一次的
+        if value := request.headers.get(i18n.HEADER):
+            i18n.set_lang(value)
+        return await call_next(request)
 
     @app.middleware("http")
     async def no_cache_web(request, call_next):

@@ -1,3 +1,4 @@
+import { isEn, t } from "./i18n";
 import type { Env, Job, JobState, MeetingDetail, MeetingSummary } from "./api";
 
 export const S: {
@@ -21,31 +22,38 @@ export const S: {
 const BUSY = new Set<JobState>(["recording", "saving", "finalizing", "loading", "transcribing", "summarizing", "downloading"]);
 export const isBusy = (j: Job | undefined): boolean => !!j && BUSY.has(j.state);
 
-const LABELS: Partial<Record<JobState, string>> = {
-  saving: "正在保存",
-  finalizing: "转写最后一段",
-  loading: "加载识别模型",
-  transcribing: "正在转写",
-  summarizing: "正在生成纪要",
-  downloading: "下载识别模型",
+const LABELS: Partial<Record<JobState, [string, string]>> = {
+  saving: ["正在保存", "Saving"],
+  finalizing: ["转写最后一段", "Transcribing the last part"],
+  loading: ["加载识别模型", "Loading the speech model"],
+  transcribing: ["正在转写", "Transcribing"],
+  summarizing: ["正在生成纪要", "Writing minutes"],
+  downloading: ["下载识别模型", "Downloading speech model"],
 };
 /** 桌面版还没下载识别模型（Python 版会在首次转写时自动下载，不用这个判断）。 */
 export const needsModels = (): boolean => !!S.env?.models_downloadable && !S.env.model_cached;
 
-export const stateLabel = (s: JobState): string => LABELS[s] || "处理中";
+export const stateLabel = (s: JobState): string => {
+  const l = LABELS[s];
+  return l ? t(...l) : t("处理中", "Working");
+};
 
 /** 这场会议正在进行的任务 */
 export const jobOf = (meeting: string): Job | undefined => S.jobs.find((j) => j.meeting === meeting && j.kind !== "models" && isBusy(j));
 
 /** 任务标题：会议名（去掉日期时间前缀），或者下载的模型 */
 export function jobTitle(j: Job): string {
-  if (j.kind === "models") return `下载识别模型${j.meeting && j.meeting !== "paraformer" ? ` · ${j.meeting}` : ""}`;
-  return (j.meeting ?? "").replace(/^\d{4}-\d{2}-\d{2}_\d{4}_/, "") || "会议";
+  if (j.kind === "models") return `${isBusy(j) ? t("下载识别模型", "Downloading speech model") : t("识别模型", "Speech model")}${j.meeting && j.meeting !== "paraformer" ? ` · ${j.meeting}` : ""}`;
+  return (j.meeting ?? "").replace(/^\d{4}-\d{2}-\d{2}_\d{4}_/, "") || t("会议", "Meeting");
 }
 
 /* ---------- 纪要生成进度 ----------
    大模型按模板依次写这几节，写到哪一节就能估出大概进度；"原因分析"只有讨论了原因才有，不算在内。 */
-export const SECTIONS = ["一句话总结", "议题与讨论", "决议", "待办", "待定问题与风险"];
+const SECTIONS_ZH = ["一句话总结", "议题与讨论", "决议", "待办", "待定问题与风险"];
+const SECTIONS_EN = ["Summary", "Discussion", "Decisions", "Action Items", "Open Questions & Risks"];
+/** 进度里显示的章节名（按界面语言）；识别时中英文标题都认 */
+export const sectionLabels = (): string[] => (isEn() ? SECTIONS_EN : SECTIONS_ZH);
+export const SECTION_COUNT = SECTIONS_ZH.length;
 
 export interface MinutesProgress {
   /** 0～1 */
@@ -62,19 +70,23 @@ export function minutesProgress(j: Job): MinutesProgress {
   const text = j.minutes ?? "";
   let section = -1;
   for (const m of text.matchAll(/^##\s+(.+)$/gm)) {
-    const i = SECTIONS.findIndex((t) => m[1].startsWith(t));
+    const h = m[1];
+    const i = Math.max(
+      SECTIONS_ZH.findIndex((x) => h.startsWith(x)),
+      SECTIONS_EN.findIndex((x) => h.startsWith(x)),
+    );
     if (i > section) section = i;
   }
   const chars = [...text.replace(/\s/g, "")].length;
   // 动笔前（读转写、思考）看不出进度，按用时缓慢增长到 22%；动笔后按写到第几节算
   const reading = 0.02 + 0.2 * (1 - Math.exp(-(j.elapsed ?? 0) / 60));
-  const write = section < 0 ? reading : Math.min(0.97, 0.22 + (0.75 * (section + 0.5)) / SECTIONS.length);
-  const chunk = /分段提炼\s*(\d+)\/(\d+)/.exec(j.stage ?? "");
+  const write = section < 0 ? reading : Math.min(0.97, 0.22 + (0.75 * (section + 0.5)) / SECTION_COUNT);
+  const chunk = /(?:分段提炼|Summarizing part)\s*(\d+)\/(\d+)/.exec(j.stage ?? "");
   if (chunk) {
     const [i, n] = [Number(chunk[1]), Number(chunk[2])];
     return { value: (0.65 * (i - 1)) / n + 0.02, section: -1, chars: 0, chunk: [i, n] };
   }
-  if ((j.stage ?? "").includes("合并")) return { value: 0.65 + 0.35 * write, section, chars, merging: true };
+  if (/合并|Merging/.test(j.stage ?? "")) return { value: 0.65 + 0.35 * write, section, chars, merging: true };
   return { value: write, section, chars };
 }
 
@@ -110,15 +122,20 @@ export function progressOf(j: Job): number {
 
 /** 一句话说清任务现在在干什么 */
 export function jobDetail(j: Job): string {
-  if (j.state === "error") return j.error || "没有完成";
-  if (j.state === "done") return j.kind === "models" ? "下载完成" : "纪要已生成";
-  if (j.kind === "models") return j.stage || "准备下载…";
-  if (j.state === "transcribing") return `正在转写${j.stage ? ` ${j.stage}` : ""}`;
+  if (j.state === "error") return j.error || t("没有完成", "Didn't finish");
+  if (j.state === "done") return j.kind === "models" ? t("下载完成", "Downloaded") : t("纪要已生成", "Minutes ready");
+  if (j.kind === "models") return j.stage || t("准备下载…", "Starting download…");
+  if (j.state === "transcribing") return `${t("正在转写", "Transcribing")}${j.stage ? ` ${j.stage}` : ""}`;
   if (j.state === "summarizing") {
     const p = minutesProgress(j);
-    if (p.chunk) return `长会议分段提炼 ${p.chunk[0]}/${p.chunk[1]}`;
-    if (p.section < 0) return p.merging ? "合并成纪要…" : j.thinking ? `大模型在思考 · ${j.thinking} 字` : "大模型在读转写…";
-    return `在写「${SECTIONS[p.section]}」· ${p.chars} 字`;
+    if (p.chunk) return t(`长会议分段提炼 ${p.chunk[0]}/${p.chunk[1]}`, `Long meeting: summarizing part ${p.chunk[0]}/${p.chunk[1]}`);
+    if (p.section < 0)
+      return p.merging
+        ? t("合并成纪要…", "Merging into minutes…")
+        : j.thinking
+          ? t(`大模型在思考 · ${j.thinking} 字`, `Thinking · ${j.thinking} chars`)
+          : t("大模型在读转写…", "Reading the transcript…");
+    return t(`在写「${SECTIONS_ZH[p.section]}」· ${p.chars} 字`, `Writing “${SECTIONS_EN[p.section]}” · ${p.chars} chars`);
   }
   return stateLabel(j.state);
 }

@@ -1,4 +1,4 @@
-"""用任一 OpenAI 兼容接口把转写整理成中文会议纪要。"""
+"""用任一 OpenAI 兼容接口把转写整理成会议纪要（中文或英文）。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import urllib.parse
 from collections.abc import Callable
 from datetime import date, timedelta
 
+from . import i18n
 from .config import LLMConfig
+from .i18n import tr
 from .transcript import Transcript, fmt_ts
 
 SYSTEM = "你是一位严谨的会议秘书，擅长把口语化、带识别错误的会议转写整理成中国职场常用的会议纪要。"
@@ -76,6 +78,78 @@ REDUCE_PROMPT = """\
 """
 
 
+SYSTEM_EN = (
+    "You are a meticulous meeting secretary who turns colloquial meeting transcripts, "
+    "full of speech-recognition errors, into clear, professional meeting minutes."
+)
+
+MINUTES_PROMPT_EN = """\
+Below is a speech transcript of a meeting, formatted as "[timestamp] speaker: text". Meeting date: {meeting_date}.
+
+Turn it into meeting minutes using exactly the following Markdown structure, and output nothing else:
+
+# <a short title>
+
+## Summary
+<one sentence>
+
+## Discussion
+### 1. <topic>
+- <point> ([mm:ss])
+
+## Decisions
+- <what was decided> ([mm:ss])
+
+## Action Items
+| Item | Owner | Due | Source |
+|---|---|---|---|
+| <concrete action> | <name or speaker> | <date> | [mm:ss] |
+
+## Open Questions & Risks
+- <unresolved questions, risks raised>
+
+## Root Cause Analysis
+```fishbone
+{{"problem": "<the problem analyzed, phrased as a question>", "branches": [{{"title": "<one cause, a few words>", "detail": "<one sentence>", "refs": ["mm:ss", "mm:ss"]}}]}}
+```
+
+Rules:
+1. Use only what is in the transcript; do not make anything up. If an owner or due date was not stated explicitly, write "Not specified".
+2. The transcript contains recognition errors such as homophones; fix obvious ones from context, and keep the original wording when unsure.
+3. Chinese relative dates in the transcript such as "下周五" or "明天" have already been annotated by the program with the exact date, e.g. "下周五（11月13日）"; use that date (written in English, e.g. Nov 13) and do not work it out yourself. For other relative dates (e.g. "next Wednesday", "the 15th"), keep the original wording and add the exact date in parentheses using the date reference above, e.g. "next Wednesday (Nov 4)".
+4. End every point, decision and action item with its source timestamp [mm:ss], so it can be checked against the recording.
+5. If a section has no content, write "None" instead of removing it (except "Root Cause Analysis", see rule 7).
+6. Drop small talk and filler words; keep the language concise and formal.
+7. Write the "Root Cause Analysis" section only when the meeting explicitly analyzed the causes of a problem: one fishbone code block per problem (at most two), 2-6 branches each, valid JSON. refs are the timestamps of the statements supporting that cause and must be [mm:ss] values that appear in the transcript above (without the brackets); if nothing in the transcript supports it, use an empty array, do not invent one. If the meeting did not analyze causes, omit the whole section; do not write "None".
+
+Transcript:
+{transcript}
+"""
+
+CHUNK_PROMPT_EN = """\
+Below is one part of the transcript of a long meeting (part {index}/{total}), formatted as "[timestamp] speaker: text". Meeting date: {meeting_date}.
+
+Extract from this part: discussion points, decisions made, action items (item / owner / due date), and open questions and risks.
+End every entry with its source timestamp [mm:ss]. Use only what is in the transcript, do not make anything up, and output concise bullet points.
+
+Transcript:
+{transcript}
+"""
+
+REDUCE_PROMPT_EN = """\
+Below are notes taken part by part, in chronological order, from a long meeting. Merge them into one complete set of meeting minutes: remove duplicates, group by topic, and keep the source timestamps.
+
+{instructions}
+
+Notes by part:
+{notes}
+"""
+
+# 转写和纪要语言不同时加在提示词最前面
+TRANSLATE_TO_EN = "The transcript is in Chinese; write the minutes in English, translating as needed."
+TRANSLATE_TO_ZH = "转写是英文的，请用中文写纪要，需要时翻译。"
+
+
 WEEKDAYS = "一二三四五六日"
 
 
@@ -94,6 +168,37 @@ def calendar_hint(d: date) -> str:
         days = "、".join(f"周{WEEKDAYS[i]} {md(monday + timedelta(offset + i))}" for i in range(7))
         lines.append(f"- {name}：{days}")
     return "\n".join(lines)
+
+
+WEEKDAYS_EN = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def calendar_hint_en(d: date) -> str:
+    """英文模板用的日期对照表，内容与 calendar_hint 相同。"""
+
+    def md(x: date) -> str:
+        return f"{MONTHS_EN[x.month - 1]} {x.day}"
+
+    monday = d - timedelta(days=d.weekday())
+    today = f"- Today {md(d)} ({WEEKDAYS_EN[d.weekday()]}), tomorrow {md(d + timedelta(1))}"
+    lines = ["Date reference (weeks start on Monday):", f"{today}, the day after tomorrow {md(d + timedelta(2))}"]
+    for name, offset in (("This week", 0), ("Next week", 7), ("The week after next", 14)):
+        days = ", ".join(f"{WEEKDAYS_EN[i][:3]} {md(monday + timedelta(offset + i))}" for i in range(7))
+        lines.append(f"- {name}: {days}")
+    return "\n".join(lines)
+
+
+def meeting_day(d: date, en: bool = False) -> str:
+    """元信息里的日期：2026-10-28（星期三） / 2026-10-28 (Wednesday)"""
+    if en:
+        return f"{d.isoformat()} ({WEEKDAYS_EN[d.weekday()]})"
+    return f"{d.isoformat()}（星期{WEEKDAYS[d.weekday()]}）"
+
+
+def resolve_language(setting: str, transcript: Transcript) -> str:
+    """纪要语言：设置为 zh / en 时照办，auto 时跟转写的语言（见 i18n.detect）。"""
+    return setting if setting in ("zh", "en") else i18n.detect(transcript.text())
 
 
 _WEEK_OFFSET = {"下下": 14, "下": 7, "本": 0, "这": 0}
@@ -123,7 +228,12 @@ def _client(cfg: LLMConfig):
 
     api_key = cfg.api_key or ("ollama" if _is_local(cfg) else "")
     if not api_key:
-        raise RuntimeError("没有配置 LLM API key：运行 `tingo config` 查看配置方法，或设置环境变量 TINGO_LLM_API_KEY")
+        raise RuntimeError(
+            tr(
+                "没有配置 LLM API key：运行 `tingo config` 查看配置方法，或设置环境变量 TINGO_LLM_API_KEY",
+                "No LLM API key configured: run `tingo config` to see how, or set TINGO_LLM_API_KEY",
+            )
+        )
     return OpenAI(base_url=cfg.base_url, api_key=api_key)
 
 
@@ -189,6 +299,7 @@ def _chat(
     on_token: Callable[[str], None] | None = None,
     think: bool = True,
     on_think: Callable[[int], None] | None = None,
+    system: str = SYSTEM,
 ) -> str:
     """流式调用 chat/completions，返回去掉思考过程的完整回答。
 
@@ -201,7 +312,7 @@ def _chat(
         extra["reasoning_effort"] = "none"
     stream = _client(cfg).chat.completions.create(
         model=cfg.model,
-        messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         temperature=0.2,
         stream=True,
         extra_body=extra or None,
@@ -273,49 +384,74 @@ def summarize(
     on_token: Callable[[str], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_think: Callable[[int], None] | None = None,
+    language: str = "auto",
 ) -> str:
-    """on_think(已思考字数) 只报最终成文那一次调用的思考进度；分段提炼不报。"""
+    """on_think(已思考字数) 只报最终成文那一次调用的思考进度；分段提炼不报。
+
+    language：纪要语言（配置里的 [minutes] language），auto 跟转写的语言。
+    on_stage 报的进度文字按界面语言。
+    """
     meeting_date = meeting_date or date.today()
-    day = f"{meeting_date.isoformat()}（星期{WEEKDAYS[meeting_date.weekday()]}）"
-    dated = f"{day}\n\n{calendar_hint(meeting_date)}"
+    en = resolve_language(language, transcript) == "en"
+    spoken_en = i18n.detect(transcript.text()) == "en"
+    note = ""
+    if en != spoken_en:
+        note = (TRANSLATE_TO_EN if en else TRANSLATE_TO_ZH) + "\n\n"
+    minutes_prompt, chunk_prompt, reduce_prompt = (
+        (MINUTES_PROMPT_EN, CHUNK_PROMPT_EN, REDUCE_PROMPT_EN) if en else (MINUTES_PROMPT, CHUNK_PROMPT, REDUCE_PROMPT)
+    )
+    # 英文纪要换系统提示；中文时不传，调用与原来完全一样
+    extra: dict = {"system": SYSTEM_EN} if en else {}
+    day = meeting_day(meeting_date, en)
+    dated = f"{day}\n\n{(calendar_hint_en if en else calendar_hint)(meeting_date)}"
     max_chars = max_chars or default_max_chars(cfg)
-    text = annotate_dates(transcript.to_prompt_text(), meeting_date)
+    text = annotate_dates(transcript.to_prompt_text(en), meeting_date)
 
     if len(text) <= max_chars:
-        body = _chat(cfg, MINUTES_PROMPT.format(meeting_date=dated, transcript=text), on_token, on_think=on_think)
+        prompt = note + minutes_prompt.format(meeting_date=dated, transcript=text)
+        body = _chat(cfg, prompt, on_token, on_think=on_think, **extra)
     else:
         chunks = split_chunks(text.splitlines(), max_chars)
         notes = []
         for i, chunk in enumerate(chunks, 1):
             if on_stage:
-                on_stage(f"分段提炼 {i}/{len(chunks)}")
+                on_stage(tr(f"分段提炼 {i}/{len(chunks)}", f"Summarizing part {i}/{len(chunks)}"))
+            prompt = note + chunk_prompt.format(index=i, total=len(chunks), meeting_date=dated, transcript=chunk)
             notes.append(
-                f"### 第 {i} 段\n"
+                (f"### Part {i}\n" if en else f"### 第 {i} 段\n")
                 + _chat(
                     cfg,
-                    CHUNK_PROMPT.format(index=i, total=len(chunks), meeting_date=dated, transcript=chunk),
+                    prompt,
                     think=False,  # 分段提炼主要是摘条目，不需要思考；最后合并时再思考
+                    **extra,
                 )
             )
         if on_stage:
-            on_stage("合并成纪要")
-        instructions = MINUTES_PROMPT.split("转写：")[0].format(meeting_date=dated, transcript="")
+            on_stage(tr("合并成纪要", "Merging into minutes"))
+        instructions = minutes_prompt.split("Transcript:" if en else "转写：")[0].format(
+            meeting_date=dated, transcript=""
+        )
         body = _chat(
             cfg,
-            REDUCE_PROMPT.format(instructions=instructions, notes="\n\n".join(notes)),
+            note + reduce_prompt.format(instructions=instructions, notes="\n\n".join(notes)),
             on_token,
             on_think=on_think,
+            **extra,
         )
 
-    return _with_meta(body, transcript, day)
+    return _with_meta(body, transcript, day, en)
 
 
-def _with_meta(body: str, transcript: Transcript, day: str) -> str:
+def _with_meta(body: str, transcript: Transcript, day: str, en: bool = False) -> str:
     """会议时间、时长、参会人由程序填，不让模型猜。"""
     body = _strip_fence(body)
-    names = "、".join(transcript.name_of(s) for s in transcript.speakers_in_order()) or "无"
-    meta = f"- 日期：{day}\n- 时长：{fmt_ts(transcript.duration_ms)}\n- 参会人：{names}"
-    title, rest = "# 会议纪要", body
+    names = [transcript.name_of(s, en) for s in transcript.speakers_in_order()]
+    duration = fmt_ts(transcript.duration_ms)
+    if en:
+        meta = f"- Date: {day}\n- Duration: {duration}\n- Participants: {', '.join(names) or 'None'}"
+    else:
+        meta = f"- 日期：{day}\n- 时长：{duration}\n- 参会人：{'、'.join(names) or '无'}"
+    title, rest = ("# Meeting Minutes" if en else "# 会议纪要"), body
     first, _, remainder = body.partition("\n")
     if first.startswith("# "):
         title, rest = first, remainder

@@ -32,8 +32,9 @@ class Transcript:
     sentences: list[Sentence]
     speaker_names: dict[int, str] = field(default_factory=dict)
 
-    def name_of(self, speaker: int) -> str:
-        return self.speaker_names.get(speaker) or f"说话人{speaker + 1}"
+    def name_of(self, speaker: int, en: bool = False) -> str:
+        """没命名的说话人叫"说话人N"；en=True 时（英文纪要）叫"Speaker N"，存的数据不变。"""
+        return self.speaker_names.get(speaker) or (f"Speaker {speaker + 1}" if en else f"说话人{speaker + 1}")
 
     def speakers_in_order(self) -> list[int]:
         """按首次发言顺序排列的说话人编号。"""
@@ -49,10 +50,10 @@ class Transcript:
             if name.strip():
                 self.speaker_names[spk] = name.strip()
 
-    def turns(self) -> list[Turn]:
+    def turns(self, en: bool = False) -> list[Turn]:
         turns: list[Turn] = []
         for s in self.sentences:
-            name = self.name_of(s.speaker)
+            name = self.name_of(s.speaker, en)
             if turns and turns[-1].speaker == name:
                 last = turns[-1]
                 last.text += s.text
@@ -77,9 +78,14 @@ class Transcript:
         src = Path(self.source)
         return src.parent.name if src.stem == "录音" and src.parent.name else src.stem
 
-    def to_prompt_text(self) -> str:
-        """喂给 LLM 的紧凑格式：[mm:ss] 说话人：内容。"""
-        return "\n".join(f"[{fmt_ts(t.start_ms)}] {t.speaker}：{t.text}" for t in self.turns())
+    def to_prompt_text(self, en: bool = False) -> str:
+        """喂给 LLM 的紧凑格式：[mm:ss] 说话人：内容；en=True 时是 [mm:ss] Speaker N: text。"""
+        sep = ": " if en else "："
+        return "\n".join(f"[{fmt_ts(t.start_ms)}] {t.speaker}{sep}{t.text}" for t in self.turns(en))
+
+    def text(self) -> str:
+        """所有发言连在一起，判断会议语言用（不含说话人名字）。"""
+        return "".join(s.text for s in self.sentences)
 
     def save(self, path: Path) -> None:
         data = {

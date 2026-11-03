@@ -74,6 +74,19 @@ class Config:
     webhook: str = ""
     webhook_secret: str = ""
     obsidian: ObsidianConfig = field(default_factory=ObsidianConfig)
+    ui_language: str = "auto"  # [ui] language：auto | zh | en，auto 由界面按系统语言决定
+    minutes_language: str = "auto"  # [minutes] language：auto | zh | en，auto 跟会议转写的语言
+    asr_language: str = "zh"  # [asr] language：zh | en | auto，桌面版的识别模型用；这里的 Paraformer 只认中文
+
+
+UI_LANGUAGES = MINUTES_LANGUAGES = ("auto", "zh", "en")
+ASR_LANGUAGES = ("zh", "en", "auto")
+
+
+def _choice(section: object, allowed: tuple[str, ...], default: str) -> str:
+    value = section.get("language") if isinstance(section, dict) else None
+    value = value.strip().lower() if isinstance(value, str) else None
+    return value if value in allowed else default
 
 
 def load() -> Config:
@@ -99,6 +112,9 @@ def load() -> Config:
             auto=obs.get("auto", ObsidianConfig.auto),
             transcript=obs.get("transcript", ObsidianConfig.transcript),
         ),
+        ui_language=_choice(data.get("ui"), UI_LANGUAGES, Config.ui_language),
+        minutes_language=_choice(data.get("minutes"), MINUTES_LANGUAGES, Config.minutes_language),
+        asr_language=_choice(data.get("asr"), ASR_LANGUAGES, Config.asr_language),
     )
 
     cfg.llm.base_url = env_var("LLM_BASE_URL", cfg.llm.base_url)
@@ -143,7 +159,13 @@ def save(cfg: Config) -> Path:
         f"vault = {_toml_str(cfg.obsidian.vault)}\n"
         f"folder = {_toml_str(cfg.obsidian.folder)}\n"
         f"auto = {_toml_bool(cfg.obsidian.auto)}\n"
-        f"transcript = {_toml_bool(cfg.obsidian.transcript)}\n"
+        f"transcript = {_toml_bool(cfg.obsidian.transcript)}\n\n"
+        "[ui]\n"
+        f"language = {_toml_str(cfg.ui_language)}\n\n"
+        "[minutes]\n"
+        f"language = {_toml_str(cfg.minutes_language)}\n\n"
+        "[asr]\n"
+        f"language = {_toml_str(cfg.asr_language)}\n"
     )
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(text, encoding="utf-8")

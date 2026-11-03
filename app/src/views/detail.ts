@@ -7,7 +7,8 @@ import { renderMarkdown } from "../markdown";
 import { minutesDocument } from "../pdf";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
-import { isBusy, jobOf, minutesProgress, progressOf, S, SECTIONS } from "../state";
+import { isBusy, jobOf, minutesProgress, progressOf, S, sectionLabels } from "../state";
+import { speakerName, t } from "../i18n";
 import { dismissJob } from "../tasks";
 
 let audioEl: HTMLAudioElement | null = null;
@@ -21,16 +22,16 @@ export function stopAudio(): void {
   }
 }
 
-const backLink = `<a class="back" href="#/meetings">${ICON.back}会议记录</a>`;
+const backLink = () => `<a class="back" href="#/meetings">${ICON.back}${t("会议记录", "Meetings")}</a>`;
 
 export async function renderDetail(id: string, keepTab = false): Promise<void> {
   if (!keepTab) detailTab = "minutes";
-  main().innerHTML = `<div class="page">${backLink}</div>`;
+  main().innerHTML = `<div class="page">${backLink()}</div>`;
   let d: MeetingDetail;
   try {
     d = await api<MeetingDetail>(meetingPath(id));
   } catch (e) {
-    main().innerHTML = `<div class="page">${backLink}<div class="empty"><h3>打不开这场会议</h3><div>${esc(errorMessage(e))}</div></div></div>`;
+    main().innerHTML = `<div class="page">${backLink()}<div class="empty"><h3>${t("打不开这场会议", "Couldn't open this meeting")}</h3><div>${esc(errorMessage(e))}</div></div></div>`;
     return;
   }
   if (decodeURIComponent(location.hash.slice(1)) !== `/m/${id}`) return; // 加载期间已经切走
@@ -40,34 +41,34 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   S.jobs.filter((j) => j.meeting === id && j.kind !== "models" && !isBusy(j) && j.id).forEach((j) => dismissJob(j.id!));
   main().innerHTML = `
     <div class="page">
-      ${backLink}
+      ${backLink()}
       <div class="detail-head">
         <h1>${esc(d.title)}</h1>
         <div class="detail-actions">
           ${
             d.minutes
-              ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}导出${ICON.chevron}</button>
+              ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}${t("导出", "Export")}${ICON.chevron}</button>
                   <div class="menu" id="exportMenu" hidden>
-                    <button data-act="pdf">${ICON.file}<span><b>导出 PDF</b><small>A4 排版，存进会议文件夹</small></span></button>
-                    <button data-act="obsidian">${ICON.vault}<span><b>存到 Obsidian</b><small>存进笔记库并打开</small></span></button>
-                    <button data-act="copy">${ICON.copy}<span><b>复制为 Markdown</b><small>粘贴到文档、邮件里</small></span></button>
-                  </div></div><button class="btn" id="aPush">${ICON.send}推送到群</button>`
+                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
+                    <button data-act="obsidian">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
+                    <button data-act="copy">${ICON.copy}<span><b>${t("复制为 Markdown", "Copy as Markdown")}</b><small>${t("粘贴到文档、邮件里", "Paste into docs or email")}</small></span></button>
+                  </div></div><button class="btn" id="aPush">${ICON.send}${t("推送到群", "Share to chat")}</button>`
               : ""
           }
-          ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? "重新生成" : "生成纪要"}</button>` : ""}
-          <button class="btn ghost" id="aFolder" title="打开文件夹">${ICON.folder}</button>
+          ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? t("重新生成", "Regenerate") : t("生成纪要", "Write minutes")}</button>` : ""}
+          <button class="btn ghost" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
         </div>
       </div>
       <div class="meta">
         <span>${esc(d.date)} ${esc(d.time)}</span>
-        ${d.duration ? `<span class="sep"></span><span>时长 ${esc(d.duration)}</span>` : ""}
+        ${d.duration ? `<span class="sep"></span><span>${t("时长", "Duration")} ${esc(d.duration)}</span>` : ""}
         ${
           d.speaker_list.length
             ? `<span class="sep"></span>
           <span class="speakers">${d.speaker_list
-            .map((s) => `<span class="chip"><span class="dot" style="background:${color(s.index)}"></span>${esc(s.name)}</span>`)
+            .map((s) => `<span class="chip"><span class="dot" style="background:${color(s.index)}"></span>${esc(speakerName(s.name))}</span>`)
             .join("")}
-          <button class="btn" id="aRename">${ICON.people}改名</button></span>`
+          <button class="btn" id="aRename">${ICON.people}${t("改名", "Rename")}</button></span>`
             : ""
         }
       </div>
@@ -75,17 +76,17 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
         d.has_transcript
           ? `
         <div class="tabs-row">
-          <div class="seg"><button data-tab="minutes">纪要</button><button data-tab="transcript">转写</button></div>
+          <div class="seg"><button data-tab="minutes">${t("纪要", "Minutes")}</button><button data-tab="transcript">${t("转写", "Transcript")}</button></div>
           <span class="grow"></span>
-          <button class="btn ghost" id="aEdit" ${detailTab === "minutes" && d.minutes ? "" : "hidden"}>${ICON.edit}编辑</button>
+          <button class="btn ghost" id="aEdit" ${detailTab === "minutes" && d.minutes ? "" : "hidden"}>${ICON.edit}${t("编辑", "Edit")}</button>
         </div>
         <div class="card" id="pane"></div>`
           : `
         ${
           jobHere
             ? `<div class="card doc" id="pane"></div>`
-            : `<div class="card"><div class="empty"><h3>录音还没有转写</h3><div>可能是上次处理被打断了</div>
-          ${d.audio ? `<button class="btn primary" id="aProcess">开始转写</button>` : ""}</div></div>`
+            : `<div class="card"><div class="empty"><h3>${t("录音还没有转写", "Not transcribed yet")}</h3><div>${t("可能是上次处理被打断了", "The last run may have been interrupted")}</div>
+          ${d.audio ? `<button class="btn primary" id="aProcess">${t("开始转写", "Transcribe")}</button>` : ""}</div></div>`
         }`
       }
       ${d.audio ? playerHTML : ""}
@@ -134,17 +135,17 @@ function drawPane(): void {
     pane.className = "card doc";
     pane.innerHTML = d.minutes
       ? `<div class="md">${renderMarkdown(d.minutes, { skipHead: true, resolve: turnResolver(d.turns, d.duration ? tsToMs(d.duration) : Infinity) })}</div>`
-      : `<div class="minutes-empty">还没有纪要。<br><br><button class="btn primary" id="paneGen">${ICON.spark}生成纪要</button></div>`;
+      : `<div class="minutes-empty">${t("还没有纪要。", "No minutes yet.")}<br><br><button class="btn primary" id="paneGen">${ICON.spark}${t("生成纪要", "Write minutes")}</button></div>`;
     const gen = $maybe("#paneGen");
     if (gen) gen.onclick = regenerate;
   } else {
     pane.className = "card turns";
     pane.innerHTML = d.turns
       .map(
-        (t, i) => `
-      <div class="turn" data-i="${i}" data-ms="${t.start_ms}">
-        <span class="av" style="background:${color(t.color)}">${esc(initial(t.speaker))}</span>
-        <div><div class="who">${esc(t.speaker)}<button class="ts" data-ms="${t.start_ms}">${esc(t.ts)}</button></div><div class="text">${esc(t.text)}</div></div>
+        (tn, i) => `
+      <div class="turn" data-i="${i}" data-ms="${tn.start_ms}">
+        <span class="av" style="background:${color(tn.color)}">${esc(initial(tn.speaker))}</span>
+        <div><div class="who">${esc(speakerName(tn.speaker))}<button class="ts" data-ms="${tn.start_ms}">${esc(tn.ts)}</button></div><div class="text">${esc(tn.text)}</div></div>
       </div>`,
       )
       .join("");
@@ -192,39 +193,44 @@ function stepChip(label: string, st: "done" | "now" | "todo"): string {
 function drawGen(job: Job): void {
   const summarizing = job.state === "summarizing";
   const mp = minutesProgress(job);
-  const llm = S.env?.llm_model ?? "大模型";
+  const llm = S.env?.llm_model ?? t("大模型", "The LLM");
   $("#genTitle").textContent = summarizing
     ? mp.chunk
-      ? `会议较长，先分段提炼（${mp.chunk[0]}/${mp.chunk[1]}）`
+      ? t(`会议较长，先分段提炼（${mp.chunk[0]}/${mp.chunk[1]}）`, `Long meeting — summarizing part ${mp.chunk[0]}/${mp.chunk[1]}`)
       : mp.merging
-        ? "把各段要点合并成纪要"
+        ? t("把各段要点合并成纪要", "Merging the parts into minutes")
         : mp.section < 0
           ? job.thinking
-            ? `${llm} 正在思考`
-            : `${llm} 正在读转写`
-          : `${llm} 正在写纪要`
+            ? t(`${llm} 正在思考`, `${llm} is thinking`)
+            : t(`${llm} 正在读转写`, `${llm} is reading the transcript`)
+          : t(`${llm} 正在写纪要`, `${llm} is writing the minutes`)
     : job.state === "transcribing"
-      ? `正在本地转写${job.stage ? ` · ${job.stage}` : ""}`
+      ? `${t("正在本地转写", "Transcribing on-device")}${job.stage ? ` · ${job.stage}` : ""}`
       : job.state === "finalizing"
-        ? "转写最后一段，区分说话人"
+        ? t("转写最后一段，区分说话人", "Transcribing the last part and separating speakers")
         : job.state === "loading"
-          ? "加载识别模型"
-          : "正在保存录音";
+          ? t("加载识别模型", "Loading the speech model")
+          : t("正在保存录音", "Saving the recording");
   const pct = Math.round(progressOf(job) * 100);
   const elapsed = fmt((job.elapsed ?? 0) * 1000);
-  const wrote = summarizing && mp.chars ? ` · 已写 ${mp.chars} 字` : summarizing && job.thinking ? ` · 已思考 ${job.thinking} 字` : "";
-  $("#genMeta").textContent = `用时 ${elapsed}${wrote} · 约 ${pct}%`;
+  const wrote =
+    summarizing && mp.chars
+      ? t(` · 已写 ${mp.chars} 字`, ` · ${mp.chars} chars written`)
+      : summarizing && job.thinking
+        ? t(` · 已思考 ${job.thinking} 字`, ` · ${job.thinking} chars of thinking`)
+        : "";
+  $("#genMeta").textContent = t(`用时 ${elapsed}${wrote} · 约 ${pct}%`, `${elapsed}${wrote} · ~${pct}%`);
   $("#genBar").style.width = `${Math.max(2, pct)}%`;
 
   // 步骤：转写 → 纪要的各节
   const transcribed = summarizing;
   const steps = [
-    stepChip("转写", transcribed ? "done" : "now"),
-    stepChip("通读与思考", !summarizing ? "todo" : mp.section >= 0 ? "done" : "now"),
+    stepChip(t("转写", "Transcribe"), transcribed ? "done" : "now"),
+    stepChip(t("通读与思考", "Read & think"), !summarizing ? "todo" : mp.section >= 0 ? "done" : "now"),
   ];
-  SECTIONS.forEach((t, i) => {
+  sectionLabels().forEach((label, i) => {
     const st = !summarizing || mp.chunk ? "todo" : i < mp.section ? "done" : i === mp.section ? "now" : "todo";
-    steps.push(stepChip(t, st));
+    steps.push(stepChip(label, st));
   });
   const html = steps.join(`<span class="gen-arrow"></span>`);
   const box = $("#genSteps");
@@ -243,11 +249,17 @@ function drawGen(job: Job): void {
       : `<p class="gen-wait">${
           summarizing
             ? mp.chunk
-              ? "长会议分成几段，每段先提炼要点，最后合并成一份纪要。"
+              ? t("长会议分成几段，每段先提炼要点，最后合并成一份纪要。", "Long meetings are split into parts; each part is summarized first, then merged into one set of minutes.")
               : job.thinking
-                ? `大模型在动笔前先思考（已思考 ${job.thinking} 字），长会议这一步可能要一两分钟，开始写后内容会一节一节出现在这里。`
-                : "大模型先通读整场转写，开始动笔后内容会一节一节出现在这里。"
-            : "识别在这台电脑上进行，录音不会上传。转写完成后接着生成纪要，不用守着，可以去开下一场会。"
+                ? t(
+                    `大模型在动笔前先思考（已思考 ${job.thinking} 字），长会议这一步可能要一两分钟，开始写后内容会一节一节出现在这里。`,
+                    `The model is thinking before it writes (${job.thinking} chars so far). For long meetings this can take a minute or two; sections will appear here as they're written.`,
+                  )
+                : t("大模型先通读整场转写，开始动笔后内容会一节一节出现在这里。", "The model reads the whole transcript first; sections will appear here as they're written.")
+            : t(
+                "识别在这台电脑上进行，录音不会上传。转写完成后接着生成纪要，不用守着，可以去开下一场会。",
+                "Recognition runs on this Mac — audio is never uploaded. Minutes follow right after; no need to wait here, go ahead and start the next meeting.",
+              )
         }</p>`;
     const near = main().scrollHeight - main().scrollTop - main().clientHeight < 160;
     if (near && minutes) main().scrollTop = main().scrollHeight; // 停在底部时跟着往下滚
@@ -267,8 +279,8 @@ export function updateDetailJob(job: Job, prev: Job): void {
     if (edit) edit.hidden = true;
     drawGen(job);
   } else if (isBusy(prev) && (job.state === "done" || job.state === "error")) {
-    if (job.state === "done") toast("纪要已生成");
-    else toast(job.error || "生成失败", true);
+    if (job.state === "done") toast(t("纪要已生成", "Minutes ready"));
+    else toast(job.error || t("生成失败", "Couldn't write the minutes"), true);
     if (job.id) dismissJob(job.id);
     renderDetail(S.detail.id, true);
   }
@@ -322,10 +334,10 @@ function bindExportMenu(d: MeetingDetail): void {
 }
 
 async function toPdf(d: MeetingDetail): Promise<void> {
-  toast("正在排版 PDF…");
+  toast(t("正在排版 PDF…", "Laying out the PDF…"));
   try {
     const r = await api<{ path: string }>(meetingPath(d.id, "/pdf"), { json: { html: minutesDocument(d) } });
-    toast(`已导出 ${r.path.split("/").pop()}，已在访达中选中`);
+    toast(t(`已导出 ${r.path.split("/").pop()}，已在访达中选中`, `Exported ${r.path.split("/").pop()} — shown in Finder`));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -335,7 +347,7 @@ async function toObsidian(): Promise<void> {
   if (!S.detail) return;
   try {
     await api(meetingPath(S.detail.id, "/obsidian"), { json: { open: true } });
-    toast("已存到 Obsidian");
+    toast(t("已存到 Obsidian", "Saved to Obsidian"));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -344,8 +356,9 @@ async function toObsidian(): Promise<void> {
 async function toExcalidraw(): Promise<void> {
   if (!S.detail) return;
   try {
-    await api(meetingPath(S.detail.id, "/excalidraw"), { method: "POST" });
-    toast("已导出鱼骨图.excalidraw，拖进 excalidraw.com 即可编辑");
+    const r = await api<{ paths: string[] }>(meetingPath(S.detail.id, "/excalidraw"), { method: "POST" });
+    const name = r.paths?.[0]?.split("/").pop() ?? "";
+    toast(t(`已导出${name}，拖进 excalidraw.com 即可编辑`, `Exported ${name} — drop it into excalidraw.com to edit`));
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -362,7 +375,7 @@ async function copyText(text: string): Promise<void> {
     document.execCommand("copy");
     ta.remove();
   }
-  toast("已复制纪要 Markdown");
+  toast(t("已复制纪要 Markdown", "Minutes copied as Markdown"));
 }
 
 function editMinutes(): void {
@@ -372,13 +385,13 @@ function editMinutes(): void {
   $("#aEdit").hidden = true;
   pane.className = "card doc";
   pane.innerHTML = `<textarea class="textarea" id="mdEdit" style="min-height:520px;font-size:14px">${esc(d.minutes)}</textarea>
-    <div class="modal-foot"><button class="btn" id="mdCancel">取消</button><button class="btn primary" id="mdSave">保存</button></div>`;
+    <div class="modal-foot"><button class="btn" id="mdCancel">${t("取消", "Cancel")}</button><button class="btn primary" id="mdSave">${t("保存", "Save")}</button></div>`;
   $("#mdCancel").onclick = drawPane;
   $("#mdSave").onclick = async () => {
     const text = $<HTMLTextAreaElement>("#mdEdit").value;
     try {
       await api(meetingPath(d.id, "/minutes"), { method: "PUT", json: { text } });
-      toast("已保存");
+      toast(t("已保存", "Saved"));
       renderDetail(d.id, true);
       refreshMeetings();
     } catch (e) {
@@ -391,15 +404,15 @@ function renameSpeakers(): void {
   const d = S.detail;
   if (!d) return;
   openModal(`
-    <h3>给说话人改名</h3>
-    <p class="hint">按第一次发言的顺序排列。点转写里的时间戳可以回听确认是谁。</p>
+    <h3>${t("给说话人改名", "Rename speakers")}</h3>
+    <p class="hint">${t("按第一次发言的顺序排列。点转写里的时间戳可以回听确认是谁。", "Listed in order of first appearance. Click a timestamp in the transcript to hear who it is.")}</p>
     ${d.speaker_list
       .map(
         (s) =>
-          `<div class="sp-row"><span class="av" style="background:${color(s.index)}">${esc(initial(s.name))}</span><input class="input" data-i="${s.index}" value="${s.custom ? esc(s.name) : ""}" placeholder="${esc(`说话人${s.index + 1}`)}"></div>`,
+          `<div class="sp-row"><span class="av" style="background:${color(s.index)}">${esc(initial(s.name))}</span><input class="input" data-i="${s.index}" value="${s.custom ? esc(s.name) : ""}" placeholder="${esc(t(`说话人${s.index + 1}`, `Speaker ${s.index + 1}`))}"></div>`,
       )
       .join("")}
-    <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn" id="spSave">仅保存</button>${d.minutes ? `<button class="btn primary" id="spRegen">保存并重新生成纪要</button>` : ""}</div>`);
+    <div class="modal-foot"><button class="btn" data-close>${t("取消", "Cancel")}</button><button class="btn" id="spSave">${t("仅保存", "Save")}</button>${d.minutes ? `<button class="btn primary" id="spRegen">${t("保存并重新生成纪要", "Save & regenerate minutes")}</button>` : ""}</div>`);
   const save = async (regen: boolean) => {
     const names = $$<HTMLInputElement>("#modalBody input").map((x) => x.value.trim());
     try {
@@ -408,7 +421,7 @@ function renameSpeakers(): void {
       await renderDetail(d.id, true);
       refreshMeetings();
       if (regen) regenerate();
-      else toast("已更新说话人");
+      else toast(t("已更新说话人", "Speakers updated"));
     } catch (e) {
       toast(errorMessage(e), true);
     }
@@ -422,7 +435,7 @@ function renameSpeakers(): void {
 
 const playerHTML = `
   <div class="player" id="player">
-    <button class="play" id="pPlay" title="播放（空格）">${ICON.play}</button>
+    <button class="play" id="pPlay" title="${t("播放（空格）", "Play (Space)")}">${ICON.play}</button>
     <span class="p-time" id="pTime">00:00 / --:--</span>
     <div class="track" id="pTrack"><div class="rail"></div><div class="fill" id="pFill"></div><div class="knob" id="pKnob"></div></div>
     <button class="speed" id="pSpeed">1×</button>
@@ -465,7 +478,7 @@ function bindPlayer(id: string): void {
 }
 
 function seek(ms: number): void {
-  if (!audioEl) return toast("这场会议没有录音文件", true);
+  if (!audioEl) return toast(t("这场会议没有录音文件", "This meeting has no recording"), true);
   audioEl.currentTime = ms / 1000;
   audioEl.play();
 }

@@ -1,6 +1,7 @@
 /* 首页：录音表单 → 录音中（计时、电平、实时文字）→ 结束后立刻回到录音表单，转写和生成纪要在后台进行，
    进度显示在玻璃面板下方和侧边栏。第一次使用时玻璃面板里下载识别模型。另含拖拽导入。 */
 
+import { t } from "../i18n";
 import { api, type Job } from "../api";
 import { $, $$, $maybe, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
 import { poll } from "../poll";
@@ -17,9 +18,9 @@ export function renderHome(): void {
   main().innerHTML = `
     <div class="page">
       <div class="hero-head">
-        <span class="hero-tag"><b></b>本地转写 · 录音不出本机</span>
-        <h1>开个会，纪要交给我</h1>
-        <p>录下会议，自动转写、区分说话人，整理出议题、决议和待办</p>
+        <span class="hero-tag"><b></b>${t("本地转写 · 录音不出本机", "On-device transcription · audio never leaves your Mac")}</span>
+        <h1>${t("开个会，纪要交给我", "Have the meeting. Tingo takes the notes.")}</h1>
+        <p>${t("录下会议，自动转写、区分说话人，整理出议题、决议和待办", "Record, transcribe, tell speakers apart — and get topics, decisions and action items")}</p>
       </div>
       <section class="aurora" id="aurora">
         <i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i><i class="blob b4"></i><i class="grain"></i>
@@ -27,15 +28,15 @@ export function renderHome(): void {
       </section>
       <div class="home-tasks" id="homeTasks"></div>
       <div class="quick">
-        <div class="quick-item" id="qImport"><span class="ico">${ICON.upload}</span><span><b>导入录音</b><small>拖进窗口，或点这里选文件</small></span>${ICON.chevron}</div>
-        <a class="quick-item" href="#/meetings"><span class="ico">${ICON.file}</span><span><b>会议记录</b><small id="qCount">查看全部会议</small></span>${ICON.chevron}</a>
-        <a class="quick-item" href="#/settings/llm"><span class="ico">${ICON.bot}</span><span><b>大模型</b><small id="qModel">设置纪要用的模型</small></span>${ICON.chevron}</a>
-        <a class="quick-item" href="#/settings/push"><span class="ico">${ICON.send}</span><span><b>推送到群</b><small>飞书 · 钉钉 · 企业微信</small></span>${ICON.chevron}</a>
+        <div class="quick-item" id="qImport"><span class="ico">${ICON.upload}</span><span><b>${t("导入录音", "Import recording")}</b><small>${t("拖进窗口，或点这里选文件", "Drop it in, or click to choose a file")}</small></span>${ICON.chevron}</div>
+        <a class="quick-item" href="#/meetings"><span class="ico">${ICON.file}</span><span><b>${t("会议记录", "Meetings")}</b><small id="qCount">${t("查看全部会议", "See all meetings")}</small></span>${ICON.chevron}</a>
+        <a class="quick-item" href="#/settings/llm"><span class="ico">${ICON.bot}</span><span><b>${t("大模型", "LLM")}</b><small id="qModel">${t("设置纪要用的模型", "Choose the model that writes minutes")}</small></span>${ICON.chevron}</a>
+        <a class="quick-item" href="#/settings/push"><span class="ico">${ICON.send}</span><span><b>${t("推送到群", "Share to chat")}</b><small>${t("飞书 · 钉钉 · 企业微信", "Feishu · DingTalk · WeCom")}</small></span>${ICON.chevron}</a>
       </div>
     </div>`;
   $("#qImport").onclick = () => $("#fileInput").click();
-  if (S.meetings.length) $("#qCount").textContent = `共 ${S.meetings.length} 场会议`;
-  if (S.env) $("#qModel").textContent = S.env.llm_ready ? `当前：${S.env.llm_model}` : "还没有配置";
+  if (S.meetings.length) $("#qCount").textContent = t(`共 ${S.meetings.length} 场会议`, `${S.meetings.length} meetings`);
+  if (S.env) $("#qModel").textContent = S.env.llm_ready ? t(`当前：${S.env.llm_model}`, `Using ${S.env.llm_model}`) : t("还没有配置", "Not set up yet");
   updateHome(S.job, INIT, true);
   renderTasks();
 }
@@ -68,7 +69,9 @@ function updateRecording(job: Job, aurora: HTMLElement): void {
     });
   }
   aurora.style.setProperty("--lv", peak.toFixed(3));
-  $("#recNote").textContent = job.model_loaded ? "边录边转中，结束后几秒就出转写" : "正在准备识别模型…";
+  $("#recNote").textContent = job.model_loaded
+    ? t("边录边转中，结束后几秒就出转写", "Transcribing as you record — the transcript is ready seconds after you stop")
+    : t("正在准备识别模型…", "Preparing the speech model…");
   const lines = job.live ?? [];
   const box = $("#liveLines");
   const key = lines.map((l) => l.start_ms).join(",");
@@ -76,22 +79,22 @@ function updateRecording(job: Job, aurora: HTMLElement): void {
     box.dataset.key = key;
     box.innerHTML = lines.length
       ? lines.map((l) => `<div><span class="lt">${fmt(l.start_ms)}</span>${esc(l.text)}</div>`).join("")
-      : `<div class="lw">说话内容会在这里实时出现（约十几秒一批）</div>`;
+      : `<div class="lw">${t("说话内容会在这里实时出现（约十几秒一批）", "What people say will appear here live (in batches of ~15 seconds)")}</div>`;
     box.scrollTop = box.scrollHeight;
   }
 }
 
-const sourceName = (s: string) => (s === "system" ? "系统声音" : "麦克风");
+const sourceName = (s: string) => (s === "system" ? t("系统声音", "System audio") : t("麦克风", "Microphone"));
 
 function downloadPanel(): string {
   const mb = S.env?.models_size_mb ?? 330;
   return `
-    <div class="live-head" style="color:var(--blue)">第一次使用</div>
-    <div class="timer" style="font-size:22px;margin:12px 0 6px;font-family:var(--font)">先下载识别模型（约 ${mb} MB）</div>
-    <div class="proc-note">只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。</div>
+    <div class="live-head" style="color:var(--blue)">${t("第一次使用", "First run")}</div>
+    <div class="timer" style="font-size:22px;margin:12px 0 6px;font-family:var(--font)">${t(`先下载识别模型（约 ${mb} MB）`, `Download the speech model first (~${mb} MB)`)}</div>
+    <div class="proc-note">${t("只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。", "One-time download. Recognition and speaker separation run on this Mac — your audio is never uploaded.")}</div>
     <div class="glass-foot">
       <span class="spacer"></span>
-      <button class="btn primary" id="dlBtn">下载模型</button>
+      <button class="btn primary" id="dlBtn">${t("下载模型", "Download")}</button>
     </div>`;
 }
 
@@ -99,19 +102,19 @@ function idleForm(): string {
   if (needsModels()) return downloadPanel();
   const sys = S.env ? S.env.system_audio : true;
   return `
-    <input class="title-input" id="fTitle" placeholder="会议名称，比如：周会、项目评审" value="${esc(S.form.title)}" maxlength="60">
-    <input class="hot-input" id="fHot" placeholder="热词（可选）：人名、项目代号、专有名词，用逗号隔开" value="${esc(S.form.hotwords)}">
+    <input class="title-input" id="fTitle" placeholder="${t("会议名称，比如：周会、项目评审", "Meeting name, e.g. Weekly sync, Design review")}" value="${esc(S.form.title)}" maxlength="60">
+    <input class="hot-input" id="fHot" placeholder="${t("热词（可选）：人名、项目代号、专有名词，用逗号隔开", "Hotwords (optional): names, project codes, jargon — comma separated")}" value="${esc(S.form.hotwords)}">
     <div class="glass-foot">
-      <button class="toggle ${S.form.system && sys ? "on" : ""}" id="tSys" ${sys ? "" : "disabled title='需要 macOS 15+'"}>${ICON.monitor}系统声音</button>
-      <button class="toggle ${S.form.mic ? "on" : ""}" id="tMic">${ICON.mic}麦克风</button>
+      <button class="toggle ${S.form.system && sys ? "on" : ""}" id="tSys" ${sys ? "" : `disabled title='${t("需要 macOS 15+", "Requires macOS 15+")}'`}>${ICON.monitor}${t("系统声音", "System audio")}</button>
+      <button class="toggle ${S.form.mic ? "on" : ""}" id="tMic">${ICON.mic}${t("麦克风", "Microphone")}</button>
       <span class="spacer"></span>
-      <span class="rec-label">开始录音</span>
-      <button class="rec-btn" id="recBtn" title="开始录音"><span class="core"></span></button>
+      <span class="rec-label">${t("开始录音", "Record")}</span>
+      <button class="rec-btn" id="recBtn" title="${t("开始录音", "Start recording")}"><span class="core"></span></button>
     </div>`;
 }
 
 const recordingView = (job: Job) => `
-  <div class="live-head"><span class="live-dot"></span>录音中 · ${esc((job.sources ?? []).map(sourceName).join(" + "))}</div>
+  <div class="live-head"><span class="live-dot"></span>${t("录音中", "Recording")} · ${esc((job.sources ?? []).map(sourceName).join(" + "))}</div>
   <div class="timer" id="timer">00:00</div>
   <div class="meters">
     ${(job.sources ?? [])
@@ -122,30 +125,30 @@ const recordingView = (job: Job) => `
   <div class="glass-foot">
     <span class="proc-note" style="margin:0" id="recNote"></span>
     <span class="spacer"></span>
-    <span class="rec-label">结束录音</span>
-    <button class="rec-btn stop" id="stopBtn" title="结束录音"><span class="core"></span></button>
+    <span class="rec-label">${t("结束录音", "Stop")}</span>
+    <button class="rec-btn stop" id="stopBtn" title="${t("结束录音", "Stop recording")}"><span class="core"></span></button>
   </div>`;
 
 const downloadingView = () => `
-  <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span>下载识别模型</div>
+  <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span>${t("下载识别模型", "Downloading the speech model")}</div>
   <div class="timer" id="dlText" style="font-size:22px;margin:12px 0 10px">0 MB</div>
   <div class="steps" style="grid-template-columns:1fr"><div class="step now"><div class="bar"><div id="dlBar" style="position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,var(--cyan),var(--blue));border-radius:99px"></div></div></div></div>
-  <div class="proc-note">识别模型来自 ModelScope，标点和声纹模型来自 GitHub；网络中断会自动续传</div>`;
+  <div class="proc-note">${t("识别模型来自 ModelScope，标点和声纹模型来自 GitHub；网络中断会自动续传", "Speech model from ModelScope, punctuation and voiceprint models from GitHub — interrupted downloads resume automatically")}</div>`;
 
 function updateDownloading(job: Job): void {
   const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(job.stage ?? "");
-  $("#dlText").textContent = job.stage || "准备下载…";
+  $("#dlText").textContent = job.stage || t("准备下载…", "Starting download…");
   if (m) $("#dlBar").style.width = `${Math.min(100, (Number(m[1]) / Number(m[2])) * 100).toFixed(1)}%`;
 }
 
 const errorView = (job: Job) => `
-  <div class="live-head">模型下载没有完成</div>
+  <div class="live-head">${t("模型下载没有完成", "The model download didn't finish")}</div>
   <div class="err-box" style="margin-top:12px">${esc(job.error)}</div>
-  <div class="proc-note">已下载的部分会保留，重试时接着下</div>
+  <div class="proc-note">${t("已下载的部分会保留，重试时接着下", "What's downloaded is kept — retrying resumes from there")}</div>
   <div class="glass-foot">
-    <button class="btn" id="againBtn">关闭</button>
+    <button class="btn" id="againBtn">${t("关闭", "Close")}</button>
     <span class="spacer"></span>
-    <button class="btn primary" id="dlBtn">重试</button>
+    <button class="btn primary" id="dlBtn">${t("重试", "Retry")}</button>
   </div>`;
 
 const VIEWS: Record<Phase, (job: Job) => string> = {
@@ -200,13 +203,13 @@ function bindHome(phase: Phase): void {
 
 async function startRecording(): Promise<void> {
   const sys = S.form.system && (!S.env || S.env.system_audio);
-  if (!sys && !S.form.mic) return toast("系统声音和麦克风至少开一个", true);
+  if (!sys && !S.form.mic) return toast(t("系统声音和麦克风至少开一个", "Turn on system audio or the microphone"), true);
   const btn = $maybe<HTMLButtonElement>("#recBtn");
   if (btn) btn.disabled = true;
   try {
     S.job = await api<Job>("/api/record/start", {
       json: {
-        title: S.form.title.trim() || "会议",
+        title: S.form.title.trim() || t("会议", "Meeting"),
         system: sys,
         mic: S.form.mic,
         hotwords: S.form.hotwords.split(/[,，、\s]+/).filter(Boolean),
@@ -224,7 +227,7 @@ async function stopRecording(): Promise<void> {
   $<HTMLButtonElement>("#stopBtn").disabled = true;
   try {
     await api("/api/record/stop", { method: "POST" });
-    toast("录音已保存，转写和纪要在后台进行，可以开始下一场");
+    toast(t("录音已保存，转写和纪要在后台进行，可以开始下一场", "Saved. Transcription and minutes continue in the background — you can start the next meeting"));
     S.job = { state: "idle" };
     updateHome(S.job, INIT, true);
     poll();
@@ -241,10 +244,10 @@ export async function importFile(file: File | undefined): Promise<void> {
   fd.append("file", file);
   fd.append("title", file.name.replace(/\.[^.]+$/, ""));
   fd.append("modified", String(file.lastModified || 0));
-  toast(`正在导入 ${file.name}`);
+  toast(t(`正在导入 ${file.name}`, `Importing ${file.name}`));
   try {
     await api<Job>("/api/import", { method: "POST", body: fd });
-    toast(`已导入 ${file.name}，转写和纪要在后台进行`);
+    toast(t(`已导入 ${file.name}，转写和纪要在后台进行`, `Imported ${file.name} — transcribing in the background`));
     poll();
   } catch (e) {
     toast(errorMessage(e), true);

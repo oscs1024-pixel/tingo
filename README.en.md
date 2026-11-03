@@ -20,6 +20,7 @@ Tingo records Tencent Meeting / Feishu / Zoom audio plus your mic, transcribes i
 - **Audio never leaves your Mac.** Speech recognition and speaker diarization run locally. Minutes can be written by DeepSeek, Qwen or any OpenAI-compatible API — or a local Ollama model, fully offline.
 - **Built for Chinese.** Uses Alibaba DAMO's FunASR models, which handle Chinese punctuation, numbers and names far better than English-first stacks. Relative dates ("next Wednesday", "end of month") are resolved against the meeting date.
 - **Every claim has a source.** Each line of the minutes carries a timestamp that jumps to that second of the recording. The fishbone diagram counts how much original speech backs each branch and flags the ones with **no evidence** — so hand-waving is visible at a glance.
+- **English and Chinese.** The app, the minutes and every export work in both languages. English meetings are recognized with SenseVoice, and a Chinese meeting can get English minutes (and vice versa).
 - **12 MB desktop app.** Tauri + Rust, no Python or ffmpeg needed. A live recording is fully transcribed seconds after you hit stop; a 76-minute file imports in about 3.5 minutes on an M1 Pro.
 
 > The meetings, names and numbers in the screenshots are fictional demo data.

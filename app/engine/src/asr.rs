@@ -14,6 +14,8 @@ use sherpa_onnx::{
     VadModelConfig, VoiceActivityDetector,
 };
 
+use crate::i18n::tr;
+
 pub const SR: usize = 16000;
 
 /// 可选的识别模型。VAD、标点、声纹三个基础模型大家共用。
@@ -37,6 +39,11 @@ impl AsrKind {
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+
+    /// 能指定会议语言（[asr] language）；Paraformer 只认中文
+    pub fn uses_language(self) -> bool {
+        matches!(self, AsrKind::SenseVoice | AsrKind::FunAsrNano)
     }
 
     /// 模型自己会加标点（不用再过 CT-Transformer）。SenseVoice 按 VAD 切出的短段识别时基本不出标点，照样要过
@@ -134,6 +141,8 @@ pub struct Engine {
     pub kind: AsrKind,
     /// 加载时交给模型的热词（只有 Fun-ASR-Nano 用；热词变了要重新加载）
     pub hotwords: Vec<String>,
+    /// 加载时定下的会议语言（zh | en | auto；Paraformer 不用，为空。语言变了要重新加载）
+    pub language: String,
     rec: OfflineRecognizer,
     punct: Option<OfflinePunctuation>,
     spk: SpeakerEmbeddingExtractor,
@@ -150,11 +159,31 @@ fn path_str(p: &Path) -> Option<String> {
     Some(p.to_string_lossy().into_owned())
 }
 
+/// SenseVoice 的 language：zh / en / auto 原样给
+fn sense_voice_language(lang: &str) -> &'static str {
+    match lang {
+        "en" => "en",
+        "auto" => "auto",
+        _ => "zh", // auto 在中文会议上错字明显多；中英混说照样能认英文
+    }
+}
+
+/// Fun-ASR-Nano 的 language 会拼进提示词「语音转写成{language}」；auto 不设，让模型自己判断
+fn funasr_nano_language(lang: &str) -> Option<String> {
+    match lang {
+        "en" => Some("英文".into()),
+        "auto" => None,
+        _ => Some("中文".into()),
+    }
+}
+
 impl Engine {
-    pub fn load(models: &ModelPaths, kind: AsrKind, hotwords: &[String], threads: i32) -> Result<Self, String> {
+    /// `language` 是配置里的会议语言（zh | en | auto），只有 SenseVoice、Fun-ASR-Nano 用
+    pub fn load(models: &ModelPaths, kind: AsrKind, hotwords: &[String], language: &str, threads: i32) -> Result<Self, String> {
         let files = models.base().into_iter().chain(models.asr_files(kind));
         if let Some(missing) = files.into_iter().find(|p| !p.is_file()) {
-            return Err(format!("缺少模型文件：{}", missing.display()));
+            let m = missing.display();
+            return Err(tr(&format!("缺少模型文件：{m}"), &format!("Missing model file: {m}")).into());
         }
         let mut cfg = OfflineRecognizerConfig::default();
         cfg.model_config.num_threads = threads;
@@ -167,7 +196,7 @@ impl Engine {
             }
             AsrKind::SenseVoice => {
                 cfg.model_config.sense_voice.model = path_str(first);
-                cfg.model_config.sense_voice.language = Some("zh".into()); // auto 在中文会议上错字明显多；中英混说照样能认英文
+                cfg.model_config.sense_voice.language = Some(sense_voice_language(language).into());
                 cfg.model_config.sense_voice.use_itn = true;
                 cfg.model_config.tokens = path_str(second);
             }
@@ -182,12 +211,13 @@ impl Engine {
                 n.temperature = 1e-6;
                 n.top_p = 0.8;
                 n.itn = 1;
+                n.language = funasr_nano_language(language);
                 if !hotwords.is_empty() {
                     n.hotwords = Some(hotwords.join(","));
                 }
             }
         }
-        let rec = OfflineRecognizer::create(&cfg).ok_or("识别模型加载失败")?;
+        let rec = OfflineRecognizer::create(&cfg).ok_or(tr("识别模型加载失败", "Couldn't load the speech recognition model"))?;
 
         let punct = if kind.punctuates() {
             None
@@ -200,7 +230,7 @@ impl Engine {
                         ..Default::default()
                     },
                 })
-                .ok_or("标点模型加载失败")?,
+                .ok_or(tr("标点模型加载失败", "Couldn't load the punctuation model"))?,
             )
         };
 
@@ -209,7 +239,7 @@ impl Engine {
             num_threads: 2,
             ..Default::default()
         })
-        .ok_or("声纹模型加载失败")?;
+        .ok_or(tr("声纹模型加载失败", "Couldn't load the speaker model"))?;
 
         let mut vad = VadModelConfig::default();
         vad.silero_vad.model = path_str(&models.vad());
@@ -223,6 +253,7 @@ impl Engine {
         Ok(Self {
             kind,
             hotwords: if kind == AsrKind::FunAsrNano { hotwords.to_vec() } else { Vec::new() },
+            language: if kind.uses_language() { language.to_string() } else { String::new() },
             rec,
             punct,
             spk,
@@ -312,5 +343,17 @@ mod tests {
         assert_eq!(w.last().unwrap().1, SR * 3);
         assert!(w.windows(2).all(|p| p[1].0 - p[0].0 <= SR * 3 / 4));
         assert_eq!(windows(0).count(), 0);
+    }
+
+    #[test]
+    fn language_options() {
+        assert_eq!(
+            ["zh", "en", "auto"].map(sense_voice_language),
+            ["zh", "en", "auto"]
+        );
+        assert_eq!(funasr_nano_language("zh").as_deref(), Some("中文"));
+        assert_eq!(funasr_nano_language("en").as_deref(), Some("英文"));
+        assert_eq!(funasr_nano_language("auto"), None);
+        assert!(!AsrKind::Paraformer.uses_language() && AsrKind::SenseVoice.uses_language());
     }
 }

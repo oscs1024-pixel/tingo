@@ -214,3 +214,111 @@ def test_only_final_call_reports_thinking(monkeypatch):
     sm.summarize(_tr(40), LLMConfig(api_key="x"), max_chars=100, on_think=seen.append)
     assert all(c is None for c in calls[:-1]) and calls[-1] is not None
     assert seen == [7]
+
+
+def _en_tr(n=2):
+    return Transcript(
+        source="m.wav",
+        duration_ms=120_000,
+        sentences=[Sentence(i % 2, i * 1000, i * 1000 + 900, f"Sentence number {i}.") for i in range(n)],
+    )
+
+
+def _capture(monkeypatch, reply):
+    calls = []
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None, **kw):
+        calls.append((prompt, kw))
+        return reply(prompt) if callable(reply) else reply
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    return calls
+
+
+def test_english_minutes_template_and_meta(monkeypatch):
+    calls = _capture(monkeypatch, "```markdown\n# Weekly sync\n\n## Summary\nGood.\n```")
+    tr = _en_tr()
+    tr.rename(["Lin Zhou"])
+    out = sm.summarize(tr, LLMConfig(api_key="x"), meeting_date=date(2026, 10, 28))
+    assert out.startswith(
+        "# Weekly sync\n\n- Date: 2026-10-28 (Wednesday)\n- Duration: 02:00\n- Participants: Lin Zhou, Speaker 2\n\n"
+        "## Summary"
+    )
+    prompt, kw = calls[0]
+    assert kw == {"system": sm.SYSTEM_EN}
+    for heading in (
+        "# <a short title>",
+        "## Summary",
+        "## Discussion\n### 1. <topic>",
+        "## Decisions",
+        "## Action Items\n| Item | Owner | Due | Source |\n|---|---|---|---|",
+        "## Open Questions & Risks",
+        '## Root Cause Analysis\n```fishbone\n{"problem":',
+    ):
+        assert heading in prompt
+    assert "Meeting date: 2026-10-28 (Wednesday)" in prompt
+    assert "- Next week: Mon Nov 2, Tue Nov 3, Wed Nov 4" in prompt
+    assert "[00:01] Speaker 2: Sentence number 1." in prompt  # 没命名的说话人在英文提示词里叫 Speaker N
+    assert "translating" not in prompt  # 转写本来就是英文
+    assert tr.name_of(1) == "说话人2"  # 存的数据不变
+
+
+def test_english_meta_without_title_or_speakers(monkeypatch):
+    _capture(monkeypatch, "## Summary\nNothing.")
+    out = sm.summarize(
+        Transcript("m.wav", 0, []), LLMConfig(api_key="x"), meeting_date=date(2026, 11, 1), language="en"
+    )
+    assert out.startswith("# Meeting Minutes\n\n- Date: 2026-11-01 (Sunday)\n- Duration: 00:00\n- Participants: None\n")
+
+
+def test_language_setting_and_translation_note(monkeypatch):
+    calls = _capture(monkeypatch, "# T")
+    # 中文转写、纪要选英文：英文模板，并要求翻译
+    sm.summarize(_tr(), LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2), language="en")
+    prompt, kw = calls[-1]
+    assert prompt.startswith(sm.TRANSLATE_TO_EN + "\n\n") and "## Action Items" in prompt
+    assert "write the minutes in English, translating as needed" in prompt and kw == {"system": sm.SYSTEM_EN}
+    assert "[00:01] Speaker 2: 第1句话。" in prompt
+    # 英文转写、纪要选中文：中文模板，并要求翻译
+    sm.summarize(_en_tr(), LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2), language="zh")
+    prompt, kw = calls[-1]
+    assert prompt.startswith(sm.TRANSLATE_TO_ZH + "\n\n") and "## 待办" in prompt and kw == {}
+    # auto：跟转写的语言，不加翻译要求；中文提示词与原来逐字相同
+    sm.summarize(_tr(), LLMConfig(api_key="x"), meeting_date=date(2026, 11, 2))
+    prompt, kw = calls[-1]
+    assert kw == {} and prompt.startswith("下面是一场会议的语音转写")
+
+
+def test_resolve_language():
+    assert sm.resolve_language("auto", _tr()) == "zh"
+    assert sm.resolve_language("auto", _en_tr()) == "en"
+    assert sm.resolve_language("en", _tr()) == "en" and sm.resolve_language("zh", _en_tr()) == "zh"
+    # 判断语言只看发言内容，不看"说话人N"这样的默认名
+    short = Transcript("m.wav", 1000, [Sentence(i, i, i + 1, "OK") for i in range(5)])
+    assert sm.resolve_language("auto", short) == "en"
+
+
+def test_english_map_reduce_prompts_and_stages(monkeypatch):
+    from tingo import i18n
+
+    calls = _capture(monkeypatch, lambda p: "# Merged" if "Notes by part" in p else "- point")
+    i18n.set_lang("en")  # 进度文字按界面语言
+    stages = []
+    out = sm.summarize(_en_tr(40), LLMConfig(api_key="x"), max_chars=200, on_stage=stages.append)
+    assert stages[0] == f"Summarizing part 1/{len(calls) - 1}" and stages[-1] == "Merging into minutes"
+    first, last = calls[0][0], calls[-1][0]
+    assert first.startswith("Below is one part of the transcript of a long meeting (part 1/")
+    assert "Notes by part:\n### Part 1\n- point" in last and "## Action Items" in last and "Transcript:" not in last
+    assert all(kw == {"system": sm.SYSTEM_EN} for _, kw in calls)
+    assert out.startswith("# Merged\n\n- Date:")
+    i18n.set_lang("zh")
+    stages.clear()
+    sm.summarize(_en_tr(40), LLMConfig(api_key="x"), max_chars=200, on_stage=stages.append)
+    assert stages[0].startswith("分段提炼 1/") and stages[-1] == "合并成纪要"
+
+
+def test_calendar_hint_en():
+    hint = sm.calendar_hint_en(date(2026, 10, 28))
+    assert hint.splitlines()[1] == "- Today Oct 28 (Wednesday), tomorrow Oct 29, the day after tomorrow Oct 30"
+    assert "- This week: Mon Oct 26, Tue Oct 27, Wed Oct 28, Thu Oct 29, Fri Oct 30, Sat Oct 31, Sun Nov 1" in hint
+    assert "- The week after next: Mon Nov 9," in hint
