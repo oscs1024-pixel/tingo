@@ -156,6 +156,10 @@ class ConfigRequest(BaseModel):
     obsidian: ObsidianRequest | None = None  # None 表示不改
 
 
+class PdfRequest(BaseModel):
+    html: str
+
+
 class OpenRequest(BaseModel):
     open: bool = False
 
@@ -535,6 +539,24 @@ def create_app(root: Path | None = None) -> FastAPI:
             paths.append(str(p))
         _open(paths[0], reveal=True)
         return {"ok": True, "paths": paths}
+
+    @app.post("/api/meetings/{meeting_id}/pdf")
+    def post_pdf(meeting_id: str, req: PdfRequest) -> dict:
+        """导出 PDF：界面排好版的 HTML 交给录音组件，用系统 WebKit 转成 A4 PDF，存进会议文件夹并在访达里选中。"""
+        from . import obsidian, record
+
+        path = folder(meeting_id)
+        if not (path / MINUTES).exists():
+            raise HTTPException(400, "还没有纪要")
+        minutes = (path / MINUTES).read_text(encoding="utf-8")
+        title = meetings.minutes_title(minutes) or (meeting_id.split("_", 2)[-1] or meeting_id)
+        out = path / f"{obsidian.safe_name(title)}.pdf"
+        try:
+            record.html_to_pdf(req.html, out)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(500, str(e)) from e
+        _open(str(out), reveal=True)
+        return {"ok": True, "path": str(out)}
 
     @app.get("/api/obsidian/vaults")
     def obsidian_vaults() -> list[dict]:

@@ -15,6 +15,22 @@ BIN_DIR = Path.home() / ".cache" / "tingo"
 RECORDER_BIN = BIN_DIR / "tingo-recorder"
 
 
+def html_to_pdf(html: str, out: Path) -> None:
+    """HTML → PDF：交给录音组件用系统 WebKit 排版（A4 分页）。"""
+    import tempfile
+
+    binary = ensure_recorder()
+    with tempfile.TemporaryDirectory(prefix="tingo-pdf-") as tmp:
+        src = Path(tmp) / "minutes.html"
+        src.write_text(html, encoding="utf-8")
+        res = subprocess.run(
+            [str(binary), "pdf", str(src), str(out)], check=False, capture_output=True, text=True, timeout=60
+        )
+    if res.returncode != 0 or not out.exists():
+        err = next((line[7:] for line in res.stdout.splitlines() if line.startswith("ERROR: ")), "导出 PDF 失败")
+        raise RuntimeError(err)
+
+
 def system_audio_supported() -> bool:
     if platform.system() != "Darwin":
         return False

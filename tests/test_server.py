@@ -452,3 +452,27 @@ def test_summarize_auto_syncs_to_obsidian(client, root, tmp_path, monkeypatch):
     client.post("/api/job/dismiss")
     client.post("/api/meetings/2026-11-02_1430_周会/summarize")
     assert wait_job(client)["notice"] == ""
+
+
+def test_pdf_export(client, root, opened, monkeypatch):
+    from tingo import record
+
+    mid = "2026-11-02_1430_周会"
+    calls = []
+
+    def fake(html, out):
+        calls.append(html)
+        out.write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(record, "html_to_pdf", fake)
+    (root / mid / "纪要.md").write_text("# 周会：发布/排期\n\n## 一句话总结\n定了")
+    d = client.post(f"/api/meetings/{mid}/pdf", json={"html": "<p>纪要</p>"}).json()
+    assert d["path"].endswith("/周会：发布 排期.pdf") and calls == ["<p>纪要</p>"]
+    assert opened == [(d["path"], True)]
+
+    def broken(html, out):
+        raise RuntimeError("排版超时")
+
+    monkeypatch.setattr(record, "html_to_pdf", broken)
+    r = client.post(f"/api/meetings/{mid}/pdf", json={"html": "<p></p>"})
+    assert r.status_code == 500 and r.json()["detail"] == "排版超时"

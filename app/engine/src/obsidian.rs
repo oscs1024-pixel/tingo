@@ -32,7 +32,7 @@ pub fn vaults() -> Vec<(String, String)> {
 }
 
 /// 文件名里不能出现的字符（Obsidian 链接也不认 # ^ [ ] |）
-fn safe_name(s: &str) -> String {
+pub fn safe_name(s: &str) -> String {
     let s: String = s
         .chars()
         .map(|c| if "/\\:*?\"<>|#^[]".contains(c) || c.is_control() { ' ' } else { c })

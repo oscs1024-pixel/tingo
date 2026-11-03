@@ -729,6 +729,31 @@ async fn post_excalidraw(State(s): State<Shared>, UrlPath(id): UrlPath<String>) 
     Ok(Json(json!({"ok": true, "paths": paths})))
 }
 
+#[derive(Deserialize)]
+struct PdfReq {
+    html: String,
+}
+
+/// 导出 PDF：界面排好版的 HTML 交给录音组件，用系统 WebKit 转成 A4 PDF，存进会议文件夹并在访达里选中
+async fn post_pdf(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(r): Json<PdfReq>,
+) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad("还没有纪要"))?;
+    let title = meetings::minutes_title(&minutes).unwrap_or_else(|| id.splitn(3, '_').nth(2).unwrap_or(&id).to_string());
+    let out = dir.join(format!("{}.pdf", obsidian::safe_name(&title)));
+    let bin = s.opt.recorder_bin.clone();
+    let target = out.clone();
+    tokio::task::spawn_blocking(move || record::html_to_pdf(&bin, &r.html, &target))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&out).spawn();
+    Ok(Json(json!({"ok": true, "path": out})))
+}
+
 async fn reveal(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
     let _ = std::process::Command::new("/usr/bin/open").arg(dir).spawn();
@@ -1092,6 +1117,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/meetings/{id}/reveal", post(reveal))
         .route("/api/meetings/{id}/obsidian", post(post_obsidian))
         .route("/api/meetings/{id}/excalidraw", post(post_excalidraw))
+        .route("/api/meetings/{id}/pdf", post(post_pdf))
         .route("/api/obsidian/vaults", get(obsidian_vaults))
         .route("/api/record/start", post(record_start))
         .route("/api/record/stop", post(record_stop))

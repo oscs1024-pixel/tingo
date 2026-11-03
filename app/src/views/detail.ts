@@ -4,6 +4,7 @@ import { api, type Job, type MeetingDetail, meetingPath, url } from "../api";
 import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial, main, openModal, toast, tsToMs } from "../dom";
 import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
+import { minutesDocument } from "../pdf";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
 import { isBusy, jobOf, minutesProgress, progressOf, S, SECTIONS } from "../state";
@@ -43,7 +44,16 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
       <div class="detail-head">
         <h1>${esc(d.title)}</h1>
         <div class="detail-actions">
-          ${d.minutes ? `<button class="btn" id="aCopy">${ICON.copy}复制纪要</button><button class="btn" id="aPush">${ICON.send}推送到群</button><button class="btn" id="aObsidian" title="存进 Obsidian 库并打开（在设置里选库）">${ICON.vault}Obsidian</button>` : ""}
+          ${
+            d.minutes
+              ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}导出${ICON.chevron}</button>
+                  <div class="menu" id="exportMenu" hidden>
+                    <button data-act="pdf">${ICON.file}<span><b>导出 PDF</b><small>A4 排版，存进会议文件夹</small></span></button>
+                    <button data-act="obsidian">${ICON.vault}<span><b>存到 Obsidian</b><small>存进笔记库并打开</small></span></button>
+                    <button data-act="copy">${ICON.copy}<span><b>复制为 Markdown</b><small>粘贴到文档、邮件里</small></span></button>
+                  </div></div><button class="btn" id="aPush">${ICON.send}推送到群</button>`
+              : ""
+          }
           ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? "重新生成" : "生成纪要"}</button>` : ""}
           <button class="btn ghost" id="aFolder" title="打开文件夹">${ICON.folder}</button>
         </div>
@@ -92,9 +102,8 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
     const el = $maybe(sel);
     if (el) el.onclick = fn;
   };
-  on("#aCopy", () => copyText(fishboneToText(d.minutes)));
   on("#aPush", pushMinutes);
-  on("#aObsidian", toObsidian);
+  bindExportMenu(d);
   on("#aRegen", regenerate);
   on("#aRename", renameSpeakers);
   on("#aEdit", editMinutes);
@@ -281,6 +290,42 @@ async function pushMinutes(): Promise<void> {
   if (!S.detail) return;
   try {
     toast((await api<{ message: string }>(meetingPath(S.detail.id, "/push"), { method: "POST" })).message);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
+function bindExportMenu(d: MeetingDetail): void {
+  const btn = $maybe("#aExport");
+  const menu = $maybe("#exportMenu");
+  if (!btn || !menu) return;
+  const close = () => {
+    menu.hidden = true;
+    document.removeEventListener("mousedown", outside);
+  };
+  const outside = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
+  };
+  btn.onclick = () => {
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) document.addEventListener("mousedown", outside);
+  };
+  $$<HTMLButtonElement>("button", menu).forEach(
+    (b) =>
+      (b.onclick = () => {
+        close();
+        if (b.dataset.act === "pdf") toPdf(d);
+        else if (b.dataset.act === "obsidian") toObsidian();
+        else copyText(fishboneToText(d.minutes));
+      }),
+  );
+}
+
+async function toPdf(d: MeetingDetail): Promise<void> {
+  toast("正在排版 PDF…");
+  try {
+    const r = await api<{ path: string }>(meetingPath(d.id, "/pdf"), { json: { html: minutesDocument(d) } });
+    toast(`已导出 ${r.path.split("/").pop()}，已在访达中选中`);
   } catch (e) {
     toast(errorMessage(e), true);
   }

@@ -113,6 +113,24 @@ impl Drop for Recorder {
 }
 
 /// 任意音视频 → 16 kHz 单声道样本（经录音组件里的 AVFoundation 解码）。
+/// HTML → PDF：交给录音组件用系统 WebKit 排版（A4 分页）。
+pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join(format!("tingo-pdf-{}-{}.html", std::process::id(), rand_suffix()));
+    std::fs::write(&tmp, html).map_err(|e| e.to_string())?;
+    let res = Command::new(bin).arg("pdf").arg(&tmp).arg(out).output();
+    let _ = std::fs::remove_file(&tmp);
+    let res = res.map_err(|e| format!("启动排版失败：{e}"))?;
+    if res.status.success() && out.is_file() {
+        return Ok(());
+    }
+    let msg = String::from_utf8_lossy(&res.stdout);
+    Err(msg
+        .lines()
+        .find_map(|l| l.strip_prefix("ERROR: "))
+        .unwrap_or("导出 PDF 失败")
+        .to_string())
+}
+
 pub fn decode(bin: &Path, input: &Path) -> Result<Vec<f32>, String> {
     if input
         .extension()

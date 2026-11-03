@@ -5,10 +5,14 @@
 //   向 stdout 打印一行状态：READY 表示已开始录音，ERROR: … 表示失败。
 // 解码：tingo-recorder decode <输入文件> <输出.wav>
 //   用系统的 AVFoundation 解码 m4a/mp3/wav/aac/flac/mp4/mov 等，输出 16 kHz 单声道 16 位 wav；成功打印 OK。
+// 导出 PDF：tingo-recorder pdf <输入.html> <输出.pdf>
+//   用系统的 WebKit 排版，A4 分页；成功打印 OK。
 
+import AppKit
 import AVFoundation
 import Foundation
 import ScreenCaptureKit
+import WebKit
 
 final class Track {
     let url: URL
@@ -177,8 +181,74 @@ func decode(_ input: String, _ output: String) -> Never {
     exit(0)
 }
 
+/// HTML → PDF：WKWebView 加载完后走系统打印，打印目标设成文件。打印要求视图在窗口里，所以放进一个不显示的窗口。
+final class PDFExporter: NSObject, WKNavigationDelegate {
+    let web: WKWebView
+    let window: NSWindow
+    let output: URL
+
+    init(output: URL) {
+        self.output = output
+        let frame = NSRect(x: 0, y: 0, width: 660, height: 934) // A4 可打印宽度 495pt ≈ 660px，CSS 像素按 0.75pt 落到纸上
+        web = WKWebView(frame: frame)
+        window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        super.init()
+        window.contentView = web
+        web.navigationDelegate = self
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // 等字体和布局稳定
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.print() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        fail("排版失败：\(error.localizedDescription)")
+    }
+
+    func print() {
+        let info = NSPrintInfo()
+        info.paperSize = NSSize(width: 595.28, height: 841.89) // A4，单位 pt
+        info.topMargin = 46
+        info.bottomMargin = 46
+        info.leftMargin = 50
+        info.rightMargin = 50
+        info.horizontalPagination = .fit
+        info.verticalPagination = .automatic
+        info.isHorizontallyCentered = false
+        info.isVerticallyCentered = false
+        info.jobDisposition = .save
+        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = output
+        let op = web.printOperation(with: info)
+        op.showsPrintPanel = false
+        op.showsProgressPanel = false
+        op.view?.frame = web.bounds // 不设的话 WebKit 打出来是空白页
+        op.runModal(for: window, delegate: self, didRun: #selector(done(_:success:contextInfo:)), contextInfo: nil)
+    }
+
+    @objc func done(_ op: NSPrintOperation, success: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        if success && FileManager.default.fileExists(atPath: output.path) {
+            Swift.print("OK")
+            exit(0)
+        }
+        fail("导出 PDF 失败")
+    }
+}
+
+func exportPDF(_ input: String, _ output: String) -> Never {
+    guard let html = try? String(contentsOfFile: input, encoding: .utf8) else { fail("读不了 \(input)") }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.prohibited) // 不出现在 Dock
+    let exporter = PDFExporter(output: URL(fileURLWithPath: output).absoluteURL)
+    exporter.web.loadHTMLString(html, baseURL: URL(fileURLWithPath: input).deletingLastPathComponent())
+    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { fail("排版超时") }
+    withExtendedLifetime(exporter) { app.run() }
+    exit(1)
+}
+
 let args = CommandLine.arguments
 if args.count >= 4 && args[1] == "decode" { decode(args[2], args[3]) }
+if args.count >= 4 && args[1] == "pdf" { exportPDF(args[2], args[3]) }
 guard args.count >= 2 else { fail("用法：tingo-recorder <输出目录> [--no-mic] [--no-system]，或 tingo-recorder decode <输入> <输出.wav>") }
 let outDir = URL(fileURLWithPath: args[1])
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)

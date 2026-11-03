@@ -1,0 +1,296 @@
+(function(){let e=document.createElement(`link`).relList;if(e&&e.supports&&e.supports(`modulepreload`))return;for(let e of document.querySelectorAll(`link[rel="modulepreload"]`))n(e);new MutationObserver(e=>{for(let t of e)if(t.type===`childList`)for(let e of t.addedNodes)e.tagName===`LINK`&&e.rel===`modulepreload`&&n(e)}).observe(document,{childList:!0,subtree:!0});function t(e){let t={};return e.integrity&&(t.integrity=e.integrity),e.referrerPolicy&&(t.referrerPolicy=e.referrerPolicy),t.credentials=e.crossOrigin===`use-credentials`?`include`:e.crossOrigin===`anonymous`?`omit`:`same-origin`,t}function n(e){if(e.ep)return;e.ep=!0;let n=t(e);fetch(e.href,n)}})();var e=`modulepreload`,t=function(e){return`/`+e},n={},r=function(e){return e.pathname.endsWith(`.css`)},i=function(e,t,n){if(t in e)return e[t];let r=n();if(!r){e[t]=void 0;return}let i=r.then(()=>{e[t]=void 0},n=>{throw e[t]=void 0,n});return e[t]=i,i},a=function(a,o,s){let c=Promise.resolve();if(o&&o.length>0){let a,l=document.querySelector(`meta[property=csp-nonce]`),u=l?.nonce||l?.getAttribute(`nonce`);function d(e){return Promise.all(e.map(e=>Promise.resolve(e).then(e=>({status:`fulfilled`,value:e}),e=>({status:`rejected`,reason:e}))))}function f(e){return import.meta.resolve?new URL(import.meta.resolve(e)):new URL(e,import.meta.url)}c=d(o.map(o=>{o=t(o,s);let c=f(o),l=r(c);return i(n,c.href,()=>{if(a===void 0){a={all:new Set,styles:new Set};let e=document.getElementsByTagName(`link`);for(let t=e.length-1;t>=0;t--){let n=e[t];a.all.add(n.href),n.rel===`stylesheet`&&a.styles.add(n.href)}}if((l?a.styles:a.all).has(c.href))return;let t=document.createElement(`link`);if(t.rel=l?`stylesheet`:e,l||(t.as=`script`),t.crossOrigin=``,t.href=c.href,u&&t.setAttribute(`nonce`,u),document.head.appendChild(t),l)return new Promise((e,n)=>{t.addEventListener(`load`,e),t.addEventListener(`error`,()=>n(Error(`Unable to preload CSS for ${c}`)))})})}).filter(e=>e!==void 0))}function l(e){let t=new Event(`vite:preloadError`,{cancelable:!0});if(t.payload=e,window.dispatchEvent(t),!t.defaultPrevented)throw e}return c.then(e=>{for(let t of e||[])t.status===`rejected`&&l(t.reason);return a().catch(l)})},o=``;async function s(){if(`__TAURI_INTERNALS__`in window){let{invoke:e}=await a(async()=>{let{invoke:e}=await import(`./core-CwxXejkd.js`);return{invoke:e}},[]);o=await e(`backend_url`)}}var c=e=>o+e;async function l(e,t={}){let{json:n,...r}=t;n!==void 0&&(r.method=r.method||`POST`,r.headers={"Content-Type":`application/json`},r.body=JSON.stringify(n));let i=await fetch(c(e),r),a=await i.json().catch(()=>({}));if(!i.ok)throw Error(typeof a.detail==`string`?a.detail:`请求失败（${i.status}）`);return a}var u=(e,t=``)=>`/api/meetings/${encodeURIComponent(e)}${t}`;function d(e,t=document){let n=t.querySelector(e);if(!n)throw Error(`页面上找不到 ${e}`);return n}function f(e,t=document){return t.querySelector(e)}function p(e,t=document){return[...t.querySelectorAll(e)]}var m=()=>d(`#main`),h={"&":`&amp;`,"<":`&lt;`,">":`&gt;`,'"':`&quot;`,"'":`&#39;`},g=e=>String(e??``).replace(/[&<>"']/g,e=>h[e]);function _(e){let t=Math.max(0,Math.floor(e/1e3)),n=Math.floor(t/3600),r=String(Math.floor(t%3600/60)).padStart(2,`0`),i=String(t%60).padStart(2,`0`);return n?`${n}:${r}:${i}`:`${r}:${i}`}function v(e){let t=e.split(`:`).map(Number);return(t.length===3?t[0]*3600+t[1]*60+t[2]:t[0]*60+t[1])*1e3}var y=[`#1F4BFF`,`#12B3A8`,`#F79009`,`#E04F9C`,`#7A5AF8`,`#0BA5EC`,`#66C61C`,`#EF6820`],b=e=>y[e%y.length];function x(e){let t=/^说话人(\d+)$/.exec(e);return t?t[1]:[...e][0]||`?`}var S={chevron:`<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>`,back:`<svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>`,monitor:`<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/></svg>`,mic:`<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>`,upload:`<svg viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>`,download:`<svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>`,file:`<svg viewBox="0 0 24 24"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5M9 13h6M9 16.5h4"/></svg>`,spark:`<svg viewBox="0 0 24 24"><path d="M12 3.5c.6 3.8 2.7 5.9 6.5 6.5-3.8.6-5.9 2.7-6.5 6.5-.6-3.8-2.7-5.9-6.5-6.5 3.8-.6 5.9-2.7 6.5-6.5z"/><path d="M18.5 16.5c.25 1.4 1 2.15 2.5 2.5-1.5.35-2.25 1.1-2.5 2.5-.25-1.4-1-2.15-2.5-2.5 1.5-.35 2.25-1.1 2.5-2.5z"/></svg>`,send:`<svg viewBox="0 0 24 24"><path d="M20.5 3.5 10 14M20.5 3.5 14 20.5l-4-6.5-6.5-4z"/></svg>`,copy:`<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`,folder:`<svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>`,redo:`<svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></svg>`,edit:`<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/></svg>`,search:`<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>`,play:`<svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>`,pause:`<svg viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>`,people:`<svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.6a3.2 3.2 0 0 1 0 5.8M18 13.8c1.6.8 2.6 2.6 2.6 5.2"/></svg>`,vault:`<svg viewBox="0 0 24 24"><path d="M9.5 3 17 6.5l2 8.5-6 6.5-6.5-4L5 9.5z"/><path d="M9.5 3 12 13.5l7 1.5M12 13.5l-5.5 4"/></svg>`,draw:`<svg viewBox="0 0 24 24"><path d="M3.5 19.5c2.5-.5 3.5-3 6-3s3 2.5 5.5 2"/><path d="M14 5.5 18.5 10M16 3.5a2.1 2.1 0 0 1 3 3L10 15.5H7v-3z"/></svg>`,bot:`<svg viewBox="0 0 24 24"><path d="M6 4.5h12A2.5 2.5 0 0 1 20.5 7v7.5A2.5 2.5 0 0 1 18 17h-6.5l-4.5 3.5V17H6a2.5 2.5 0 0 1-2.5-2.5V7A2.5 2.5 0 0 1 6 4.5z"/><path d="M12 7.6c.35 1.65 1.25 2.55 2.9 2.9-1.65.35-2.55 1.25-2.9 2.9-.35-1.65-1.25-2.55-2.9-2.9 1.65-.35 2.55-1.25 2.9-2.9z"/></svg>`},ee;function C(e,t=!1){let n=d(`#toast`);n.textContent=e,n.classList.toggle(`error`,t),n.classList.add(`show`),window.clearTimeout(ee),ee=window.setTimeout(()=>n.classList.remove(`show`),t?4200:2400)}var w=e=>e instanceof Error?e.message:String(e);function te(e){d(`#modalBody`).innerHTML=e,d(`#modal`).hidden=!1,p(`[data-close]`,d(`#modal`)).forEach(e=>e.onclick=T),f(`#modalBody input`)?.focus()}function T(){d(`#modal`).hidden=!0}function ne(){d(`#modal`).addEventListener(`mousedown`,e=>{e.target.id===`modal`&&T()}),document.addEventListener(`keydown`,e=>{e.key===`Escape`&&T()})}var E={env:null,meetings:[],job:{state:`idle`},jobs:[],form:{title:``,system:!0,mic:!0,hotwords:``},detail:null},re=new Set([`recording`,`saving`,`finalizing`,`loading`,`transcribing`,`summarizing`,`downloading`]),D=e=>!!e&&re.has(e.state),ie={saving:`正在保存`,finalizing:`转写最后一段`,loading:`加载识别模型`,transcribing:`正在转写`,summarizing:`正在生成纪要`,downloading:`下载识别模型`},O=()=>!!E.env?.models_downloadable&&!E.env.model_cached,ae=e=>ie[e]||`处理中`,oe=e=>E.jobs.find(t=>t.meeting===e&&t.kind!==`models`&&D(t));function k(e){return e.kind===`models`?`下载识别模型${e.meeting&&e.meeting!==`paraformer`?` · ${e.meeting}`:``}`:(e.meeting??``).replace(/^\d{4}-\d{2}-\d{2}_\d{4}_/,``)||`会议`}var A=[`一句话总结`,`议题与讨论`,`决议`,`待办`,`待定问题与风险`];function j(e){let t=e.minutes??``,n=-1;for(let e of t.matchAll(/^##\s+(.+)$/gm)){let t=A.findIndex(t=>e[1].startsWith(t));t>n&&(n=t)}let r=[...t.replace(/\s/g,``)].length,i=.02+.2*(1-Math.exp(-(e.elapsed??0)/60)),a=n<0?i:Math.min(.97,.22+.75*(n+.5)/A.length),o=/分段提炼\s*(\d+)\/(\d+)/.exec(e.stage??``);if(o){let[e,t]=[Number(o[1]),Number(o[2])];return{value:.65*(e-1)/t+.02,section:-1,chars:0,chunk:[e,t]}}return(e.stage??``).includes(`合并`)?{value:.65+.35*a,section:n,chars:r,merging:!0}:{value:a,section:n,chars:r}}function se(e){if(e.state===`done`)return 1;let t=e=>{let t=/([\d.]+)%/.exec(e??``);return t?Number(t[1])/100:0};if(e.kind===`models`){let t=/([\d.]+)\s*\/\s*([\d.]+)/.exec(e.stage??``);return t?Number(t[1])/Number(t[2]):0}if(e.kind===`summarize`)return j(e).value;let n=e.kind===`record`;switch(e.state){case`saving`:return .03;case`finalizing`:return n?.15:.05;case`loading`:return .06;case`transcribing`:return .08+.42*t(e.stage);case`summarizing`:return(n?.3:.5)+(n?.7:.5)*j(e).value;default:return 0}}function ce(e){if(e.state===`error`)return e.error||`没有完成`;if(e.state===`done`)return e.kind===`models`?`下载完成`:`纪要已生成`;if(e.kind===`models`)return e.stage||`准备下载…`;if(e.state===`transcribing`)return`正在转写${e.stage?` ${e.stage}`:``}`;if(e.state===`summarizing`){let t=j(e);return t.chunk?`长会议分段提炼 ${t.chunk[0]}/${t.chunk[1]}`:t.section<0?t.merging?`合并成纪要…`:e.thinking?`大模型在思考 · ${e.thinking} 字`:`大模型在读转写…`:`在写「${A[t.section]}」· ${t.chars} 字`}return ae(e.state)}async function M(){try{E.meetings=await l(`/api/meetings`)}catch{E.meetings=[]}let e=decodeURIComponent(location.hash.slice(1));d(`#recentList`).innerHTML=E.meetings.length?E.meetings.slice(0,8).map(t=>`
+        <a href="#/m/${encodeURIComponent(t.id)}" data-id="${g(t.id)}" class="${e===`/m/`+t.id?`active`:``}">
+          <div class="r-title">${g(t.title)}</div>
+          <div class="r-date">${g(t.date.slice(5).replace(`-`,`/`))} ${g(t.time)}${t.duration?` · `+g(t.duration):``}</div>
+        </a>`).join(``):`<div class="r-empty">还没有会议</div>`}async function N(){try{E.env=await l(`/api/env`)}catch{return}let e=E.env,t=[[e.model_loaded||e.model_cached?``:`warn`,e.model_loaded?`识别模型已加载`:e.model_cached?`识别模型已就绪`:e.models_downloadable?`识别模型未下载`:`首次转写会下载模型`],[e.llm_ready?``:`bad`,e.llm_ready?e.llm_model:`未配置大模型`],[e.system_audio?``:`warn`,e.system_audio?`可录系统声音`:`仅能录麦克风`]];d(`#envBox`).innerHTML=t.map(([e,t])=>`<div class="env-row"><span class="env-dot ${e}"></span><span>${g(t)}</span></div>`).join(``)+`<div class="env-row" style="color:var(--muted-2)">v${g(e.version)}</div>`}var le=e=>e.state===`recording`?`#/`:e.kind===`models`?`#/settings/asr`:`#/m/${encodeURIComponent(e.meeting??``)}`;function ue(e,t){let n=D(e),r=e.state===`recording`,i=Math.round(se(e)*100),a=r?`<span class="live-dot"></span>`:n?`<span class="task-spin"></span>`:e.state===`done`?`<span class="task-ok">✓</span>`:`<span class="task-err">!</span>`,o=r?`录音中 ${_((e.elapsed??0)*1e3)}`:ce(e);return`
+    <a class="task ${e.state} ${t?`big`:``}" href="${le(e)}" data-id="${g(e.id??``)}">
+      <span class="task-ico">${a}</span>
+      <span class="task-main">
+        <span class="task-title">${g(k(e))}</span>
+        <span class="task-detail">${g(o)}</span>
+        ${n&&!r?`<span class="task-bar"><i style="width:${Math.max(3,i)}%"></i></span>`:``}
+      </span>
+      ${n&&!r&&t?`<span class="task-pct">${i}%</span>`:``}
+      ${!n&&e.id?`<button class="task-x" data-dismiss="${g(e.id)}" title="收起">×</button>`:``}
+    </a>`}async function P(e){E.jobs=E.jobs.filter(t=>t.id!==e),F(),await l(`/api/jobs/${encodeURIComponent(e)}/dismiss`,{method:`POST`}).catch(()=>{})}function de(e){e.querySelectorAll(`[data-dismiss]`).forEach(e=>e.onclick=t=>{t.preventDefault(),t.stopPropagation(),P(e.dataset.dismiss??``)})}function F(){let e=f(`#sideTasks`);if(e){let t=E.jobs.filter(e=>e.state!==`idle`);e.hidden=!t.length;let n=t.length?`<div class="recent-head">进行中</div>${t.map(e=>ue(e,!1)).join(``)}`:``;e.dataset.html!==n&&(e.dataset.html=n,e.innerHTML=n,de(e))}let t=f(`#homeTasks`);if(t){let e=E.jobs.filter(e=>e.state!==`recording`&&e.state!==`idle`&&(e.kind!==`models`||E.job!==e)),n=e.length?e.map(e=>ue(e,!0)).join(``):``;t.dataset.html!==n&&(t.dataset.html=n,t.innerHTML=n,de(t))}}var fe=20;function pe(e){try{let t=JSON.parse(e);return!t||typeof t.problem!=`string`||!Array.isArray(t.branches)?null:t}catch{return null}}function me(e,t){let n=new Set,r=[];for(let i of e??[]){let e=t(String(i).replace(/[[\]]/g,``).trim());e&&!n.has(e.ms)&&(n.add(e.ms),r.push(e))}r.sort((e,t)=>e.ms-t.ms);let i=r.reduce((e,t)=>e+[...t.text].length,0);return{quotes:r,chars:i,level:r.length?i<fe?`weak`:`ok`:`none`}}function he(e){if(e.level===`none`)return`<span class="fb-src none">无原文依据</span>`;let t=`引用 ${e.quotes.length} 段 · ${e.chars} 字`;return`<span class="fb-src ${e.level}">${e.level===`weak`?`依据很少 · `:``}${t}</span>`}function ge(e,t){let n=e.branches.filter(e=>e&&e.title),r=t?n.map(e=>me(e.refs,t)):null,i=r?r.reduce((e,t)=>e+t.quotes.length,0):0,a=r?r.filter(e=>e.level===`none`).length:0,o=r?`${n.length} 个分支 · 引用原话 ${i} 段${a?` · <b>${a} 个分支无原文依据</b>`:``}`:`${n.length} 个分支`,s=n.map((e,t)=>{let n=r?.[t],i=n?.quotes.length?`<div class="fb-quotes" hidden>${n.quotes.map(e=>`<div class="fb-quote"><button class="ts" data-ms="${e.ms}">${_(e.ms)}</button><span class="fb-who">${g(e.speaker)}</span>${g(e.text)}</div>`).join(``)}</div>`:``;return`
+      <div class="fb-branch ${n?`lv-${n.level}`:``} ${t%2?`right`:`left`}" ${n?.quotes.length?`role="button" tabindex="0"`:``}>
+        <div class="fb-title">${g(e.title)}</div>
+        ${e.detail?`<div class="fb-detail">${g(e.detail)}</div>`:``}
+        ${n?he(n):``}
+        ${i}
+      </div>`});return`
+    <div class="fishbone">
+      <div class="fb-head">
+        <svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2.5"/><path d="M7 7l9.5 4M7 17l9.5-4"/></svg>
+        <span class="fb-problem">${g(e.problem)}</span>
+        <button class="fb-draw" title="导出成 .excalidraw 文件，可以在 excalidraw.com 或 Obsidian 里继续改">在 Excalidraw 中编辑</button>
+        <span class="fb-kind">鱼骨图</span>
+      </div>
+      <div class="fb-summary">${o}</div>
+      <div class="fb-body">${s.join(``)}<div class="fb-spine"></div></div>
+    </div>`}function _e(e){return e.replace(/```fishbone\s*\n([\s\S]*?)\n```/g,(e,t)=>{let n=pe(t);return n?[`**${n.problem}**`,...n.branches.map(e=>{let t=(e.refs??[]).join(`、`);return`- ${e.title}${e.detail?`：${e.detail}`:``}${t?`（${t}）`:`（无原文依据）`}`})].join(`
+`):``})}function ve(e,t){return n=>{if(!/^\d{1,2}:\d{2}(:\d{2})?$/.test(n))return null;let r=v(n);if(r>t+1e3)return null;let i=-1;for(let t=0;t<e.length&&e[t].start_ms<=r+999;t++)i=t;if(i<0)return null;let a=e[i];return{ms:a.start_ms,speaker:a.speaker,text:a.text}}}var ye=String.raw`\d{1,2}:\d{2}(?::\d{2})?`;function I(e){return g(e).replace(/\*\*(.+?)\*\*/g,`<strong>$1</strong>`).replace(/`([^`]+)`/g,`<code>$1</code>`).replace(new RegExp(String.raw`\s*[（(]\s*\[(${ye})\]\s*[）)]`,`g`),`[$1]`).replace(new RegExp(String.raw`\[(${ye})\]`,`g`),(e,t)=>`<button class="ts" data-ms="${v(t)}">${t}</button>`)}var L=/^\s*([-*]|\d+\.)\s+/;function R(e,{skipHead:t=!1,resolve:n}={}){let r=e.replace(/\r/g,``).split(`
+`),i=[],a=0,o=!1;for(;a<r.length;){let e=r[a];if(!e.trim()){a++;continue}if(e.trim().startsWith("```")){let t=e.trim().slice(3).trim(),s=[];for(a++;a<r.length&&!r[a].trim().startsWith("```");)s.push(r[a++]);let c=a<r.length;if(a++,t===`fishbone`){let e=c?pe(s.join(`
+`)):null;i.push(e?ge(e,n):c?``:`<div class="fishbone pending">正在画鱼骨图…</div>`)}else i.push(`<pre><code>${g(s.join(`
+`))}</code></pre>`);o=!1;continue}let s=/^(#{1,3})\s+(.*)$/.exec(e);if(s){t&&s[1].length===1||i.push(`<h${s[1].length}>${I(s[2])}</h${s[1].length}>`),o=s[1].length===1,a++;continue}if(e.trim().startsWith(`|`)){let e=[];for(;a<r.length&&r[a].trim().startsWith(`|`);)e.push(r[a++]);let t=e=>e.trim().replace(/^\||\|$/g,``).split(`|`).map(e=>e.trim()),[n,...s]=e.filter((e,t)=>!(t===1&&/^[\s|:-]+$/.test(e)));i.push(`<table><thead><tr>${t(n).map(e=>`<th>${I(e)}</th>`).join(``)}</tr></thead><tbody>${s.map(e=>`<tr>${t(e).map(e=>`<td>${I(e)}</td>`).join(``)}</tr>`).join(``)}</tbody></table>`),o=!1;continue}if(L.test(e)){let n=/^\s*\d+\./.test(e),s=[];for(;a<r.length&&L.test(r[a]);)s.push(r[a++].replace(L,``));let c=o&&s.some(e=>e.startsWith(`日期：`)),l=n?`ol`:`ul`;t&&c||i.push(`<${l}>${s.map(e=>`<li>${I(e)}</li>`).join(``)}</${l}>`),o=!1;continue}let c=[];for(;a<r.length&&r[a].trim()&&!/^(#{1,3}\s|\s*\||\s*([-*]|\d+\.)\s|\s*```)/.test(r[a]);)c.push(r[a++]);i.push(`<p>${I(c.join(` `))}</p>`),o=!1}return i.join(`
+`)}var be=`
+@page { size: A4; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { margin: 0; font: 14px/1.8 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; color: #1d1d1f; }
+.head { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid #e9e9ed; margin-bottom: 22px; }
+.head svg { width: 22px; height: 22px; flex: none; }
+.head .brand { font-weight: 600; font-size: 13px; letter-spacing: .3px; }
+.head .brand small { font-weight: 500; color: #a3a7ad; margin-left: 6px; letter-spacing: 1px; }
+.head .grow { flex: 1; }
+.head .date { font-size: 11.5px; color: #a3a7ad; }
+h1.title { font-size: 25px; line-height: 1.35; margin: 0 0 10px; font-weight: 650; letter-spacing: -.2px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: #6b7076; margin-bottom: 26px; }
+.meta b { font-weight: 500; color: #1d1d1f; margin-left: 4px; }
+.md h2 { font-size: 16.5px; font-weight: 600; margin: 26px 0 8px; display: flex; align-items: center; gap: 8px; break-after: avoid; }
+.md h2::before { content: ""; width: 4px; height: 15px; border-radius: 2px; background: linear-gradient(180deg, #34c6f4, #1f4bff); }
+.md h3 { font-size: 14.5px; font-weight: 600; margin: 16px 0 4px; break-after: avoid; }
+.md p { margin: 5px 0; }
+.md ul, .md ol { margin: 5px 0; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md li::marker { color: #a3a7ad; }
+.md code { font: 12.5px ui-monospace, Menlo, monospace; background: #f2f2f5; padding: 1px 5px; border-radius: 5px; }
+.md table { width: calc(100% - 1px); border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+.md th { text-align: left; font-weight: 500; color: #6b7076; background: #f6f7f9; font-size: 12px; }
+.md th, .md td { padding: 7px 10px; border: 1px solid #e9e9ed; vertical-align: top; }
+.md tr { break-inside: avoid; }
+.ts { display: inline; border: none; background: #eef2ff; color: #1f4bff; font: 500 11px ui-monospace, Menlo, monospace; padding: 0 5px; border-radius: 5px; margin: 0 2px; vertical-align: 1px; }
+.fishbone { margin: 12px 0 4px; border: 1px solid #e9e9ed; border-radius: 12px; padding: 14px 16px; break-inside: avoid-page; }
+.fishbone.pending, .fb-draw { display: none; }
+.fb-head { display: flex; align-items: center; gap: 8px; }
+.fb-head svg { width: 16px; height: 16px; fill: none; stroke: #1f4bff; stroke-width: 1.8; flex: none; }
+.fb-problem { font-weight: 600; font-size: 14.5px; flex: 1; }
+.fb-kind { font-size: 10.5px; color: #6b7076; background: #f2f2f5; padding: 1px 8px; border-radius: 99px; }
+.fb-summary { margin: 2px 0 12px 24px; font-size: 11.5px; color: #6b7076; }
+.fb-summary b { color: #b42318; font-weight: 500; }
+.fb-body { position: relative; display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; row-gap: 8px; align-items: start; }
+.fb-spine { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 2px; margin-left: -1px; background: #dfe5f5; }
+.fb-branch { position: relative; background: #f6f7f9; border-radius: 9px; padding: 8px 10px; break-inside: avoid; }
+.fb-branch.right { margin-top: 14px; }
+.fb-branch::after { content: ""; position: absolute; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #1d1d1f; }
+.fb-branch.left::after { right: -16px; }
+.fb-branch.right::after { left: -16px; }
+.fb-branch.lv-none { background: #fff6f5; }
+.fb-branch.lv-none::after { background: #f04438; }
+.fb-title { font-weight: 600; font-size: 13px; line-height: 1.45; }
+.fb-detail { color: #6b7076; font-size: 12px; line-height: 1.5; margin-top: 1px; }
+.fb-src { display: inline-block; margin-top: 5px; font-size: 10.5px; padding: 0 7px; border-radius: 99px; background: #fff; color: #6b7076; border: 1px solid #e9e9ed; }
+.fb-src.weak { color: #b54708; background: #fffaeb; border-color: #fedf89; }
+.fb-src.none { color: #b42318; background: #fee4e2; border-color: #fecdca; }
+.fb-quotes, .fb-quotes[hidden] { display: grid !important; gap: 3px; margin-top: 6px; border-top: 1px dashed #d5dbe7; padding-top: 6px; }
+.fb-quote { font-size: 11px; line-height: 1.55; color: #3a3d42; }
+.fb-quote .ts { margin-left: 0; }
+.fb-who { color: #6b7076; margin-right: 5px; }
+.foot { margin-top: 34px; padding-top: 12px; border-top: 1px solid #e9e9ed; font-size: 11px; color: #a3a7ad; display: flex; justify-content: space-between; }
+`;function xe(e){let t=document.querySelector(`.brand-mark svg`)?.outerHTML??``,n=R(e.minutes,{skipHead:!0,resolve:ve(e.turns,e.duration?v(e.duration):1/0)}),r=e.speaker_list.map(e=>e.name).join(`、`),i=new Date,a=`${i.getFullYear()}-${String(i.getMonth()+1).padStart(2,`0`)}-${String(i.getDate()).padStart(2,`0`)}`;return`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${g(e.title)}</title><style>${be}</style></head><body>
+  <div class="head">${t}<span class="brand">Tingo<small>听过</small></span><span class="grow"></span><span class="date">会议纪要</span></div>
+  <h1 class="title">${g(e.title)}</h1>
+  <div class="meta">
+    <span>日期<b>${g(e.date)} ${g(e.time)}</b></span>
+    ${e.duration?`<span>时长<b>${g(e.duration)}</b></span>`:``}
+    ${r?`<span>参会人<b>${g(r)}</b></span>`:``}
+  </div>
+  <div class="md">${n}</div>
+  <div class="foot"><span>由 Tingo 听过 生成 · 录音在本机转写，每条结论后的时间戳对应录音里的原话</span><span>${a}</span></div>
+</body></html>`}var z=null,B=`minutes`;function Se(){z&&=(z.pause(),z.src=``,null)}var V=`<a class="back" href="#/meetings">${S.back}会议记录</a>`;async function H(e,t=!1){t||(B=`minutes`),m().innerHTML=`<div class="page">${V}</div>`;let n;try{n=await l(u(e))}catch(e){m().innerHTML=`<div class="page">${V}<div class="empty"><h3>打不开这场会议</h3><div>${g(w(e))}</div></div></div>`;return}if(decodeURIComponent(location.hash.slice(1))!==`/m/${e}`)return;E.detail=n;let r=oe(e);E.jobs.filter(t=>t.meeting===e&&t.kind!==`models`&&!D(t)&&t.id).forEach(e=>P(e.id)),m().innerHTML=`
+    <div class="page">
+      ${V}
+      <div class="detail-head">
+        <h1>${g(n.title)}</h1>
+        <div class="detail-actions">
+          ${n.minutes?`<div class="menu-wrap"><button class="btn" id="aExport">${S.download}导出${S.chevron}</button>
+                  <div class="menu" id="exportMenu" hidden>
+                    <button data-act="pdf">${S.file}<span><b>导出 PDF</b><small>A4 排版，存进会议文件夹</small></span></button>
+                    <button data-act="obsidian">${S.vault}<span><b>存到 Obsidian</b><small>存进笔记库并打开</small></span></button>
+                    <button data-act="copy">${S.copy}<span><b>复制为 Markdown</b><small>粘贴到文档、邮件里</small></span></button>
+                  </div></div><button class="btn" id="aPush">${S.send}推送到群</button>`:``}
+          ${n.has_transcript&&!r?`<button class="btn" id="aRegen">${S.redo}${n.minutes?`重新生成`:`生成纪要`}</button>`:``}
+          <button class="btn ghost" id="aFolder" title="打开文件夹">${S.folder}</button>
+        </div>
+      </div>
+      <div class="meta">
+        <span>${g(n.date)} ${g(n.time)}</span>
+        ${n.duration?`<span class="sep"></span><span>时长 ${g(n.duration)}</span>`:``}
+        ${n.speaker_list.length?`<span class="sep"></span>
+          <span class="speakers">${n.speaker_list.map(e=>`<span class="chip"><span class="dot" style="background:${b(e.index)}"></span>${g(e.name)}</span>`).join(``)}
+          <button class="btn" id="aRename">${S.people}改名</button></span>`:``}
+      </div>
+      ${n.has_transcript?`
+        <div class="tabs-row">
+          <div class="seg"><button data-tab="minutes">纪要</button><button data-tab="transcript">转写</button></div>
+          <span class="grow"></span>
+          <button class="btn ghost" id="aEdit" ${B===`minutes`&&n.minutes?``:`hidden`}>${S.edit}编辑</button>
+        </div>
+        <div class="card" id="pane"></div>`:`
+        ${r?`<div class="card doc" id="pane"></div>`:`<div class="card"><div class="empty"><h3>录音还没有转写</h3><div>可能是上次处理被打断了</div>
+          ${n.audio?`<button class="btn primary" id="aProcess">开始转写</button>`:``}</div></div>`}`}
+      ${n.audio?Ne:``}
+    </div>`,p(`.seg button`).forEach(e=>e.onclick=()=>{B=e.dataset.tab,U()});let i=(e,t)=>{let n=f(e);n&&(n.onclick=t)};i(`#aPush`,Te),Ee(n),i(`#aRegen`,K),i(`#aRename`,Me),i(`#aEdit`,je),i(`#aFolder`,()=>l(u(e,`/reveal`),{method:`POST`})),i(`#aProcess`,async()=>{try{let t=await l(u(e,`/process`),{method:`POST`});E.jobs=[...E.jobs.filter(e=>e.id!==t.id),t],H(e,!0),Q()}catch(e){C(w(e),!0)}}),n.audio&&Pe(e),n.has_transcript&&U(),r&&G(r,{state:`idle`})}function U(){let e=E.detail,t=f(`#pane`);if(!e||!t)return;p(`.seg button`).forEach(e=>e.classList.toggle(`on`,e.dataset.tab===B));let n=f(`#aEdit`);if(n&&(n.hidden=!(B===`minutes`&&e.minutes)||!!oe(e.id)),B===`minutes`){t.className=`card doc`,t.innerHTML=e.minutes?`<div class="md">${R(e.minutes,{skipHead:!0,resolve:ve(e.turns,e.duration?v(e.duration):1/0)})}</div>`:`<div class="minutes-empty">还没有纪要。<br><br><button class="btn primary" id="paneGen">${S.spark}生成纪要</button></div>`;let n=f(`#paneGen`);n&&(n.onclick=K)}else t.className=`card turns`,t.innerHTML=e.turns.map((e,t)=>`
+      <div class="turn" data-i="${t}" data-ms="${e.start_ms}">
+        <span class="av" style="background:${b(e.color)}">${g(x(e.speaker))}</span>
+        <div><div class="who">${g(e.speaker)}<button class="ts" data-ms="${e.start_ms}">${g(e.ts)}</button></div><div class="text">${g(e.text)}</div></div>
+      </div>`).join(``);p(`.ts`,t).forEach(e=>e.onclick=t=>{t.stopPropagation(),Fe(Number(e.dataset.ms))}),p(`.fb-draw`,t).forEach(e=>e.onclick=ke),p(`.fb-branch[role=button]`,t).forEach(e=>{let t=()=>{let t=f(`.fb-quotes`,e);t&&(t.hidden=!t.hidden,e.classList.toggle(`open`,!t.hidden))};e.onclick=t,e.onkeydown=e=>{(e.key===`Enter`||e.key===` `)&&(e.preventDefault(),t())}})}var Ce=()=>`
+  <div class="gen" id="genBox">
+    <div class="gen-head"><span class="live-dot"></span><b id="genTitle"></b><span class="grow"></span><span class="gen-meta" id="genMeta"></span></div>
+    <div class="gen-bar"><i id="genBar"></i></div>
+    <div class="gen-steps" id="genSteps"></div>
+    <div class="md gen-stream" id="genStream"></div>
+  </div>`;function W(e,t){return`<span class="gen-step ${t}">${t===`done`?`✓`:t===`now`?`<i></i>`:``}${g(e)}</span>`}function we(e){let t=e.state===`summarizing`,n=j(e),r=E.env?.llm_model??`大模型`;d(`#genTitle`).textContent=t?n.chunk?`会议较长，先分段提炼（${n.chunk[0]}/${n.chunk[1]}）`:n.merging?`把各段要点合并成纪要`:n.section<0?e.thinking?`${r} 正在思考`:`${r} 正在读转写`:`${r} 正在写纪要`:e.state===`transcribing`?`正在本地转写${e.stage?` · ${e.stage}`:``}`:e.state===`finalizing`?`转写最后一段，区分说话人`:e.state===`loading`?`加载识别模型`:`正在保存录音`;let i=Math.round(se(e)*100),a=_((e.elapsed??0)*1e3),o=t&&n.chars?` · 已写 ${n.chars} 字`:t&&e.thinking?` · 已思考 ${e.thinking} 字`:``;d(`#genMeta`).textContent=`用时 ${a}${o} · 约 ${i}%`,d(`#genBar`).style.width=`${Math.max(2,i)}%`;let s=[W(`转写`,t?`done`:`now`),W(`通读与思考`,t?n.section>=0?`done`:`now`:`todo`)];A.forEach((e,r)=>{let i=!t||n.chunk?`todo`:r<n.section?`done`:r===n.section?`now`:`todo`;s.push(W(e,i))});let c=s.join(`<span class="gen-arrow"></span>`),l=d(`#genSteps`);l.dataset.html!==c&&(l.dataset.html=c,l.innerHTML=c);let u=d(`#genStream`),f=t&&!n.chunk?e.minutes??``:``,p=`${e.state}:${f.length}:${f?0:e.thinking??0}`;u.dataset.key!==p&&(u.dataset.key=p,u.innerHTML=f?R(f)+`<span class="gen-caret"></span>`:`<p class="gen-wait">${t?n.chunk?`长会议分成几段，每段先提炼要点，最后合并成一份纪要。`:e.thinking?`大模型在动笔前先思考（已思考 ${e.thinking} 字），长会议这一步可能要一两分钟，开始写后内容会一节一节出现在这里。`:`大模型先通读整场转写，开始动笔后内容会一节一节出现在这里。`:`识别在这台电脑上进行，录音不会上传。转写完成后接着生成纪要，不用守着，可以去开下一场会。`}</p>`,m().scrollHeight-m().scrollTop-m().clientHeight<160&&f&&(m().scrollTop=m().scrollHeight))}function G(e,t){if(E.detail&&e.meeting===E.detail.id){if(D(e)){let t=f(`#pane`);if(!t)return;B=`minutes`,p(`.seg button`).forEach(e=>e.classList.toggle(`on`,e.dataset.tab===`minutes`)),t.className=`card doc`,f(`#genBox`)||(t.innerHTML=Ce());let n=f(`#aEdit`);n&&(n.hidden=!0),we(e)}else D(t)&&(e.state===`done`||e.state===`error`)&&(e.state===`done`?C(`纪要已生成`):C(e.error||`生成失败`,!0),e.id&&P(e.id),H(E.detail.id,!0))}}async function K(){if(E.detail)try{let e=await l(u(E.detail.id,`/summarize`),{method:`POST`});E.jobs=[...E.jobs.filter(t=>t.id!==e.id),e],G(e,{state:`idle`}),Q()}catch(e){C(w(e),!0)}}async function Te(){if(E.detail)try{C((await l(u(E.detail.id,`/push`),{method:`POST`})).message)}catch(e){C(w(e),!0)}}function Ee(e){let t=f(`#aExport`),n=f(`#exportMenu`);if(!t||!n)return;let r=()=>{n.hidden=!0,document.removeEventListener(`mousedown`,i)},i=e=>{!n.contains(e.target)&&!t.contains(e.target)&&r()};t.onclick=()=>{n.hidden=!n.hidden,n.hidden||document.addEventListener(`mousedown`,i)},p(`button`,n).forEach(t=>t.onclick=()=>{r(),t.dataset.act===`pdf`?De(e):t.dataset.act===`obsidian`?Oe():Ae(_e(e.minutes))})}async function De(e){C(`正在排版 PDF…`);try{C(`已导出 ${(await l(u(e.id,`/pdf`),{json:{html:xe(e)}})).path.split(`/`).pop()}，已在访达中选中`)}catch(e){C(w(e),!0)}}async function Oe(){if(E.detail)try{await l(u(E.detail.id,`/obsidian`),{json:{open:!0}}),C(`已存到 Obsidian`)}catch(e){C(w(e),!0)}}async function ke(){if(E.detail)try{await l(u(E.detail.id,`/excalidraw`),{method:`POST`}),C(`已导出鱼骨图.excalidraw，拖进 excalidraw.com 即可编辑`)}catch(e){C(w(e),!0)}}async function Ae(e){try{await navigator.clipboard.writeText(e)}catch{let t=document.createElement(`textarea`);t.value=e,document.body.appendChild(t),t.select(),document.execCommand(`copy`),t.remove()}C(`已复制纪要 Markdown`)}function je(){let e=E.detail;if(!e)return;let t=d(`#pane`);d(`#aEdit`).hidden=!0,t.className=`card doc`,t.innerHTML=`<textarea class="textarea" id="mdEdit" style="min-height:520px;font-size:14px">${g(e.minutes)}</textarea>
+    <div class="modal-foot"><button class="btn" id="mdCancel">取消</button><button class="btn primary" id="mdSave">保存</button></div>`,d(`#mdCancel`).onclick=U,d(`#mdSave`).onclick=async()=>{let t=d(`#mdEdit`).value;try{await l(u(e.id,`/minutes`),{method:`PUT`,json:{text:t}}),C(`已保存`),H(e.id,!0),M()}catch(e){C(w(e),!0)}}}function Me(){let e=E.detail;if(!e)return;te(`
+    <h3>给说话人改名</h3>
+    <p class="hint">按第一次发言的顺序排列。点转写里的时间戳可以回听确认是谁。</p>
+    ${e.speaker_list.map(e=>`<div class="sp-row"><span class="av" style="background:${b(e.index)}">${g(x(e.name))}</span><input class="input" data-i="${e.index}" value="${e.custom?g(e.name):``}" placeholder="${g(`说话人${e.index+1}`)}"></div>`).join(``)}
+    <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn" id="spSave">仅保存</button>${e.minutes?`<button class="btn primary" id="spRegen">保存并重新生成纪要</button>`:``}</div>`);let t=async t=>{let n=p(`#modalBody input`).map(e=>e.value.trim());try{E.detail=await l(u(e.id,`/speakers`),{method:`PUT`,json:{names:n}}),T(),await H(e.id,!0),M(),t?K():C(`已更新说话人`)}catch(e){C(w(e),!0)}};d(`#spSave`).onclick=()=>t(!1);let n=f(`#spRegen`);n&&(n.onclick=()=>t(!0))}var Ne=`
+  <div class="player" id="player">
+    <button class="play" id="pPlay" title="播放（空格）">${S.play}</button>
+    <span class="p-time" id="pTime">00:00 / --:--</span>
+    <div class="track" id="pTrack"><div class="rail"></div><div class="fill" id="pFill"></div><div class="knob" id="pKnob"></div></div>
+    <button class="speed" id="pSpeed">1×</button>
+    <span></span>
+  </div>`;function Pe(e){Se();let t=new Audio(c(u(e,`/audio`)));z=t,t.preload=`metadata`;let n=[1,1.25,1.5,2],r=0,i=()=>{if(z!==t)return;let e=t.duration||0,n=t.currentTime,r=e?n/e*100:0;d(`#pFill`).style.width=r+`%`,d(`#pKnob`).style.left=r+`%`,d(`#pTime`).textContent=`${_(n*1e3)} / ${e?_(e*1e3):`--:--`}`,d(`#pPlay`).innerHTML=t.paused?S.play:S.pause,Le(n*1e3)};t.ontimeupdate=i,t.onloadedmetadata=i,t.onplay=i,t.onpause=i,d(`#pPlay`).onclick=()=>t.paused?t.play():t.pause();let a=d(`#pSpeed`);a.onclick=()=>{r=(r+1)%n.length,t.playbackRate=n[r],a.textContent=n[r]+`×`},d(`#pTrack`).onclick=e=>{let n=e.currentTarget.getBoundingClientRect();t.duration&&(t.currentTime=(e.clientX-n.left)/n.width*t.duration)}}function Fe(e){if(!z)return C(`这场会议没有录音文件`,!0);z.currentTime=e/1e3,z.play()}var Ie=-1;function Le(e){let t=p(`.turn`);if(!t.length)return;let n=-1;for(let r of t)if(Number(r.dataset.ms)<=e+200)n=Number(r.dataset.i);else break;n!==Ie&&(Ie=n,t.forEach(e=>e.classList.toggle(`playing`,Number(e.dataset.i)===n&&!!z&&!z.paused)))}function Re(){document.addEventListener(`keydown`,e=>{let t=document.activeElement?.tagName??``;e.code===`Space`&&z&&!/INPUT|TEXTAREA/.test(t)&&(e.preventDefault(),z.paused?z.play():z.pause())})}var q={state:`idle`},ze=e=>e.state===`recording`?`recording`:e.kind===`models`&&D(e)?`downloading`:e.kind===`models`&&e.state===`error`?`error`:`idle`;function Be(){m().innerHTML=`
+    <div class="page">
+      <div class="hero-head">
+        <span class="hero-tag"><b></b>本地转写 · 录音不出本机</span>
+        <h1>开个会，纪要交给我</h1>
+        <p>录下会议，自动转写、区分说话人，整理出议题、决议和待办</p>
+      </div>
+      <section class="aurora" id="aurora">
+        <i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i><i class="blob b4"></i><i class="grain"></i>
+        <div class="glass-ring"><div class="glass" id="glass"></div></div>
+      </section>
+      <div class="home-tasks" id="homeTasks"></div>
+      <div class="quick">
+        <div class="quick-item" id="qImport"><span class="ico">${S.upload}</span><span><b>导入录音</b><small>拖进窗口，或点这里选文件</small></span>${S.chevron}</div>
+        <a class="quick-item" href="#/meetings"><span class="ico">${S.file}</span><span><b>会议记录</b><small id="qCount">查看全部会议</small></span>${S.chevron}</a>
+        <a class="quick-item" href="#/settings/llm"><span class="ico">${S.bot}</span><span><b>大模型</b><small id="qModel">设置纪要用的模型</small></span>${S.chevron}</a>
+        <a class="quick-item" href="#/settings/push"><span class="ico">${S.send}</span><span><b>推送到群</b><small>飞书 · 钉钉 · 企业微信</small></span>${S.chevron}</a>
+      </div>
+    </div>`,d(`#qImport`).onclick=()=>d(`#fileInput`).click(),E.meetings.length&&(d(`#qCount`).textContent=`共 ${E.meetings.length} 场会议`),E.env&&(d(`#qModel`).textContent=E.env.llm_ready?`当前：${E.env.llm_model}`:`还没有配置`),J(E.job,q,!0),F()}function J(e,t,n=!1){let r=f(`#glass`);if(!r)return;let i=d(`#aurora`),a=ze(e);i.classList.toggle(`live`,a===`recording`),(n||a!==ze(t)||r.dataset.phase!==a)&&(r.dataset.phase=a,r.innerHTML=Je[a](e),Ye(a)),a===`recording`&&Ve(e,i),a===`downloading`&&qe(e)}function Ve(e,t){d(`#timer`).textContent=_((e.elapsed??0)*1e3);let n=0;for(let[t,r]of Object.entries(e.levels??{})){n=Math.max(n,r);let e=p(`#meter-${t} i`),i=Math.round(r*e.length);e.forEach((t,n)=>{t.classList.toggle(`on`,n<i),t.classList.toggle(`hot`,n<i&&n>=e.length-2)})}t.style.setProperty(`--lv`,n.toFixed(3)),d(`#recNote`).textContent=e.model_loaded?`边录边转中，结束后几秒就出转写`:`正在准备识别模型…`;let r=e.live??[],i=d(`#liveLines`),a=r.map(e=>e.start_ms).join(`,`);i.dataset.key!==a&&(i.dataset.key=a,i.innerHTML=r.length?r.map(e=>`<div><span class="lt">${_(e.start_ms)}</span>${g(e.text)}</div>`).join(``):`<div class="lw">说话内容会在这里实时出现（约十几秒一批）</div>`,i.scrollTop=i.scrollHeight)}var He=e=>e===`system`?`系统声音`:`麦克风`;function Ue(){return`
+    <div class="live-head" style="color:var(--blue)">第一次使用</div>
+    <div class="timer" style="font-size:22px;margin:12px 0 6px;font-family:var(--font)">先下载识别模型（约 ${E.env?.models_size_mb??330} MB）</div>
+    <div class="proc-note">只需下载一次。识别、区分说话人都在这台电脑上完成，录音不会上传。</div>
+    <div class="glass-foot">
+      <span class="spacer"></span>
+      <button class="btn primary" id="dlBtn">下载模型</button>
+    </div>`}function We(){if(O())return Ue();let e=!E.env||E.env.system_audio;return`
+    <input class="title-input" id="fTitle" placeholder="会议名称，比如：周会、项目评审" value="${g(E.form.title)}" maxlength="60">
+    <input class="hot-input" id="fHot" placeholder="热词（可选）：人名、项目代号、专有名词，用逗号隔开" value="${g(E.form.hotwords)}">
+    <div class="glass-foot">
+      <button class="toggle ${E.form.system&&e?`on`:``}" id="tSys" ${e?``:`disabled title='需要 macOS 15+'`}>${S.monitor}系统声音</button>
+      <button class="toggle ${E.form.mic?`on`:``}" id="tMic">${S.mic}麦克风</button>
+      <span class="spacer"></span>
+      <span class="rec-label">开始录音</span>
+      <button class="rec-btn" id="recBtn" title="开始录音"><span class="core"></span></button>
+    </div>`}var Ge=e=>`
+  <div class="live-head"><span class="live-dot"></span>录音中 · ${g((e.sources??[]).map(He).join(` + `))}</div>
+  <div class="timer" id="timer">00:00</div>
+  <div class="meters">
+    ${(e.sources??[]).map(e=>`<div class="meter" id="meter-${e}"><span>${He(e)}</span><div class="meter-bars">${`<i></i>`.repeat(28)}</div></div>`).join(``)}
+  </div>
+  <div class="live-lines" id="liveLines"></div>
+  <div class="glass-foot">
+    <span class="proc-note" style="margin:0" id="recNote"></span>
+    <span class="spacer"></span>
+    <span class="rec-label">结束录音</span>
+    <button class="rec-btn stop" id="stopBtn" title="结束录音"><span class="core"></span></button>
+  </div>`,Ke=()=>`
+  <div class="live-head" style="color:var(--blue)"><span class="live-dot" style="background:var(--cyan)"></span>下载识别模型</div>
+  <div class="timer" id="dlText" style="font-size:22px;margin:12px 0 10px">0 MB</div>
+  <div class="steps" style="grid-template-columns:1fr"><div class="step now"><div class="bar"><div id="dlBar" style="position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,var(--cyan),var(--blue));border-radius:99px"></div></div></div></div>
+  <div class="proc-note">识别模型来自 ModelScope，标点和声纹模型来自 GitHub；网络中断会自动续传</div>`;function qe(e){let t=/([\d.]+)\s*\/\s*([\d.]+)/.exec(e.stage??``);d(`#dlText`).textContent=e.stage||`准备下载…`,t&&(d(`#dlBar`).style.width=`${Math.min(100,Number(t[1])/Number(t[2])*100).toFixed(1)}%`)}var Je={idle:We,recording:Ge,downloading:Ke,error:e=>`
+  <div class="live-head">模型下载没有完成</div>
+  <div class="err-box" style="margin-top:12px">${g(e.error)}</div>
+  <div class="proc-note">已下载的部分会保留，重试时接着下</div>
+  <div class="glass-foot">
+    <button class="btn" id="againBtn">关闭</button>
+    <span class="spacer"></span>
+    <button class="btn primary" id="dlBtn">重试</button>
+  </div>`};function Ye(e){let t=f(`#dlBtn`);if(t&&(t.onclick=async()=>{t.disabled=!0;try{E.job=await l(`/api/models/download`,{method:`POST`}),Q()}catch(e){C(w(e),!0),t.disabled=!1}}),e===`idle`&&!O()){let e=d(`#fTitle`);e.oninput=()=>E.form.title=e.value,e.onkeydown=e=>{e.key===`Enter`&&Xe()};let t=d(`#fHot`);t.oninput=()=>E.form.hotwords=t.value,d(`#tSys`).onclick=e=>{E.form.system=!E.form.system,e.currentTarget.classList.toggle(`on`,E.form.system)},d(`#tMic`).onclick=e=>{E.form.mic=!E.form.mic,e.currentTarget.classList.toggle(`on`,E.form.mic)},d(`#recBtn`).onclick=Xe}else e===`recording`?d(`#stopBtn`).onclick=Ze:e===`error`&&(d(`#againBtn`).onclick=async()=>{let e=E.job.id;E.job={state:`idle`},J(E.job,q,!0),e&&await P(e)})}async function Xe(){let e=E.form.system&&(!E.env||E.env.system_audio);if(!e&&!E.form.mic)return C(`系统声音和麦克风至少开一个`,!0);let t=f(`#recBtn`);t&&(t.disabled=!0);try{E.job=await l(`/api/record/start`,{json:{title:E.form.title.trim()||`会议`,system:e,mic:E.form.mic,hotwords:E.form.hotwords.split(/[,，、\s]+/).filter(Boolean)}}),E.form.title=``,Q()}catch(e){C(w(e),!0),t&&(t.disabled=!1)}}async function Ze(){d(`#stopBtn`).disabled=!0;try{await l(`/api/record/stop`,{method:`POST`}),C(`录音已保存，转写和纪要在后台进行，可以开始下一场`),E.job={state:`idle`},J(E.job,q,!0),Q()}catch(e){C(w(e),!0)}}async function Qe(e){if(!e)return;let t=new FormData;t.append(`file`,e),t.append(`title`,e.name.replace(/\.[^.]+$/,``)),t.append(`modified`,String(e.lastModified||0)),C(`正在导入 ${e.name}`);try{await l(`/api/import`,{method:`POST`,body:t}),C(`已导入 ${e.name}，转写和纪要在后台进行`),Q()}catch(e){C(w(e),!0)}}function $e(){let e=d(`#fileInput`);e.onchange=()=>{Qe(e.files?.[0]),e.value=``};let t=d(`#dropOverlay`),n=0;window.addEventListener(`dragenter`,e=>{e.dataTransfer?.types?.includes(`Files`)&&(n++,t.classList.add(`show`))}),window.addEventListener(`dragleave`,()=>{--n<=0&&(n=0,t.classList.remove(`show`))}),window.addEventListener(`dragover`,e=>e.preventDefault()),window.addEventListener(`drop`,e=>{e.preventDefault(),n=0,t.classList.remove(`show`),Qe(e.dataTransfer?.files[0])})}var et=[{id:`deepseek`,name:`DeepSeek`,base_url:`https://api.deepseek.com`,model:`deepseek-chat`},{id:`bailian`,name:`通义千问（百炼）`,base_url:`https://dashscope.aliyuncs.com/compatible-mode/v1`,model:`qwen-plus`},{id:`custom`,name:`自定义`}];function tt(e,t){let n=d(`#sModel`),r=d(`#sModelPop`),i=``,a=-1,o=[],s=()=>{r.hidden=!0,a=-1},c=()=>{let s=i.trim().toLowerCase(),c=e();if(o=c.filter(e=>!s||e.toLowerCase().includes(s)),!c.length){r.innerHTML=`<div class="combo-empty">这个接口没有返回模型列表，直接输入模型名即可</div>`;return}if(!o.length){r.innerHTML=`<div class="combo-empty">没有匹配“${g(i)}”的模型</div>`;return}let l={};for(let e of o)(l[e.includes(`/`)?e.split(`/`)[0]:`其他`]||=[]).push(e);let u=0;r.innerHTML=Object.entries(l).map(([e,r])=>`
+      <div class="combo-group">${g(e)}</div>
+      ${r.map(r=>`<div class="combo-item ${r===n.value?`sel`:``} ${u===a?`act`:``}" data-i="${u++}">
+        <span>${g(r.includes(`/`)?r.slice(e.length+1):r)}</span>${r===t()?`<em>推荐</em>`:``}</div>`).join(``)}`).join(``),(f(`.combo-item.act`,r)??f(`.combo-item.sel`,r))?.scrollIntoView({block:`nearest`})},l=()=>{i=``,a=-1,r.hidden=!1,c(),n.select()},u=e=>{n.value=e,s(),n.dispatchEvent(new Event(`change`))};return n.addEventListener(`focus`,l),n.addEventListener(`click`,()=>{r.hidden&&l()}),n.addEventListener(`input`,()=>{i=n.value,a=-1,r.hidden=!1,c()}),n.addEventListener(`keydown`,e=>{r.hidden||(e.key===`ArrowDown`?(a=Math.min(o.length-1,a+1),c(),e.preventDefault()):e.key===`ArrowUp`?(a=Math.max(0,a-1),c(),e.preventDefault()):e.key===`Enter`&&a>=0?(u(o[a]),e.preventDefault()):e.key===`Escape`&&(s(),e.stopPropagation()))}),r.addEventListener(`mousedown`,e=>{e.preventDefault();let t=e.target.closest(`.combo-item`);t&&u(o[Number(t.dataset.i)])}),n.addEventListener(`blur`,()=>setTimeout(s,100)),()=>{r.hidden||c()}}var Y=new Set;async function nt(){let e=f(`#sAsr`);if(!e)return;let t;try{t=(await l(`/api/models`)).models}catch{e.hidden=!0;return}let n=E.job,r=n?.kind===`models`&&D(n)?n.meeting||`paraformer`:``,i=e=>e.active?`<span class="asr-badge">使用中</span>`:e.ready?`${e.id===`paraformer`?``:`<button class="btn ghost asr-del" data-del="${e.id}">${Y.has(e.id)?`确认删除`:`删除`}</button>`}<button class="btn" data-use="${e.id}">使用</button>`:e.id===r?`<div class="asr-prog"><div class="asr-bar"><i id="asrBar"></i></div><small id="asrText">准备下载…</small></div>`:`<button class="btn" data-dl="${e.id}" ${r?`disabled`:``}>${S.download}下载 · ${e.size_mb} MB</button>`;e.hidden=!1,d(`#sAsrList`,e).innerHTML=t.map(e=>`
+      <div class="asr-row ${e.active?`on`:``}">
+        <div class="asr-main"><b>${g(e.name)}</b>${e.id===`paraformer`?`<em>默认</em>`:``}<small>${g(e.desc)}</small></div>
+        <div class="asr-act">${i(e)}</div>
+      </div>`).join(``),n&&r&&rt(n);let a=async(e,t,n)=>{try{let r=await l(e,t);`state`in r&&(E.job=r),n&&C(n),N()}catch(e){C(w(e),!0)}nt()};p(`[data-dl]`,e).forEach(e=>e.onclick=()=>a(`/api/models/${e.dataset.dl}/download`,{method:`POST`})),p(`[data-use]`,e).forEach(e=>e.onclick=()=>a(`/api/models/${e.dataset.use}/use`,{method:`POST`},`已切换，下一次转写起生效`)),p(`[data-del]`,e).forEach(e=>e.onclick=()=>{let t=e.dataset.del??``;Y.has(t)?(Y.delete(t),a(`/api/models/${t}`,{method:`DELETE`},`已删除`)):(Y.add(t),e.textContent=`确认删除`,setTimeout(()=>Y.delete(t),4e3))})}function rt(e){let t=f(`#asrBar`);if(!t)return;let n=/([\d.]+)\s*\/\s*([\d.]+)/.exec(e.stage??``);d(`#asrText`).textContent=e.stage||`准备下载…`,n&&(t.style.width=`${Math.min(100,Number(n[1])/Number(n[2])*100).toFixed(1)}%`)}function it(e,t){f(`#sAsr`)&&e.kind===`models`&&(t.state===e.state?rt(e):(e.state===`error`&&C(`模型下载没有完成：${e.error??``}（已下载的部分会保留，重试时接着下）`,!0),e.state===`done`&&C(`模型下载好了，已切换过去`),nt()))}var at=[{id:`llm`,name:`大模型`,icon:`bot`},{id:`asr`,name:`识别模型`,icon:`mic`},{id:`hotwords`,name:`热词`,icon:`spark`},{id:`push`,name:`推送到群`,icon:`send`},{id:`obsidian`,name:`Obsidian`,icon:`vault`},{id:`about`,name:`运行环境`,icon:`monitor`}],ot=e=>/feishu|larksuite/.test(e)?`飞书`:/dingtalk/.test(e)?`钉钉`:/weixin\.qq\.com/.test(e)?`企业微信`:`已设置`;function st(e,t){let n=t.c;switch(e){case`llm`:return n.model||`未设置`;case`asr`:return E.env?.asr_model??`Paraformer-large`;case`hotwords`:return n.hotwords.length?`${n.hotwords.length} 个`:`未添加`;case`push`:return n.webhook?ot(n.webhook):`未设置`;case`obsidian`:return n.obsidian.vault?n.obsidian.vault.split(`/`).filter(Boolean).pop()+(n.obsidian.auto?` · 自动存`:``):`未设置`;case`about`:return E.env?`v${E.env.version}`:``}}async function X(e,t,n){let r=e.c;try{await l(`/api/config`,{method:`PUT`,json:{base_url:r.base_url,model:r.model,api_key:null,hotwords:r.hotwords,webhook:r.webhook,secret:null,obsidian:r.obsidian,...t}}),C(`已保存`),N(),ct(n)}catch(e){C(w(e),!0)}}var Z=(e=``)=>`<div class="panel-foot">${e}<span class="grow"></span><button class="btn primary" id="sSave">保存</button></div>`;async function ct(e=`llm`){m().innerHTML=`<div class="page"><div class="page-head"><div><h1>设置</h1><div class="sub">保存在本机配置文件里</div></div></div><div id="sBody"></div></div>`;let t;try{let[e,n,r,i]=await Promise.all([l(`/api/config`),l(`/api/llm/providers`).catch(()=>[]),l(`/api/obsidian/vaults`).catch(()=>[]),l(`/api/models`).then(()=>!0,()=>!1),N()]);t={c:e,local:n,vaults:r,hasAsr:i}}catch(e){C(w(e),!0);return}if(!location.hash.startsWith(`#/settings`))return;let n=at.filter(e=>e.id!==`asr`||t.hasAsr),r=(n.find(t=>t.id===e)??n[0]).id;d(`#sBody`).innerHTML=`
+    <div class="set-layout">
+      <nav class="set-nav">
+        ${n.map(e=>`<a href="#/settings/${e.id}" class="${e.id===r?`on`:``}"><span class="set-ico">${S[e.icon]}</span><span class="set-txt"><b>${e.name}</b><small>${g(st(e.id,t))}</small></span></a>`).join(``)}
+      </nav>
+      <section class="card s-card set-panel" id="sPanel"></section>
+    </div>`,lt[r](t)}var lt={llm:ut,asr:()=>{d(`#sPanel`).id=`sAsr`,d(`#sAsr`).innerHTML=`
+      <h2>识别模型</h2>
+      <p class="hint">把录音变成文字的模型，都在本机运行，录音不会上传。默认的 Paraformer 适合大多数中文会议；会上中英文混着说可以换 SenseVoice，要更准、想让热词在识别时就生效可以换 Fun-ASR-Nano。切换后从下一次转写起生效。</p>
+      <div class="asr-list" id="sAsrList"></div>`,nt()},hotwords:dt,push:ft,obsidian:pt,about:mt};function ut(e){let t=e.c,n=[...e.local.map(e=>({id:e.id,name:e.name,base_url:e.base_url,local:e})),...et],r=e=>e.trim().replace(/\/+$/,``).replace(`localhost`,`127.0.0.1`),i=()=>d(`#sBase`),a=()=>(n.find(e=>e.base_url&&r(i().value)===r(e.base_url))??n[n.length-1]).id,o=e=>e.local?`<span class="dot" style="background:${e.local.running?`var(--green)`:`#c9ccd1`};display:inline-block;margin-right:6px;vertical-align:1px" title="${e.local.running?`运行中`:`未启动`}"></span>`:``,s=t.api_key_set?`已设置${t.api_key_hint===`已设置`?``:`（${g(t.api_key_hint)}）`}，留空表示不修改`:`本地 Ollama 不需要`;d(`#sPanel`).innerHTML=`
+    <h2>大模型</h2>
+    <p class="hint">用来把转写整理成纪要。任何 OpenAI 兼容接口都可以。本机的 Magpie、CC Switch 中转打开后可以直接选；选本地 Ollama 则全程不出本机。</p>
+    <div class="s-grid">
+      <div class="seg" id="sPreset">${n.map(e=>`<button data-id="${e.id}">${o(e)}${e.name}</button>`).join(``)}</div>
+      <div class="s-row2">
+        <div class="field"><label>接口地址 Base URL</label><input class="input" id="sBase" value="${g(t.base_url)}"></div>
+        <div class="field"><label>模型 <span id="sModelCount" style="color:var(--muted-2)"></span></label>
+          <div class="combo"><input class="input" id="sModel" value="${g(t.model)}" placeholder="点这里从列表里选，也可以直接输入" autocomplete="off" spellcheck="false"><span class="combo-arrow">${S.chevron}</span><div class="combo-pop" id="sModelPop" hidden></div></div></div>
+      </div>
+      <div class="field"><label>API Key</label><input class="input" id="sKey" type="password" autocomplete="off" placeholder="${s}"></div>
+    </div>
+    ${Z(`<button class="btn" id="sTest">测试连接</button><span class="test-msg" id="sTestMsg"></span>`)}`;let c=d(`#sModel`),u=d(`#sKey`),f=()=>p(`#sPreset button`).forEach(e=>e.classList.toggle(`on`,e.dataset.id===a()));f();let m=[],h=``,_=()=>{},v=(e,t=``)=>{m=e,h=t,d(`#sModelCount`).textContent=e.length?`（可选 ${e.length} 个）`:``,_()};_=tt(()=>m,()=>h);let y=(e,t=``)=>{let n=d(`#sTestMsg`);n.className=`test-msg `+t,n.textContent=e},b=async()=>{try{let e=await l(`/api/llm/models`,{json:{base_url:i().value.trim(),model:``,api_key:u.value.trim()||null}});v(e.models)}catch{v([])}},x=n.find(e=>e.id===a());x?.local?v(x.local.models,x.local.recommended):x?.id===`custom`&&t.base_url&&b(),p(`#sPreset button`).forEach(e=>e.onclick=()=>{let r=n.find(t=>t.id===e.dataset.id);if(r){if(y(``),!r.base_url)i().value=``,c.value=``,u.value=``,v([]),f(),i().focus(),y(`填 OpenAI 兼容接口的地址（一般以 /v1 结尾），填完会自动拉取模型列表`);else{if(i().value=r.base_url,r.local){let e=r.local;v(e.models,e.recommended),u.value=e.api_key,e.models.includes(c.value)||(c.value=e.recommended&&e.models.includes(e.recommended)&&e.recommended||e.models[0]||``),e.running?e.recommended&&c.value===e.recommended&&y(`已选推荐模型 ${e.recommended}：实测 76 分钟的会 51 秒出纪要`,`ok`):y(e.hint,`bad`)}else v([]),u.value=``,c.value=r.model??``,t.api_key_set||y(`需要填写这家服务的 API Key`);f()}}}),i().oninput=f,i().onchange=b,d(`#sTest`).onclick=async()=>{y(`连接中…`);try{let e=await l(`/api/config/test`,{json:{base_url:i().value.trim(),model:c.value.trim(),api_key:u.value.trim()||null}});y(e.message,e.ok?`ok`:`bad`)}catch(e){y(w(e),`bad`)}},d(`#sSave`).onclick=()=>X(e,{base_url:i().value.trim(),model:c.value.trim(),api_key:u.value.trim()||null},`llm`)}function dt(e){let t=[...e.c.hotwords],n=E.env?.asr_model===`Fun-ASR-Nano`;d(`#sPanel`).innerHTML=`
+    <h2>热词</h2>
+    <p class="hint">人名、项目代号、内部系统名、行业术语。每场会议都生效，录音时也可以给单场会议临时加几个。</p>
+    <div class="tags" id="sTags"><input id="sTagInput" placeholder="输入后回车添加，可以一次粘贴多个（用逗号或空格隔开）"></div>
+    <div class="note-box">${n?`当前识别模型 Fun-ASR-Nano 会在识别时直接用上这些词；生成纪要时也会交给大模型核对同音字。`:`当前识别模型不支持热词，这些词会作为术语表交给大模型，在写纪要时纠正同音字（比如“历史中单”→“历史工单”）。想在识别时就用上，可以在「识别模型」里换成 Fun-ASR-Nano。`}</div>
+    ${Z()}`;let r=d(`#sTagInput`),i=()=>{p(`#sTags .chip`).forEach(e=>e.remove()),t.forEach((e,n)=>{let a=document.createElement(`span`);a.className=`chip`,a.innerHTML=`${g(e)}<button class="x" title="删除">×</button>`,d(`button`,a).onclick=()=>{t.splice(n,1),i()},r.before(a)})};i();let a=()=>{for(let e of r.value.split(/[,，、\s]+/))e&&!t.includes(e)&&t.push(e);r.value=``};r.onkeydown=e=>{let n=r.value.trim();(e.key===`Enter`||e.key===`,`||e.key===`，`)&&n?(e.preventDefault(),a(),i()):e.key===`Backspace`&&!n&&t.length&&(t.pop(),i())},d(`#sSave`).onclick=()=>{a(),X(e,{hotwords:t},`hotwords`)}}function ft(e){let t=e.c;d(`#sPanel`).innerHTML=`
+    <h2>推送到群</h2>
+    <p class="hint">在群里添加"自定义机器人"，把 webhook 地址贴过来，按域名自动识别飞书、钉钉或企业微信。会议详情页点「推送到群」就会发过去。</p>
+    <div class="s-grid">
+      <div class="field"><label>Webhook 地址</label><input class="input" id="sHook" value="${g(t.webhook)}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"></div>
+      <div class="field"><label>加签密钥（机器人开启了"加签"才需要）</label><input class="input" id="sSecret" type="password" autocomplete="off" placeholder="${t.secret_set?`已设置，留空表示不修改`:`可选`}"></div>
+    </div>
+    ${Z()}`,d(`#sSave`).onclick=()=>X(e,{webhook:d(`#sHook`).value.trim(),secret:d(`#sSecret`).value.trim()||null},`push`)}function pt(e){let t=e.c,n=e.vaults;d(`#sPanel`).innerHTML=`
+    <h2>Obsidian</h2>
+    <p class="hint">把纪要存进 Obsidian 库：一场会一篇笔记，日期、时长、参会人写在属性里；鱼骨图存成 Excalidraw 画板嵌进笔记（装了 Excalidraw 插件就能直接改），每个分支下面列着引用的原话。</p>
+    <div class="s-grid">
+      ${n.length?`<div class="field"><label>本机 Obsidian 里的库</label><div class="seg fit" id="sVaults">${n.map(e=>`<button data-path="${g(e.path)}" title="${g(e.path)}">${g(e.name)}</button>`).join(``)}</div></div>`:``}
+      <div class="s-row2">
+        <div class="field"><label>库的位置</label><input class="input" id="sVault" value="${g(t.obsidian.vault)}" placeholder="${n.length?`点上面选一个，或者填库的文件夹路径`:`Obsidian 库的文件夹路径，比如 ~/Documents/笔记`}"></div>
+        <div class="field"><label>存到库里的哪个文件夹</label><input class="input" id="sObFolder" value="${g(t.obsidian.folder)}" placeholder="留空表示库的根目录"></div>
+      </div>
+      <div class="s-toggles">
+        <button class="toggle ${t.obsidian.auto?`on`:``}" id="sObAuto">${S.redo}生成纪要后自动存</button>
+        <button class="toggle ${t.obsidian.transcript?`on`:``}" id="sObTr">${S.file}附带转写全文</button>
+      </div>
+    </div>
+    ${Z()}`;let r=d(`#sVault`),i=()=>p(`#sVaults button`).forEach(e=>e.classList.toggle(`on`,e.dataset.path===r.value.trim()));i(),p(`#sVaults button`).forEach(e=>e.onclick=()=>(r.value=e.dataset.path??``,i())),r.oninput=i,p(`#sObAuto, #sObTr`).forEach(e=>e.onclick=()=>e.classList.toggle(`on`)),d(`#sSave`).onclick=()=>X(e,{obsidian:{vault:r.value.trim(),folder:d(`#sObFolder`).value.trim(),auto:d(`#sObAuto`).classList.contains(`on`),transcript:d(`#sObTr`).classList.contains(`on`)}},`obsidian`)}function mt(e){let t=E.env,n=[...t?.models_downloadable?[]:[[!!t?.ffmpeg,`ffmpeg`,t?.ffmpeg?`已安装`:`brew install ffmpeg`]],[!!t?.system_audio,`录系统声音`,t?.system_audio?`可以录腾讯会议、飞书里对方的声音`:`需要 macOS 15+ 和 Xcode 命令行工具；不影响导入录音`],[!!t?.model_cached,`识别模型`,`${t?.asr_model??``}${t?.model_loaded?` 已加载`:t?.model_cached?` 已下载`:` 未下载`}`.trim()],[!!t?.llm_ready,`大模型`,t?.llm_ready?t.llm_model:`还没有配置`]];d(`#sPanel`).innerHTML=`
+    <h2>运行环境</h2>
+    <div class="kv">
+      <div><span>会议保存在</span><code>${g(t?.root??``)}</code></div>
+      <div><span>配置文件</span><code>${g(e.c.path)}</code></div>
+      <div><span>版本</span><code>${g(t?.version??``)}</code></div>
+    </div>
+    <div class="checks">
+      ${n.map(([e,t,n])=>`<div class="check"><span class="dot" style="background:${e?`var(--green)`:`var(--amber)`}"></span>${t}<small>${g(n)}</small></div>`).join(``)}
+    </div>`}var ht,gt={state:`idle`};async function _t(){try{return(await l(`/api/jobs`)).jobs}catch{let e=await l(`/api/job`);return e.state===`idle`?[]:[{...e,id:e.id??`single`}]}}async function Q(){window.clearTimeout(ht);let e;try{e=await _t()}catch{e=E.jobs}let t=new Map(E.jobs.map(e=>[e.id,e]));E.jobs=e;let n=E.job;E.job=e.find(e=>e.state===`recording`)??e.find(e=>e.kind===`models`&&(D(e)||e.state===`error`)&&O())??gt,location.hash&&location.hash!==`#/`||J(E.job,n),F();let r=!1;for(let n of e){let e=t.get(n.id)??gt;if(E.detail&&n.meeting===E.detail.id&&n.kind!==`models`&&G(n,e),n.kind===`models`&&it(n,e),e.state===n.state||n.state!==`done`&&n.state!==`error`||!D(e))continue;r=!0;let i=E.detail?.id===n.meeting;n.kind!==`models`&&!i&&(n.state===`done`?C(`「${k(n)}」的纪要已生成`):C(`「${k(n)}」没有处理完：${n.error??``}`,!0)),n.state===`done`&&n.notice&&C(n.notice,n.notice.startsWith(`没能`))}r&&(M(),N());let i=e.some(e=>e.state===`recording`);ht=window.setTimeout(Q,i?160:e.some(D)?500:2500)}function vt(){m().innerHTML=`
+    <div class="page">
+      <div class="page-head">
+        <div><h1>会议<em>.</em>记录</h1><div class="sub" id="mCount"></div></div>
+        <span class="grow"></span>
+        <label class="search">${S.search}<input class="input" id="mSearch" placeholder="搜索标题或内容"></label>
+      </div>
+      <div id="mList"></div>
+    </div>`;let e=d(`#mSearch`);e.oninput=()=>$(e.value.trim()),M().then(()=>$(e.value.trim())),$(``)}function $(e){let t=f(`#mList`);if(!t)return;let n=E.meetings.filter(t=>!e||(t.title+t.summary+t.speakers.join(``)).includes(e)),r=E.env?E.env.root.replace(/^\/Users\/[^/]+/,`~`):`~/Documents/tingo`;if(d(`#mCount`).textContent=E.meetings.length?`共 ${E.meetings.length} 场，存放在 ${r}`:``,!E.meetings.length){t.innerHTML=`<div class="empty"><h3>还没有会议</h3><div>开一场会，或者把已有的录音拖进窗口</div><a class="btn primary" href="#/">开始录音</a></div>`;return}if(!n.length){t.innerHTML=`<div class="empty"><h3>没有找到</h3><div>换个关键词试试</div></div>`;return}let i={};for(let e of n)(i[e.date.slice(0,7)]||=[]).push(e);t.innerHTML=Object.entries(i).map(([e,t])=>`
+    <div class="month">${e.slice(0,4)} 年 ${Number(e.slice(5))} 月</div>
+    <div class="grid">${t.map(yt).join(``)}</div>`).join(``)}var yt=(e,t)=>`
+  <a class="card m-card" href="#/m/${encodeURIComponent(e.id)}" style="animation-delay:${Math.min(t,8)*30}ms">
+    <div class="when"><span>${g(e.date.slice(5).replace(`-`,` 月 `))} 日 ${g(e.time)}</span><span>${g(e.duration)}</span></div>
+    <h3>${g(e.title)}</h3>
+    <p>${g(e.summary||(e.has_transcript?`已转写，还没有生成纪要`:`录音还没有处理`))}</p>
+    <div class="foot">
+      <span class="avatars">${e.speakers.slice(0,4).map((e,t)=>`<span style="background:${b(t)}">${g(x(e))}</span>`).join(``)}</span>
+      ${e.speakers.length?`<span>${e.speakers.length} 位说话人</span>`:``}
+      <span class="status ${e.has_minutes?`ok`:e.has_transcript?`half`:``}">${e.has_minutes?`已出纪要`:e.has_transcript?`仅转写`:`未处理`}</span>
+    </div>
+  </a>`;function bt(){let e=decodeURIComponent(location.hash.slice(1)||`/`);Se(),E.detail=null;let t=`home`;e.startsWith(`/m/`)?(t=`meetings`,H(e.slice(3))):e===`/meetings`?(t=`meetings`,vt()):e===`/settings`||e.startsWith(`/settings/`)?(t=`settings`,ct(e.split(`/`)[2]||`llm`)):Be(),p(`.nav a`).forEach(e=>e.classList.toggle(`active`,e.dataset.nav===t)),p(`#recentList a`).forEach(t=>t.classList.toggle(`active`,e===`/m/${t.dataset.id}`)),m().scrollTop=0}async function xt(){try{await s()}catch(e){d(`#main`).innerHTML=`<div class="page"><div class="empty"><h3>本地服务没有启动</h3><div>${String(e)}</div></div></div>`;return}ne(),$e(),Re(),window.addEventListener(`hashchange`,bt),await Promise.all([N(),M()]);try{E.job=await l(`/api/job`)}catch{}bt(),Q()}xt();
