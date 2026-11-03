@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Multipart, Path as UrlPath, Request, State};
+use axum::extract::{Multipart, Path as UrlPath, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -21,7 +21,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeFile;
 
 use crate::asr::{AsrKind, Engine, ModelPaths};
-use crate::chunked::{transcribe_samples, LiveTranscriber};
+use crate::chunked::{transcribe_samples, wav_path, LiveTranscriber};
 use crate::config::{self, Config};
 use crate::i18n::{self, tr, Lang};
 use crate::meetings::{self, AUDIO, MINUTES, TRANSCRIPT_JSON};
@@ -29,7 +29,7 @@ use crate::{fishbone, obsidian};
 use crate::record::{self, Recorder};
 use crate::summarize::{self, Hooks};
 use crate::transcript::{fmt_ts, Transcript};
-use crate::{audio, models, push};
+use crate::{audio, autostop, models, push, speakers, terms, update};
 
 pub struct Options {
     pub root: PathBuf,
@@ -38,6 +38,8 @@ pub struct Options {
     /// Swift 录音组件（录音、解码）
     pub recorder_bin: PathBuf,
     pub version: String,
+    /// 内置示例会议的素材（transcript.json、纪要.md、纪要.en.md、录音.m4a）
+    pub sample_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -78,9 +80,15 @@ impl Job {
 }
 
 struct Live {
+    /// 录音任务的编号
+    job: String,
     recorder: Recorder,
     live: Option<LiveTranscriber>,
     hotwords: Vec<String>,
+    /// 最后一次有人说话的时间（录音开始后的秒数）
+    last_voice: f64,
+    /// 没人说话多少分钟后自动结束（0 = 不自动结束），每次检查时按配置更新
+    silence_min: u32,
 }
 
 pub struct AppState {
@@ -91,6 +99,8 @@ pub struct AppState {
     /// 进行中和刚结束（还没被界面收起）的任务
     jobs: Mutex<Vec<Job>>,
     recording: Mutex<Option<Live>>,
+    /// 检查更新的结果，缓存 6 小时
+    update: Mutex<Option<(Instant, update::Release)>>,
 }
 
 type Shared = Arc<AppState>;
@@ -128,6 +138,7 @@ impl AppState {
             engine_lock: Mutex::new(()),
             jobs: Mutex::new(Vec::new()),
             recording: Mutex::new(None),
+            update: Mutex::new(None),
         })
     }
 
@@ -199,6 +210,8 @@ impl AppState {
                 Some(tr("已经在录音了，先结束这一场", "Already recording. Stop the current one first"))
             } else if job.kind == "models" && j.kind == "models" {
                 Some(tr("已经在下载模型了，等它下完", "A model is already downloading. Wait for it to finish"))
+            } else if job.kind == "update" && j.kind == "update" {
+                Some(tr("已经在下载新版了，等它下完", "The update is already downloading. Wait for it to finish"))
             } else if !job.meeting.is_empty() && job.kind != "models" && j.kind != "models" && j.meeting == job.meeting {
                 Some(tr("这场会议正在处理，等它完成", "This meeting is being processed. Wait for it to finish"))
             } else {
@@ -273,7 +286,14 @@ impl AppState {
                 Ok(_) => i18n::tr("纪要已同步到 Obsidian", "Minutes synced to Obsidian").to_string(),
                 Err(e) => i18n::tr(&format!("没能同步到 Obsidian：{e}"), &format!("Couldn't sync to Obsidian: {e}")).to_string(),
             };
-            self.update(id, |j| j.notice = notice);
+            // 自动结束录音的提示也留着
+            self.update(id, |j| {
+                j.notice = if j.notice.is_empty() {
+                    notice
+                } else {
+                    format!("{notice}{}{}", i18n::tr("；", "; "), j.notice)
+                }
+            });
         }
         Ok(())
     }
@@ -319,6 +339,7 @@ async fn env(State(s): State<Shared>) -> Json<Value> {
             .unwrap_or(false);
     Json(json!({
         "version": s.opt.version,
+        "platform": if cfg!(target_os = "ios") { "ios" } else { std::env::consts::OS },
         "root": s.opt.root,
         "ffmpeg": true, // 桌面版不需要 ffmpeg
         "system_audio": system_audio_supported(&s.opt.recorder_bin),
@@ -333,7 +354,7 @@ async fn env(State(s): State<Shared>) -> Json<Value> {
 }
 
 fn system_audio_supported(bin: &Path) -> bool {
-    if !bin.is_file() {
+    if record::native().is_some() || !bin.is_file() {
         return false;
     }
     let out = std::process::Command::new("/usr/bin/sw_vers")
@@ -383,6 +404,8 @@ fn config_json(s: &AppState) -> Value {
         "ui_language": c.ui_language,
         "minutes_language": c.minutes_language,
         "asr_language": c.asr_language,
+        "auto_stop_silence_min": c.auto_stop_silence_min,
+        "auto_stop_app_quit": c.auto_stop_app_quit,
         "path": s.opt.config_path,
     })
 }
@@ -408,6 +431,9 @@ struct ConfigReq {
     asr_language: Option<String>,
     /// 接口协议 openai | anthropic，不传就不改
     api: Option<String>,
+    /// 自动结束录音：没人说话多少分钟（0–240 的整数，0 = 不自动结束）、会议软件退出时是否结束；不传就不改
+    auto_stop_silence_min: Option<Value>,
+    auto_stop_app_quit: Option<bool>,
 }
 
 /// 设置页传来的语言选项；不认识的值报错
@@ -470,6 +496,20 @@ async fn put_config(State(s): State<Shared>, Json(r): Json<ConfigReq>) -> ApiRes
     language_field(r.ui_language, &mut c.ui_language)?;
     language_field(r.minutes_language, &mut c.minutes_language)?;
     language_field(r.asr_language, &mut c.asr_language)?;
+    if let Some(v) = &r.auto_stop_silence_min {
+        c.auto_stop_silence_min = v
+            .as_u64()
+            .filter(|m| *m <= config::MAX_SILENCE_MIN as u64)
+            .ok_or_else(|| {
+                bad(tr(
+                    "没人说话自动结束录音的分钟数要是 0–240 的整数",
+                    "Auto-stop minutes must be a whole number from 0 to 240",
+                ))
+            })? as u32;
+    }
+    if let Some(v) = r.auto_stop_app_quit {
+        c.auto_stop_app_quit = v;
+    }
     config::save(&s.opt.config_path, &c).map_err(|e| bad(e.to_string()))?;
     Ok(Json(config_json(&s)))
 }
@@ -874,6 +914,130 @@ async fn post_pdf(
     Ok(Json(json!({"ok": true, "path": out})))
 }
 
+/// 导出文件的文件名（不含扩展名）：纪要标题，没有纪要时用文件夹里的会议名
+fn export_stem(dir: &Path, id: &str) -> String {
+    let minutes = std::fs::read_to_string(dir.join(MINUTES)).unwrap_or_default();
+    let topic = id.splitn(3, '_').nth(2).unwrap_or(id);
+    let name = obsidian::safe_name(&meetings::minutes_title(&minutes).unwrap_or_else(|| topic.to_string()));
+    if name.is_empty() {
+        obsidian::safe_name(topic)
+    } else {
+        name
+    }
+}
+
+/// 导出 SRT 字幕（按句，说话人名跟界面语言），存进会议文件夹并在访达里选中
+async fn post_srt(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let t = Transcript::load(&dir.join(TRANSCRIPT_JSON)).map_err(|_| bad(tr("还没有转写", "No transcript yet")))?;
+    let out = dir.join(format!("{}.srt", export_stem(&dir, &id)));
+    std::fs::write(&out, t.to_srt(i18n::ui())).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&out).spawn();
+    Ok(Json(json!({"ok": true, "path": out})))
+}
+
+/// 导出 Word：界面排好版的 HTML 交给 macOS 自带的 textutil 转成 .docx
+async fn post_docx(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(r): Json<PdfReq>,
+) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let out = dir.join(format!("{}.docx", export_stem(&dir, &id)));
+    let target = out.clone();
+    tokio::task::spawn_blocking(move || record::html_to_docx(&r.html, &target))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&out).spawn();
+    Ok(Json(json!({"ok": true, "path": out})))
+}
+
+/// 让大模型根据自我介绍、点名等明确线索猜说话人的名字
+async fn guess_speakers(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let dir = s.folder(&id)?;
+    let t = Transcript::load(&dir.join(TRANSCRIPT_JSON)).map_err(|_| bad(tr("还没有转写", "No transcript yet")))?;
+    let cfg = s.config().llm;
+    let lang = i18n::ui();
+    let list = tokio::task::spawn_blocking(move || {
+        if cfg.api_key.is_empty() && !summarize::is_ollama(&cfg) {
+            return Err(bad(tr(
+                "没有配置大模型的 API Key：在设置里填写",
+                "No API key configured for the language model: add one in Settings",
+            )));
+        }
+        let (system, prompt) = speakers::prompt(&t, lang);
+        let text = summarize::chat(&cfg, system, &prompt, false, |_| {}, |_| {})
+            .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+        speakers::parse(&text, t.speakers_in_order().len()).ok_or_else(|| {
+            ApiError(
+                StatusCode::BAD_GATEWAY,
+                tr("大模型没有给出可用的结果", "The model didn't return a usable result").into(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| bad(e.to_string()))??;
+    Ok(Json(json!({"suggestions": list})))
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// 跨会议搜索：查转写句子和纪要正文，用各场纪要的术语表扩展查询词，允许差一个字
+async fn search(State(s): State<Shared>, Query(p): Query<SearchQuery>) -> ApiResult<Json<Value>> {
+    if p.q.trim().is_empty() {
+        return Err(bad(tr("搜索词不能为空", "Enter something to search for")));
+    }
+    let root = s.opt.root.clone();
+    let lang = i18n::ui();
+    let v = tokio::task::spawn_blocking(move || terms::search(&root, &p.q, lang))
+        .await
+        .map_err(|e| bad(e.to_string()))?;
+    Ok(Json(v))
+}
+
+/// 示例会议的文件夹名：示例素材是 2026-10-28 14:00 的会
+fn demo_folder(en: bool) -> String {
+    let title = if en { "Sample · Signup conversion review" } else { "示例·注册转化复盘" };
+    format!("2026-10-28_1400_{}", meetings::folder_title(title))
+}
+
+/// 把内置的示例会议复制进会议目录（已经有了就直接返回）
+async fn post_demo(State(s): State<Shared>) -> ApiResult<Json<Value>> {
+    let en = i18n::is_en();
+    let name = demo_folder(en);
+    let dir = s.opt.root.join(&name);
+    if dir.exists() {
+        return Ok(Json(json!({"id": name})));
+    }
+    let src = &s.opt.sample_dir;
+    let minutes = src.join(if en { "纪要.en.md" } else { MINUTES });
+    if !src.join(TRANSCRIPT_JSON).is_file() || !minutes.is_file() {
+        return Err(ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            tr("找不到示例会议的素材", "The sample meeting files are missing").into(),
+        ));
+    }
+    let copy = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        std::fs::copy(src.join(TRANSCRIPT_JSON), dir.join(TRANSCRIPT_JSON))?;
+        std::fs::copy(&minutes, dir.join(MINUTES))?;
+        if src.join(AUDIO).is_file() {
+            std::fs::copy(src.join(AUDIO), dir.join(AUDIO))?;
+        }
+        Ok(())
+    };
+    if let Err(e) = copy() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
+    Ok(Json(json!({"id": name})))
+}
+
 async fn reveal(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
     let _ = std::process::Command::new("/usr/bin/open").arg(dir).spawn();
@@ -927,32 +1091,107 @@ async fn record_start(State(s): State<Shared>, Json(r): Json<RecordReq>) -> ApiR
     job.sources = recorder.sources.clone();
     s.update(&job.id, |j| j.sources = job.sources.clone());
     *s.recording.lock().unwrap() = Some(Live {
+        job: job.id.clone(),
         recorder,
         live: Some(live),
         hotwords: r.hotwords,
+        last_voice: 0.0,
+        silence_min: s.config().auto_stop_silence_min,
     });
+    spawn_watcher(&s, job.id.clone(), dir, job.sources.clone());
     Ok(Json(job))
 }
 
+/// 录音时每 5 秒检查一次：有没有人说话（任一音轨最近 5 秒够响，或者边录边转出了新的文字）、
+/// 开始时在运行的会议软件是不是都退出了；到了条件就自动结束录音（和点「结束录音」一样）。
+fn spawn_watcher(s: &Shared, id: String, dir: PathBuf, sources: Vec<String>) {
+    let s = s.clone();
+    std::thread::spawn(move || {
+        let apps = autostop::running_meeting_apps();
+        let mut lines_seen = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(autostop::CHECK_S));
+            let cfg = s.config();
+            let window = autostop::CHECK_S as f64;
+            let loud = sources
+                .iter()
+                .any(|src| audio::track_level(&wav_path(&dir, src), window) >= autostop::VOICE_LEVEL);
+            let apps_quit =
+                cfg.auto_stop_app_quit && !apps.is_empty() && autostop::running_meeting_apps().is_disjoint(&apps);
+            let stop = {
+                let mut rec = s.recording.lock().unwrap();
+                let Some(live) = rec.as_mut().filter(|l| l.job == id) else { return };
+                let lines = live.live.as_ref().map_or(0, |l| l.line_count());
+                let now = live.recorder.elapsed();
+                if loud || lines > lines_seen {
+                    live.last_voice = now;
+                }
+                lines_seen = lines;
+                let n = cfg.auto_stop_silence_min;
+                live.silence_min = n;
+                if n > 0 && now - live.last_voice >= n as f64 * 60.0 {
+                    let notice = tr(
+                        &format!("{n} 分钟没人说话，已自动结束录音"),
+                        &format!("No one spoke for {n} minutes — recording stopped automatically"),
+                    )
+                    .to_string();
+                    Some((notice, Some(live.last_voice + autostop::KEEP_AFTER_S)))
+                } else if apps_quit {
+                    let notice = tr(
+                        "会议软件已退出，已自动结束录音",
+                        "The meeting app quit — recording stopped automatically",
+                    );
+                    Some((notice.to_string(), None))
+                } else {
+                    None
+                }
+            };
+            if let Some((notice, keep)) = stop {
+                if let Err(ApiError(_, e)) = stop_recording(&s, Some(&id), Some(notice), keep) {
+                    eprintln!("自动结束录音失败：{e}");
+                }
+                return;
+            }
+        }
+    });
+}
+
 async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
-    let job = s
-        .jobs
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|j| j.kind == "record" && j.state == "recording")
-        .cloned();
-    let Some(job) = job else {
-        return Err(bad(tr("没有正在进行的录音", "Nothing is being recorded")));
+    stop_recording(&s, None, None, None).map(Json)
+}
+
+/// 结束录音：界面点「结束录音」和自动结束都走这里。`only` 有值时只结束这个任务的录音；
+/// `notice` 是给任务的提示；`keep_s` 有值时先把原始音轨截到前这么多秒（没人说话自动结束时去掉末尾的静音）。
+fn stop_recording(s: &Shared, only: Option<&str>, notice: Option<String>, keep_s: Option<f64>) -> ApiResult<Job> {
+    let nothing = || bad(tr("没有正在进行的录音", "Nothing is being recorded"));
+    let mut live = {
+        let mut rec = s.recording.lock().unwrap();
+        if rec.as_ref().is_none_or(|l| only.is_some_and(|id| l.job != id)) {
+            return Err(nothing());
+        }
+        rec.take().ok_or_else(nothing)?
     };
-    let Some(mut live) = s.recording.lock().unwrap().take() else {
-        return Err(bad(tr("没有正在进行的录音", "Nothing is being recorded")));
+    let job = s.jobs.lock().unwrap().iter().find(|j| j.id == live.job).cloned();
+    let Some(job) = job else {
+        return Err(nothing());
     };
     // 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
-    s.update(&job.id, |j| j.state = "saving".into());
+    s.update(&job.id, |j| {
+        j.state = "saving".into();
+        if let Some(n) = notice {
+            j.notice = n;
+        }
+    });
     let dir = s.opt.root.join(&job.meeting);
-    spawn_job(&s, &job.id, move |st, id| {
+    spawn_job(s, &job.id, move |st, id| {
         live.recorder.stop();
+        if let Some(keep) = keep_s {
+            for src in &live.recorder.sources {
+                if let Err(e) = audio::truncate_wav(&wav_path(&dir, src), keep) {
+                    eprintln!("截断 {src}.wav 失败：{e}");
+                }
+            }
+        }
         st.update(id, |j| j.state = "finalizing".into());
         let engine = st.engine()?;
         let final_audio = dir.join(AUDIO);
@@ -991,7 +1230,91 @@ async fn record_stop(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     });
     let mut out = job;
     out.state = "saving".into();
-    Ok(Json(out))
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct RecordTestReq {
+    #[serde(default = "three")]
+    seconds: u64,
+}
+
+fn three() -> u64 {
+    3
+}
+
+/// 录音测试：系统声音 + 麦克风试录几秒（1–10），看有没有权限、有没有声音。
+/// 第一次调用会触发 macOS 的权限弹窗，新手引导里用。
+async fn record_test(State(s): State<Shared>, body: Option<Json<RecordTestReq>>) -> ApiResult<Json<Value>> {
+    if s.jobs.lock().unwrap().iter().any(|j| j.state == "recording") {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            tr("正在录音，结束后再测试", "A recording is in progress. Test after it ends").into(),
+        ));
+    }
+    let secs = body.map_or(3, |b| b.seconds).clamp(1, 10);
+    let bin = s.opt.recorder_bin.clone();
+    let v = tokio::task::spawn_blocking(move || record_test_run(&bin, secs))
+        .await
+        .map_err(|e| bad(e.to_string()))?;
+    Ok(Json(v))
+}
+
+fn record_test_run(bin: &Path, secs: u64) -> Value {
+    let system_ok = system_audio_supported(bin);
+    let mut status: BTreeMap<String, &str> = BTreeMap::from([
+        ("system".to_string(), if system_ok { "error" } else { "unsupported" }),
+        ("mic".to_string(), "error"),
+    ]);
+    let failed = |e: &str| if record::is_permission_error(e) { "denied" } else { "error" };
+    let fill = |levels: Vec<(String, Option<f32>)>, status: &mut BTreeMap<String, &str>| {
+        for (src, level) in levels {
+            let st = match level {
+                None => "error",
+                Some(l) if l >= 0.01 => "ok",
+                Some(_) => "silent",
+            };
+            status.insert(src, st);
+        }
+    };
+    let mut message = String::new();
+    match record::probe(bin, system_ok, true, secs) {
+        Ok(levels) => fill(levels, &mut status),
+        // 没有录屏与系统录音权限：单独再测一下麦克风（只录麦克风不需要这个权限）
+        Err(e) if system_ok && record::is_permission_error(&e) => {
+            status.insert("system".into(), "denied");
+            match record::probe(bin, false, true, secs) {
+                Ok(levels) => fill(levels, &mut status),
+                Err(e2) => {
+                    status.insert("mic".into(), failed(&e2));
+                }
+            }
+            message = e;
+        }
+        Err(e) => {
+            let st = failed(&e);
+            if system_ok {
+                status.insert("system".into(), st);
+            }
+            status.insert("mic".into(), st);
+            message = e;
+        }
+    }
+    let any = |x: &str| status.values().any(|v| *v == x);
+    if message.is_empty() {
+        message = if any("error") {
+            tr("没有录到声音文件", "No audio file was recorded").to_string()
+        } else if any("silent") {
+            tr(
+                "录到了，但几乎没有声音：放点声音、说句话再试",
+                "Recorded, but almost silent: play something or say a few words and try again",
+            )
+            .to_string()
+        } else {
+            tr("录音正常", "Recording works").to_string()
+        };
+    }
+    json!({"system": status["system"], "mic": status["mic"], "message": message})
 }
 
 async fn import_file(State(s): State<Shared>, mut form: Multipart) -> ApiResult<Json<Job>> {
@@ -1104,6 +1427,12 @@ fn job_json(s: &AppState, job: &Job) -> Value {
                 })
                 .unwrap_or_default()
                 .into();
+            // 距最后有人说话过了多少秒；开了自动结束时再给还有多少秒自动结束
+            let silent = (live.recorder.elapsed() - live.last_voice).max(0.0) as u64;
+            data["silent_s"] = silent.into();
+            if live.silence_min > 0 {
+                data["auto_stop_s"] = (live.silence_min as u64 * 60).saturating_sub(silent).into();
+            }
             if let Some(err) = live.recorder.exited() {
                 data["error"] = tr(&format!("录音中断：{err}"), &format!("Recording stopped: {err}")).into();
             }
@@ -1237,6 +1566,82 @@ async fn download_models(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     Ok(Json(job))
 }
 
+// ---------- 检查更新（桌面版） ----------
+
+const UPDATE_TTL: Duration = Duration::from_secs(6 * 3600);
+
+/// 最新 Release；6 小时内查过就用上次的结果
+fn latest_release(s: &AppState) -> Result<update::Release, String> {
+    if let Some((at, r)) = s.update.lock().unwrap().as_ref() {
+        if at.elapsed() < UPDATE_TTL {
+            return Ok(r.clone());
+        }
+    }
+    let r = update::fetch_latest(&s.opt.version)?;
+    *s.update.lock().unwrap() = Some((Instant::now(), r.clone()));
+    Ok(r)
+}
+
+async fn get_update(State(s): State<Shared>) -> Json<Value> {
+    let s2 = s.clone();
+    let r = tokio::task::spawn_blocking(move || latest_release(&s2))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    let current = &s.opt.version;
+    Json(match r {
+        Ok(r) => r.to_json(current),
+        Err(e) => json!({"current": current, "newer": false, "error": e}),
+    })
+}
+
+/// 下载新版安装包到「下载」文件夹，校验 sha256 后打开（自动挂载，在访达里显示）
+async fn download_update(State(s): State<Shared>) -> ApiResult<Json<Job>> {
+    let s2 = s.clone();
+    let r = tokio::task::spawn_blocking(move || latest_release(&s2))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    let name = Path::new(&r.dmg_name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let url = match &r.dmg {
+        Some(u) if r.newer_than(&s.opt.version) && !name.is_empty() => u.clone(),
+        _ => return Err(bad(tr("没有可用的更新", "No update available"))),
+    };
+    let job = Job::new("update", "", "downloading");
+    s.start_job(job.clone())?;
+    spawn_job(&s, &job.id, move |st, id| {
+        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("HOME")?;
+        let dest = home.join("Downloads").join(&name);
+        let _ = std::fs::remove_file(&dest);
+        let _ = std::fs::remove_file(dest.with_extension("part"));
+        let client = update::client(&st.opt.version, None)?;
+        let total = r.size as f64 / 1e6;
+        models::fetch(&client, &url, &dest, |n| {
+            st.update(id, |j| j.stage = format!("{:.0} / {:.0} MB", n as f64 / 1e6, total))
+        })?;
+        if let Some(want) = &r.sha256 {
+            if update::sha256_file(&dest).ok().as_deref() != Some(want.as_str()) {
+                let _ = std::fs::remove_file(&dest);
+                return Err(i18n::tr(
+                    "下载的安装包校验不通过，已删除",
+                    "The downloaded installer failed verification and was deleted",
+                )
+                .into());
+            }
+        }
+        let _ = std::process::Command::new("/usr/bin/open").arg(&dest).spawn();
+        st.update(id, |j| {
+            j.notice = i18n::tr(
+                "新版已下载并校验，把 Tingo 拖进「应用程序」替换即可",
+                "Downloaded and verified — drag Tingo into Applications to replace the old version",
+            )
+            .into()
+        });
+        Ok(())
+    });
+    Ok(Json(job))
+}
+
 pub fn router(state: Shared) -> Router {
     let origins = [
         "tauri://localhost",
@@ -1272,6 +1677,14 @@ pub fn router(state: Shared) -> Router {
         .route("/api/meetings/{id}/obsidian", post(post_obsidian))
         .route("/api/meetings/{id}/excalidraw", post(post_excalidraw))
         .route("/api/meetings/{id}/pdf", post(post_pdf))
+        .route("/api/meetings/{id}/srt", post(post_srt))
+        .route("/api/meetings/{id}/docx", post(post_docx))
+        .route("/api/meetings/{id}/speakers/guess", post(guess_speakers))
+        .route("/api/search", get(search))
+        .route("/api/demo", post(post_demo))
+        .route("/api/record/test", post(record_test))
+        .route("/api/update", get(get_update))
+        .route("/api/update/download", post(download_update))
         .route("/api/obsidian/vaults", get(obsidian_vaults))
         .route("/api/record/start", post(record_start))
         .route("/api/record/stop", post(record_stop))
@@ -1296,10 +1709,36 @@ pub async fn serve(
     opt: Options,
     port: u16,
 ) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
+    listen(app(opt), port).await
+}
+
+/// 建好全部状态的服务（任务、录音、模型）；克隆后共用同一份状态。
+pub type App = Router;
+
+/// 和 [`listen`] 分开，是因为 iOS 挂起 App 后系统可能收回监听的 socket，回到前台要重新监听，
+/// 而正在进行的录音和任务不能丢。
+pub fn app(opt: Options) -> App {
+    router(AppState::new(opt))
+}
+
+pub async fn listen(
+    app: App,
+    port: u16,
+) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
-    let app = router(AppState::new(opt));
     Ok((port, async move {
         let _ = axum::serve(listener, app).await;
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demo_folder_names() {
+        assert_eq!(demo_folder(false), "2026-10-28_1400_示例·注册转化复盘");
+        assert_eq!(demo_folder(true), "2026-10-28_1400_Sample_·_Signup_conversion_review");
+    }
 }

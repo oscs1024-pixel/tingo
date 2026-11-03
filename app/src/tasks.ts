@@ -6,7 +6,13 @@ import { $maybe, esc, fmt } from "./dom";
 import { isBusy, jobDetail, jobTitle, progressOf, S } from "./state";
 
 const linkOf = (j: Job) =>
-  j.state === "recording" ? "#/" : j.kind === "models" ? "#/settings/asr" : `#/m/${encodeURIComponent(j.meeting ?? "")}`;
+  j.state === "recording"
+    ? "#/"
+    : j.kind === "models"
+      ? "#/settings/asr"
+      : j.kind === "update"
+        ? "#/settings/about"
+        : `#/m/${encodeURIComponent(j.meeting ?? "")}`;
 
 function item(j: Job, big: boolean): string {
   const busy = isBusy(j);

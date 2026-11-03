@@ -44,6 +44,10 @@ const MINUTES_PROMPT: &str = "下面是一场会议的语音转写，格式为�
 {\"problem\": \"<被分析的问题，用问句>\", \"branches\": [{\"title\": \"<一个原因，10 字以内>\", \"detail\": \"<一句话补充>\", \"refs\": [\"mm:ss\", \"mm:ss\"]}]}
 ```
 
+```terms
+{\"terms\": [{\"term\": \"历史工单\", \"variants\": [\"历史中单\"]}]}
+```
+
 要求：
 1. 只依据转写内容，不编造。负责人或截止时间没有明确说出的，写\"未明确\"。
 2. 转写有同音错字，结合上下文改正明显的错误；拿不准的保留原文。
@@ -51,7 +55,8 @@ const MINUTES_PROMPT: &str = "下面是一场会议的语音转写，格式为�
 4. 每条要点、决议、待办都附上出处时间戳，便于回听核对。
 5. 某一节没有内容时写\"无\"，不要删掉这一节（「原因分析」除外，见第 7 条）。
 6. 去掉寒暄和口头禅，语言简洁、书面化。
-7. 只有会议里明确分析了某个问题的原因时，才写「原因分析」这一节：每个问题一个 fishbone 代码块（最多两个），每块 2～6 个分支，内容是合法 JSON。refs 填支撑这个原因的原话的时间戳，必须是上面转写里出现过的 [mm:ss]（不带方括号）；找不到原话支撑就留空数组，不要编。没有分析原因的会议，整节省略，不要写\"无\"。{glossary}{translate}
+7. 只有会议里明确分析了某个问题的原因时，才写「原因分析」这一节：每个问题一个 fishbone 代码块（最多两个），每块 2～6 个分支，内容是合法 JSON。refs 填支撑这个原因的原话的时间戳，必须是上面转写里出现过的 [mm:ss]（不带方括号）；找不到原话支撑就留空数组，不要编。没有分析原因的会议，整节省略，不要写\"无\"。
+8. 全文最后（鱼骨图之后）必须原样输出 terms 代码块：列出会上出现的人名、产品、项目、专有名词的正确写法（优先用术语表、热词里的写法），variants 写转写里出现过的听错的写法（没有就写空数组）；最多 30 个；一个都没有时写 {\"terms\": []}。纪要正文里一律用正确写法。{glossary}{translate}
 
 转写：
 {transcript}
@@ -106,6 +111,10 @@ Write the meeting minutes using exactly the following Markdown structure, and ou
 {\"problem\": \"<the problem being analyzed, as a question>\", \"branches\": [{\"title\": \"<one cause, 5 words max>\", \"detail\": \"<one-sentence elaboration>\", \"refs\": [\"mm:ss\", \"mm:ss\"]}]}
 ```
 
+```terms
+{\"terms\": [{\"term\": \"Kafka\", \"variants\": [\"Kafca\"]}]}
+```
+
 Rules:
 1. Use only what is in the transcript; do not make anything up. If an owner or a due date was not stated explicitly, write \"Not specified\".
 2. The transcript has recognition errors (homophones, misheard words). Fix obvious ones from context; keep the original wording when unsure.
@@ -113,7 +122,8 @@ Rules:
 4. End every key point, decision and action item with its source timestamp, so it can be checked against the recording.
 5. If a section has nothing, write \"None\" rather than dropping the section (except \"Root Cause Analysis\", see rule 7).
 6. Leave out small talk and filler words; keep the language concise and formal.
-7. Only include the \"Root Cause Analysis\" section when the meeting explicitly analyzed the causes of a problem: one fishbone code block per problem (at most two), 2-6 branches each, valid JSON. In refs, put the timestamps of the lines that support the cause; they must be [mm:ss] timestamps that appear in the transcript below (without the brackets). If no line supports it, leave refs as an empty array; do not invent one. If the meeting did not analyze causes, omit the whole section; do not write \"None\".{glossary}{translate}
+7. Only include the \"Root Cause Analysis\" section when the meeting explicitly analyzed the causes of a problem: one fishbone code block per problem (at most two), 2-6 branches each, valid JSON. In refs, put the timestamps of the lines that support the cause; they must be [mm:ss] timestamps that appear in the transcript below (without the brackets). If no line supports it, leave refs as an empty array; do not invent one. If the meeting did not analyze causes, omit the whole section; do not write \"None\".
+8. At the very end (after the fishbone), always output the terms code block exactly as shown above: list the correct spelling of the names of people, products, projects and other proper nouns that came up in the meeting (prefer the spelling in the glossary / hotwords), and in variants put the misheard spellings that appear in the transcript (an empty array if none); at most 30 entries; if there are none, write {\"terms\": []}. Always use the correct spelling in the body of the minutes.{glossary}{translate}
 
 Transcript:
 {transcript}
@@ -319,12 +329,12 @@ fn glossary_in(hotwords: &[String], lang: Lang) -> String {
     }
     if lang.is_en() {
         return format!(
-            "\n8. Proper nouns in this meeting (people, projects, systems): {}. Wherever the transcript has a homophone or near-homophone of one of them, replace it with the exact term.",
+            "\n9. Proper nouns in this meeting (people, projects, systems): {}. Wherever the transcript has a homophone or near-homophone of one of them, replace it with the exact term.",
             words.join(", ")
         );
     }
     format!(
-        "\n8. 本场会议涉及的专有名词（人名、项目、系统名）：{}。转写里与它们同音或近音的写法，一律改成这些词。",
+        "\n9. 本场会议涉及的专有名词（人名、项目、系统名）：{}。转写里与它们同音或近音的写法，一律改成这些词。",
         words.join("、")
     )
 }
@@ -917,6 +927,15 @@ mod tests {
         for t in [MINUTES_PROMPT, MINUTES_PROMPT_EN, CHUNK_PROMPT, CHUNK_PROMPT_EN] {
             assert!(t.contains("{glossary}{translate}") && t.contains("{transcript}"));
         }
+        // 术语表放在全文最后（鱼骨图之后），合并长会议时的格式要求里也有
+        for (t, lang) in [(MINUTES_PROMPT, Lang::Zh), (MINUTES_PROMPT_EN, Lang::En)] {
+            let fish = t.find("```fishbone").unwrap();
+            let terms = t.find("```terms\n{\"terms\": [{\"term\": ").unwrap();
+            assert!(fish < terms && terms < t.find(lang.pick("要求：", "Rules:")).unwrap());
+            let instructions = t.split(prompts(lang).transcript_marker).next().unwrap();
+            assert!(instructions.contains("```terms") && instructions.contains("{\"terms\": []}"));
+        }
+        assert!(glossary(&["青鸾".into()]).starts_with("\n9. "));
         // 合并时截取格式要求的分隔只出现一次
         assert_eq!(MINUTES_PROMPT_EN.matches(prompts(Lang::En).transcript_marker).count(), 1);
         assert_eq!(MINUTES_PROMPT.matches(prompts(Lang::Zh).transcript_marker).count(), 1);

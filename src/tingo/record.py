@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import platform
 import shutil
 import signal
@@ -259,42 +260,291 @@ def record_until_interrupt(
         signal.signal(signal.SIGTERM, old_term)
 
 
-def track_level(path: Path, window_s: float = 0.15) -> float:
-    """正在写入的 wav 文件末尾一小段的音量，0～1。图形界面录音时画电平用。"""
+def _wav_format(head: bytes) -> tuple[int, int, int, int, int, int] | None:
+    """wav 文件头：(格式 tag, 声道数, 采样率, 每个样本字节数, data 块长度字段的位置, 数据起点)。认不出返回 None。"""
     import struct
 
+    fmt_at, data_at = head.find(b"fmt "), head.find(b"data")
+    if fmt_at < 0 or data_at < 0:
+        return None
+    try:
+        tag, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH", head, fmt_at + 8)
+        if tag == 0xFFFE:  # WAVE_FORMAT_EXTENSIBLE，真实格式在子格式 GUID 的前两个字节
+            tag = struct.unpack_from("<H", head, fmt_at + 8 + 24)[0]
+    except struct.error:
+        return None
+    if not channels or not rate:
+        return None
+    return tag, channels, rate, bits // 8, data_at + 4, data_at + 8
+
+
+def _level(raw: bytes, tag: int, width: int, frame: int) -> float | None:
+    """一段 PCM 的音量，0～1（-60 dB → 0，-10 dB → 1）；格式不支持返回 None。"""
     import numpy as np
 
-    try:
-        with path.open("rb") as f:
-            head = f.read(4096)
-            fmt_at, data_at = head.find(b"fmt "), head.find(b"data")
-            if fmt_at < 0 or data_at < 0:
-                return 0.0
-            tag, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH", head, fmt_at + 8)
-            if tag == 0xFFFE:  # WAVE_FORMAT_EXTENSIBLE，真实格式在子格式 GUID 的前两个字节
-                tag = struct.unpack_from("<H", head, fmt_at + 8 + 24)[0]
-            width = bits // 8
-            frame = width * channels
-            data_start = data_at + 8
-            size = f.seek(0, 2)
-            n = int(rate * window_s) * frame
-            start = max(data_start, size - n)
-            start -= (start - data_start) % frame
-            f.seek(start)
-            raw = f.read(size - start)
-    except (OSError, struct.error):
-        return 0.0
-    if not raw or width not in (2, 4):
-        return 0.0
     raw = raw[: len(raw) - len(raw) % frame]
     if tag == 3 and width == 4:
         x = np.frombuffer(raw, dtype="<f4")
     elif tag == 1 and width == 2:
         x = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
     else:
-        return 0.0
+        return None
     if x.size == 0:
         return 0.0
     db = 10 * np.log10(float(np.mean(x * x)) + 1e-12)
-    return float(min(1.0, max(0.0, (db + 60) / 50)))  # -60 dB → 0，-10 dB → 1
+    return float(min(1.0, max(0.0, (db + 60) / 50)))
+
+
+def track_level(path: Path, window_s: float = 0.15) -> float:
+    """正在写入的 wav 文件末尾一小段的音量，0～1。图形界面录音时画电平用，自动结束录音时看最近 5 秒。"""
+    try:
+        with path.open("rb") as f:
+            fmt = _wav_format(f.read(4096))
+            if fmt is None:
+                return 0.0
+            tag, channels, rate, width, _, data_start = fmt
+            frame = width * channels
+            if not frame:
+                return 0.0
+            size = f.seek(0, 2)
+            n = int(rate * window_s) * frame
+            start = max(data_start, size - n)
+            start -= (start - data_start) % frame
+            f.seek(start)
+            raw = f.read(size - start)
+    except OSError:
+        return 0.0
+    if not raw:
+        return 0.0
+    return _level(raw, tag, width, frame) or 0.0
+
+
+def max_level(path: Path, window_s: float = 0.15) -> float | None:
+    """整条音轨里最响的一小段（window_s 秒）的音量，0～1，刻度同 track_level。读不了或格式不对返回 None。"""
+    try:
+        with path.open("rb") as f:
+            fmt = _wav_format(f.read(4096))
+            if fmt is None:
+                return None
+            tag, channels, rate, width, _, data_start = fmt
+            frame = width * channels
+            if not frame:
+                return None
+            f.seek(data_start)
+            raw = f.read()
+    except OSError:
+        return None
+    step = max(1, int(rate * window_s)) * frame
+    best: float | None = None
+    for at in range(0, max(len(raw), 1), step):
+        level = _level(raw[at : at + step], tag, width, frame)
+        if level is None:
+            return None
+        best = level if best is None else max(best, level)
+    return best
+
+
+def truncate_wav(path: Path, keep_s: float) -> bool:
+    """把 wav 截到前 keep_s 秒：截掉多余数据，改写 data 块长度和 RIFF 头。返回是否真的截短了。
+
+    录音组件边录边写，文件头里的长度可能不对，所以按文件大小算；不截时也顺手把两个长度字段写对。
+    """
+    import struct
+
+    try:
+        with path.open("r+b") as f:
+            fmt = _wav_format(f.read(4096))
+            if fmt is None:
+                return False
+            _, channels, rate, width, size_at, data_start = fmt
+            frame = width * channels
+            size = f.seek(0, 2)
+            keep = max(0, int(keep_s * rate)) * frame
+            cut = data_start + keep < size
+            if cut:
+                f.truncate(data_start + keep)
+                size = data_start + keep
+            f.seek(size_at)
+            f.write(struct.pack("<I", min(size - data_start, 0xFFFFFFFF)))
+            f.seek(4)
+            f.write(struct.pack("<I", min(size - 8, 0xFFFFFFFF)))
+            return cut
+    except OSError:
+        return False
+
+
+# ---------- 自动结束录音 ----------
+
+# 开始录音时在运行、后来全部退出，就自动结束录音。按进程名（路径最后一段）比，忽略大小写
+MEETING_APPS = (
+    "zoom.us",
+    "腾讯会议",
+    "TencentMeeting",
+    "WeMeetApp",
+    "Lark",
+    "Feishu",
+    "飞书",
+    "Microsoft Teams",
+    "MSTeams",
+    "DingTalk",
+    "钉钉",
+    "Webex",
+    "Slack",
+)
+_MEETING_APPS = {a.lower() for a in MEETING_APPS}
+
+VOICE_LEVEL = 0.4  # 最近 5 秒的电平到这么高就算有人说话（track_level 的刻度：-60 dB→0、-10 dB→1，0.4 ≈ -40 dB；太低的话麦克风底噪就超过了）
+CHECK_S = 5.0  # 多久检查一次
+KEEP_AFTER_VOICE_S = 30.0  # 因为没人说话而结束时，音轨保留到最后有声之后这么多秒
+SECONDS_PER_MIN = 60.0  # 测试里改小
+
+
+def running_meeting_apps() -> set[str]:
+    """正在运行的会议软件（小写的进程名）。ps 跑不了时返回空集合。"""
+    try:
+        out = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True, timeout=5, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    names = {line.strip().rsplit("/", 1)[-1].strip().lower() for line in out.splitlines() if line.strip()}
+    return names & _MEETING_APPS
+
+
+class AutoStop:
+    """录音时每 CHECK_S 秒喂一次"这几秒有没有人说话"和"会议软件还在不在"，判断要不要自动结束。
+
+    silence_min：连续这么多分钟没人说话就结束（0 = 不看）；apps_at_start：开始录音时在运行的会议软件，
+    为空或者 app_quit 关着就不看会议软件。
+    """
+
+    SILENCE, APP_QUIT = "silence", "app_quit"
+
+    def __init__(self, silence_min: int, app_quit: bool, apps_at_start: set[str], started: float):
+        self.silence_min = silence_min
+        self.watch_apps = app_quit and bool(apps_at_start)
+        self.started = started
+        self.last_voice = started
+
+    @property
+    def limit_s(self) -> float:
+        return self.silence_min * SECONDS_PER_MIN
+
+    def observe(self, now: float, voiced: bool, apps: set[str] | None = None) -> str | None:
+        """返回结束原因（SILENCE / APP_QUIT），不用结束时返回 None。"""
+        if voiced:
+            self.last_voice = now
+        if self.watch_apps and apps is not None and not apps:
+            return self.APP_QUIT
+        if self.silence_min > 0 and now - self.last_voice >= self.limit_s:
+            return self.SILENCE
+        return None
+
+    def silent_s(self, now: float) -> int:
+        return max(0, int(now - self.last_voice))
+
+    def auto_stop_s(self, now: float) -> int | None:
+        """再过多少秒会因为没人说话而自动结束；没开时返回 None。"""
+        if self.silence_min <= 0:
+            return None
+        return max(0, math.ceil(self.limit_s - (now - self.last_voice)))  # 和 silent_s（向下取整）加起来正好是上限
+
+    def keep_s(self) -> float:
+        """因为没人说话而结束时，音轨从开头保留多少秒。"""
+        return self.last_voice - self.started + KEEP_AFTER_VOICE_S
+
+
+# ---------- 录音测试（新手引导用） ----------
+
+TEST_OK_LEVEL = 0.01
+
+
+def _denied(msg: str) -> bool:
+    m = msg.lower()
+    return "权限" in msg or "permission" in m or "not authorized" in m or "declined" in m
+
+
+def _capture_once(out_dir: Path, seconds: float, system: bool) -> str | None:
+    """用录音组件录 seconds 秒（system=False 时只录麦克风），返回错误信息或 None。"""
+    import threading
+
+    if platform.system() != "Darwin":
+        rec = Recording(out_dir, system_audio=False, mic=True)
+        try:
+            rec.start()
+        except Exception as e:  # noqa: BLE001
+            return str(e) or e.__class__.__name__
+        time.sleep(seconds)
+        rec.stop_capture()
+        return None
+    try:
+        binary = ensure_recorder()
+    except Exception as e:  # noqa: BLE001
+        return str(e) or e.__class__.__name__
+    cmd = [str(binary), str(out_dir)] + ([] if system else ["--no-system"])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, start_new_session=True)
+    first: list[str] = []
+    reader = threading.Thread(target=lambda: first.append(proc.stdout.readline().strip()), daemon=True)
+    reader.start()
+    reader.join(30)  # 第一次会弹系统权限窗口
+    try:
+        if not first:
+            from .i18n import tr
+
+            return tr("录音组件没有响应", "The recorder didn't respond")
+        if first[0] != "READY":
+            return first[0].removeprefix("ERROR: ") or "录音组件意外退出"
+        deadline = time.time() + seconds
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.1)
+        if proc.poll() is not None:
+            tail = proc.stdout.read().strip()
+            return tail.removeprefix("ERROR: ") or "录音组件意外退出"
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def _track_status(path: Path) -> str:
+    level = max_level(path) if path.exists() else None
+    if level is None:
+        return "error"
+    return "ok" if level >= TEST_OK_LEVEL else "silent"
+
+
+def probe_devices(seconds: float) -> dict:
+    """在临时目录试录 seconds 秒（系统声音 + 麦克风），报告每一路的状态：
+    ok | silent（几乎没声音）| denied（没有权限）| unsupported（本机不支持系统声音）| error。临时文件录完就删。
+    """
+    import tempfile
+
+    system_ok = system_audio_supported()
+    result = {"system": "unsupported", "mic": "error"}
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="tingo-test-") as tmp:
+        out = Path(tmp)
+        err = _capture_once(out, seconds, system_ok)
+        if err is not None and system_ok and _denied(err):
+            # 没有录屏与系统录音权限：系统声音报没权限，麦克风单独再试一次
+            result["system"] = "denied"
+            errors.append(err)
+            for p in out.iterdir():
+                p.unlink()
+            err = _capture_once(out, seconds, False)
+            system_ok = False
+        if err is not None:
+            status = "denied" if _denied(err) else "error"
+            result["mic"] = status
+            if system_ok:
+                result["system"] = status
+            errors.append(err)
+        else:
+            result["mic"] = _track_status(out / "mic.wav")
+            if system_ok:
+                result["system"] = _track_status(out / "system.wav")
+    return {**result, "message": errors[0] if errors else ""}

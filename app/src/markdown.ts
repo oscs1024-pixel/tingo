@@ -1,8 +1,8 @@
 /* 纪要渲染：只覆盖纪要用到的 Markdown 子集（标题、列表、表格、粗体、行内代码），时间戳变成可点的按钮。 */
 
-import { t } from "./i18n";
+import { t, tl } from "./i18n";
 import { esc, tsToMs } from "./dom";
-import { parseFishbone, renderFishbone, type Resolver } from "./fishbone";
+import { parseFishbone, parseTerms, renderFishbone, type Resolver } from "./fishbone";
 
 const TS = String.raw`\d{1,2}:\d{2}(?::\d{2})?`;
 
@@ -38,7 +38,21 @@ export function renderMarkdown(
       while (i < lines.length && !lines[i].trim().startsWith("```")) body.push(lines[i++]);
       const closed = i < lines.length;
       i++;
-      if (lang === "fishbone") {
+      if (lang === "terms") {
+        // 人名与术语：没写完时不显示
+        const terms = closed ? parseTerms(body.join("\n")) : [];
+        if (terms.length)
+          out.push(`<div class="terms"><div class="terms-head"><b>${tl(en, "人名与术语", "Names & terms")}</b>${
+            en === undefined ? `<button class="link-btn terms-add" type="button">${t("全部加入热词", "Add all to hotwords")}</button>` : ""
+          }</div><div class="terms-list">${terms
+            .map(
+              (x) =>
+                `<span class="term" data-term="${esc(x.term)}"><b>${esc(x.term)}</b>${
+                  x.variants?.length ? `<small>${tl(en, "识别成", "heard as")} ${esc(x.variants.join(tl(en, "、", ", ")))}</small>` : ""
+                }</span>`,
+            )
+            .join("")}</div></div>`);
+      } else if (lang === "fishbone") {
         const spec = closed ? parseFishbone(body.join("\n")) : null;
         out.push(spec ? renderFishbone(spec, resolve, en) : closed ? "" : `<div class="fishbone pending">${t("正在画鱼骨图…", "Drawing the fishbone…")}</div>`);
       } else {

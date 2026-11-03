@@ -103,10 +103,28 @@ export function renderFishbone(spec: FishboneSpec, resolve?: Resolver, en?: bool
     </div>`;
 }
 
-/** 复制纪要时把鱼骨图换成可读的列表（与后端推送时的转换一致）。 */
+export interface Term {
+  term: string;
+  variants?: string[];
+}
+
+/** 纪要末尾的 ```terms 代码块：人名、术语的正确写法和识别错的写法 */
+export function parseTerms(json: string): Term[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v?.terms) ? v.terms.filter((x: Term) => x && typeof x.term === "string" && x.term.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 去掉 terms 代码块（没写完的也去掉到文末） */
+export const stripTerms = (md: string): string => md.replace(/\n*```terms\s*\n[\s\S]*?(\n```|$)/g, "").trimEnd() + "\n";
+
+/** 复制纪要时把鱼骨图换成可读的列表（与后端推送时的转换一致），并去掉术语表数据块。 */
 export function fishboneToText(md: string): string {
   const en = docIsEn(md);
-  return md.replace(/```fishbone\s*\n([\s\S]*?)\n```/g, (_, json: string) => {
+  return stripTerms(md).replace(/```fishbone\s*\n([\s\S]*?)\n```/g, (_, json: string) => {
     const fb = parseFishbone(json);
     if (!fb) return "";
     return [

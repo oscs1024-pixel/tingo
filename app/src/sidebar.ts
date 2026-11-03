@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { showUpdate, updateInfo } from "./update";
 import { api, type Env, type MeetingSummary } from "./api";
 import { $, esc } from "./dom";
 import { S } from "./state";
@@ -47,5 +48,13 @@ export async function refreshEnv(): Promise<void> {
   ];
   $("#envBox").innerHTML =
     rows.map(([c, t]) => `<div class="env-row"><span class="env-dot ${c}"></span><span>${esc(t)}</span></div>`).join("") +
-    `<div class="env-row" style="color:var(--muted-2)">v${esc(e.version)}</div>`;
+    `<div class="env-row" style="color:var(--muted-2)">v${esc(e.version)}${
+      updateInfo()?.newer ? ` <a class="update-dot" id="upLink" href="#">${t(`新版本 ${esc(updateInfo()?.latest ?? "")}`, `Update ${esc(updateInfo()?.latest ?? "")}`)}</a>` : ""
+    }</div>`;
+  const up = document.getElementById("upLink");
+  if (up)
+    up.onclick = (ev) => {
+      ev.preventDefault();
+      showUpdate();
+    };
 }

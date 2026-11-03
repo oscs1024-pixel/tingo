@@ -75,6 +75,8 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
     }
     let minutes = std::fs::read_to_string(dir.join(MINUTES))
         .map_err(|_| tr("这场会议还没有纪要", "This meeting has no minutes yet").to_string())?;
+    // 术语表只给搜索用，笔记里不要
+    let minutes = crate::terms::strip(&minutes);
     let lang = doc_lang(&minutes);
     // 英文纪要里没改名的说话人叫 Speaker N
     let transcript = Transcript::load(&dir.join(TRANSCRIPT_JSON)).ok().map(|t| t.localized(lang));
@@ -177,7 +179,7 @@ mod tests {
         tr.save(&dir.join(TRANSCRIPT_JSON)).unwrap();
         std::fs::write(
             dir.join(MINUTES),
-            "# 发布评审会\n\n## 原因分析\n```fishbone\n{\"problem\": \"为什么延期？\", \"branches\": [{\"title\": \"支付有问题\", \"refs\": [\"00:09\"]}, {\"title\": \"猜的\", \"refs\": []}]}\n```\n",
+            "# 发布评审会\n\n## 原因分析\n```fishbone\n{\"problem\": \"为什么延期？\", \"branches\": [{\"title\": \"支付有问题\", \"refs\": [\"00:09\"]}, {\"title\": \"猜的\", \"refs\": []}]}\n```\n\n```terms\n{\"terms\": [{\"term\": \"支付\", \"variants\": []}]}\n```\n",
         )
         .unwrap();
         let cfg = ObsidianConfig { vault: vault.to_string_lossy().into(), folder: "会议纪要".into(), auto: true, transcript: true };
@@ -190,7 +192,7 @@ mod tests {
         assert!(note.contains("- **猜的** · 无原文依据 ⚠️"));
         assert!(note.contains("    - `00:09` 小张：支付模块"));
         assert!(note.contains("> [!quote]- 转写全文（00:52，2 人）"));
-        assert!(!note.contains("```fishbone"));
+        assert!(!note.contains("```fishbone") && !note.contains("```terms")); // 术语表不进笔记
         assert!(out.drawings[0].ends_with("2026-11-02 发布评审 鱼骨图.excalidraw.md"));
         assert_eq!(uri(Path::new("/a b/会")), "obsidian://open?path=/a%20b/%E4%BC%9A");
         let _ = std::fs::remove_dir_all(&base);

@@ -60,3 +60,25 @@ def test_title_uses_meeting_folder_for_recordings():
     assert tr.title() == "周会"
     tr.source = "/Users/x/Documents/tingo/2026-11-02_1213_周会/录音.m4a"
     assert tr.title() == "2026-11-02_1213_周会"
+
+
+def test_srt_numbering_times_and_names():
+    from tingo.transcript import srt_ts
+
+    tr = Transcript(
+        "a.wav",
+        3_725_000,
+        [
+            Sentence(0, 0, 1500, "大家好。"),
+            Sentence(1, 61_001, 62_340, "开始吧。"),
+            Sentence(0, 3_600_000, 3_725_000, "散会。"),
+        ],
+        {0: "林舟"},
+    )
+    assert tr.to_srt() == (
+        "1\n00:00:00,000 --> 00:00:01,500\n林舟：大家好。\n\n"
+        "2\n00:01:01,001 --> 00:01:02,340\n说话人2：开始吧。\n\n"
+        "3\n01:00:00,000 --> 01:02:05,000\n林舟：散会。\n"
+    )
+    assert tr.to_srt(en=True).split("\n\n")[1] == "2\n00:01:01,001 --> 00:01:02,340\nSpeaker 2: 开始吧。"
+    assert srt_ts(-5) == "00:00:00,000" and srt_ts(100 * 3600 * 1000 + 7) == "100:00:00,007"

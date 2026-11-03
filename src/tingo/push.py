@@ -11,6 +11,7 @@ import urllib.parse
 
 import httpx
 
+from . import terms
 from .i18n import doc_is_en, tr
 
 
@@ -104,6 +105,7 @@ def build_request(webhook: str, minutes_md: str, secret: str = "", now: float | 
     """返回 (url, json body)。拆出来是为了不发请求也能测。"""
     now = now if now is not None else time.time()
     platform = detect(webhook)
+    minutes_md = terms.remove(minutes_md)  # 术语表只给搜索用，不进群消息
     en = doc_is_en(minutes_md)  # 卡片标题、截断提示跟纪要的语言走
     title = _title(minutes_md, en)
     minutes_md = fishbone_to_text(minutes_md, en)

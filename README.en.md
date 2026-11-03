@@ -11,7 +11,7 @@
   <a href="README.md"><img src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-555" alt="中文"></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/detail.png" width="880" alt="Meeting minutes"></p>
+<p align="center"><img src="docs/screenshots/demo.gif" width="880" alt="Demo: search across meetings, jump to the original words, expand fishbone quotes, watch the minutes being written"></p>
 
 *Tingo* comes from 听 (*tīng*, "to listen"); its Chinese name 听过 means "heard it".
 
@@ -37,7 +37,11 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 <p align="center"><img src="docs/screenshots/home.png" width="49%" alt="Background tasks"> <img src="docs/screenshots/generating.png" width="49%" alt="Minutes being written"></p>
 
-**Export & share.** A4 PDF (fishbone quotes expanded on paper), Obsidian notes with properties and an embedded Excalidraw drawing (optionally automatic), Feishu / DingTalk / WeCom group bots, or plain Markdown.
+**Search everything that was said.** Search across all transcripts and jump to the exact second. A names & terms table at the end of the minutes records the correct spelling and misheard variants, so searching finds those too — and you can add them all to your hotwords in one click.
+
+**Less busywork.** Let AI guess who's who from how people address each other (each guess comes with evidence). Recording stops by itself when the meeting app quits or after 10 minutes of silence, and the silent tail is trimmed.
+
+**Export & share.** A4 PDF, editable Word, SRT subtitles (fishbone quotes expanded on paper), Obsidian notes with properties and an embedded Excalidraw drawing (optionally automatic), Feishu / DingTalk / WeCom group bots, or plain Markdown.
 
 <p align="center"><img src="docs/screenshots/pdf.png" width="820" alt="PDF export"></p>
 

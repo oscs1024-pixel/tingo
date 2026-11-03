@@ -256,6 +256,12 @@ impl LiveTranscriber {
         s.lines[s.lines.len().saturating_sub(n)..].to_vec()
     }
 
+    /// 到目前为止识别出了多少句（有没有新出文字，自动结束录音时用来判断有没有人说话）。
+    pub fn line_count(&self) -> usize {
+        let s = self.inner.lock().unwrap();
+        s.lines.iter().filter(|(_, t)| !t.trim().is_empty()).count()
+    }
+
     /// 录音停止后调用：处理剩下的几秒，统一聚类，返回完整转写。
     pub fn finish(
         mut self,

@@ -10,7 +10,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import fishbone, meetings
+from . import fishbone, meetings, terms
 from .config import ObsidianConfig
 from .fishbone import NONE, fmt_ms
 from .i18n import doc_is_en
@@ -83,7 +83,7 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
             )
         )
     try:
-        minutes = (meeting_dir / MINUTES).read_text(encoding="utf-8")
+        minutes = terms.remove((meeting_dir / MINUTES).read_text(encoding="utf-8"))  # 术语表不进笔记
     except OSError:
         raise ExportError(_t("这场会议还没有纪要", "This meeting has no minutes yet")) from None
     try:

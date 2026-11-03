@@ -49,10 +49,11 @@ export async function poll(): Promise<void> {
     const prev = before.get(j.id) ?? IDLE;
     if (S.detail && j.meeting === S.detail.id && j.kind !== "models") updateDetailJob(j, prev);
     if (j.kind === "models") updateSettingsJob(j, prev);
+    if (j.kind === "update" && j.state === "error" && isBusy(prev)) toast(j.error ?? "", true);
     if (prev.state === j.state || !(j.state === "done" || j.state === "error") || !isBusy(prev)) continue;
     changed = true;
     const here = S.detail?.id === j.meeting;
-    if (j.kind !== "models" && !here) {
+    if (j.kind !== "models" && j.kind !== "update" && !here) {
       if (j.state === "done") toast(t(`「${jobTitle(j)}」的纪要已生成`, `Minutes ready: ${jobTitle(j)}`));
       else toast(t(`「${jobTitle(j)}」没有处理完：${j.error ?? ""}`, `${jobTitle(j)} didn't finish: ${j.error ?? ""}`), true);
     }

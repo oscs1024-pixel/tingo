@@ -83,6 +83,14 @@ class Transcript:
         sep = ": " if en else "："
         return "\n".join(f"[{fmt_ts(t.start_ms)}] {t.speaker}{sep}{t.text}" for t in self.turns(en))
 
+    def to_srt(self, en: bool = False) -> str:
+        """SRT 字幕：一句一条，文字是「说话人：句子」（en=True 时是 "Speaker N: text"）。"""
+        sep = ": " if en else "："
+        return "\n".join(
+            f"{i}\n{srt_ts(s.start_ms)} --> {srt_ts(s.end_ms)}\n{self.name_of(s.speaker, en)}{sep}{s.text}\n"
+            for i, s in enumerate(self.sentences, 1)
+        )
+
     def text(self) -> str:
         """所有发言连在一起，判断会议语言用（不含说话人名字）。"""
         return "".join(s.text for s in self.sentences)
@@ -112,3 +120,12 @@ def fmt_ts(ms: int) -> str:
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
+
+def srt_ts(ms: int) -> str:
+    """SRT 时间：HH:MM:SS,mmm"""
+    ms = max(0, int(ms))
+    s, milli = divmod(ms, 1000)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d},{milli:03d}"

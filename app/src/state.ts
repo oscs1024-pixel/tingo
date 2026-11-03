@@ -43,6 +43,7 @@ export const jobOf = (meeting: string): Job | undefined => S.jobs.find((j) => j.
 
 /** 任务标题：会议名（去掉日期时间前缀），或者下载的模型 */
 export function jobTitle(j: Job): string {
+  if (j.kind === "update") return t("下载新版 Tingo", "Downloading Tingo update");
   if (j.kind === "models") return `${isBusy(j) ? t("下载识别模型", "Downloading speech model") : t("识别模型", "Speech model")}${j.meeting && j.meeting !== "paraformer" ? ` · ${j.meeting}` : ""}`;
   return (j.meeting ?? "").replace(/^\d{4}-\d{2}-\d{2}_\d{4}_/, "") || t("会议", "Meeting");
 }
@@ -97,7 +98,7 @@ export function progressOf(j: Job): number {
     const m = /([\d.]+)%/.exec(s ?? "");
     return m ? Number(m[1]) / 100 : 0;
   };
-  if (j.kind === "models") {
+  if (j.kind === "models" || j.kind === "update") {
     const m = /([\d.]+)\s*\/\s*([\d.]+)/.exec(j.stage ?? "");
     return m ? Number(m[1]) / Number(m[2]) : 0;
   }
@@ -123,8 +124,8 @@ export function progressOf(j: Job): number {
 /** 一句话说清任务现在在干什么 */
 export function jobDetail(j: Job): string {
   if (j.state === "error") return j.error || t("没有完成", "Didn't finish");
-  if (j.state === "done") return j.kind === "models" ? t("下载完成", "Downloaded") : t("纪要已生成", "Minutes ready");
-  if (j.kind === "models") return j.stage || t("准备下载…", "Starting download…");
+  if (j.state === "done") return j.kind === "models" || j.kind === "update" ? t("下载完成", "Downloaded") : t("纪要已生成", "Minutes ready");
+  if (j.kind === "models" || j.kind === "update") return j.stage || t("准备下载…", "Starting download…");
   if (j.state === "transcribing") return `${t("正在转写", "Transcribing")}${j.stage ? ` ${j.stage}` : ""}`;
   if (j.state === "summarizing") {
     const p = minutesProgress(j);

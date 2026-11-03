@@ -51,6 +51,10 @@ pub struct Config {
     pub minutes_language: String,
     /// [asr] language：zh | en | auto，会议语言（SenseVoice / Fun-ASR-Nano 用；Paraformer 只认中文）
     pub asr_language: String,
+    /// [record] auto_stop_silence_min：连续这么多分钟没人说话就自动结束录音，0 表示不自动结束
+    pub auto_stop_silence_min: u32,
+    /// [record] auto_stop_app_quit：开始录音时在运行的会议软件全部退出后自动结束录音
+    pub auto_stop_app_quit: bool,
 }
 
 impl Default for Config {
@@ -64,9 +68,15 @@ impl Default for Config {
             ui_language: "auto".into(),
             minutes_language: "auto".into(),
             asr_language: "zh".into(),
+            auto_stop_silence_min: DEFAULT_SILENCE_MIN,
+            auto_stop_app_quit: true,
         }
     }
 }
+
+pub const DEFAULT_SILENCE_MIN: u32 = 10;
+/// 没人说话自动结束录音的分钟数上限
+pub const MAX_SILENCE_MIN: u32 = 240;
 
 /// 三个语言选项都只认 auto / zh / en
 pub const LANGUAGES: [&str; 3] = ["auto", "zh", "en"];
@@ -106,6 +116,12 @@ struct RawLang {
 }
 
 #[derive(Deserialize, Default)]
+struct RawRecord {
+    auto_stop_silence_min: Option<i64>,
+    auto_stop_app_quit: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
 struct Raw {
     hotwords: Option<Vec<String>>,
     #[serde(default)]
@@ -120,6 +136,8 @@ struct Raw {
     minutes: RawLang,
     #[serde(default)]
     asr: RawLang,
+    #[serde(default)]
+    record: RawRecord,
 }
 
 /// 读环境变量；改名前的 JIYAO_ 前缀照样认
@@ -185,6 +203,13 @@ pub fn load(path: &Path) -> Config {
         ui_language: language(raw.ui.language, "auto"),
         minutes_language: language(raw.minutes.language, "auto"),
         asr_language: language(raw.asr.language, "zh"),
+        auto_stop_silence_min: raw
+            .record
+            .auto_stop_silence_min
+            .filter(|m| (0..=MAX_SILENCE_MIN as i64).contains(m))
+            .map(|m| m as u32)
+            .unwrap_or(DEFAULT_SILENCE_MIN),
+        auto_stop_app_quit: raw.record.auto_stop_app_quit.unwrap_or(true),
     };
     let env = |k: &str| match k.strip_prefix("TINGO_") {
         Some(name) => env_var(name),
@@ -222,7 +247,7 @@ fn quote(s: &str) -> String {
 pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
     let words: Vec<String> = cfg.hotwords.iter().map(|w| quote(w)).collect();
     let text = format!(
-        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\napi = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n\n[ui]\nlanguage = {}\n\n[minutes]\nlanguage = {}\n\n[asr]\nlanguage = {}\n",
+        "# tingo 配置，由图形界面写入；也可以直接编辑。\n\n# 专有名词、人名、项目代号，提高识别准确率\nhotwords = [{}]\n\n[llm]\nbase_url = {}\napi_key = {}\nmodel = {}\napi = {}\n\n[push]\nwebhook = {}\nsecret = {}\n\n[obsidian]\nvault = {}\nfolder = {}\nauto = {}\ntranscript = {}\n\n[ui]\nlanguage = {}\n\n[minutes]\nlanguage = {}\n\n[asr]\nlanguage = {}\n\n[record]\nauto_stop_silence_min = {}\nauto_stop_app_quit = {}\n",
         words.join(", "),
         quote(&cfg.llm.base_url),
         quote(&cfg.llm.api_key),
@@ -237,6 +262,8 @@ pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
         quote(&cfg.ui_language),
         quote(&cfg.minutes_language),
         quote(&cfg.asr_language),
+        cfg.auto_stop_silence_min,
+        cfg.auto_stop_app_quit,
     );
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -309,12 +336,32 @@ mod tests {
         // 写在 [obsidian] 之后，顺序 [ui]、[minutes]、[asr]
         let pos = |k: &str| text.find(k).unwrap();
         assert!(pos("[obsidian]") < pos("[ui]") && pos("[ui]") < pos("[minutes]") && pos("[minutes]") < pos("[asr]"));
-        assert!(text.ends_with("transcript = true\n\n[ui]\nlanguage = \"en\"\n\n[minutes]\nlanguage = \"zh\"\n\n[asr]\nlanguage = \"auto\"\n"));
+        assert!(text.ends_with("transcript = true\n\n[ui]\nlanguage = \"en\"\n\n[minutes]\nlanguage = \"zh\"\n\n[asr]\nlanguage = \"auto\"\n\n[record]\nauto_stop_silence_min = 10\nauto_stop_app_quit = true\n"));
         let c = load(&p);
         assert_eq!((c.ui_language.as_str(), c.minutes_language.as_str(), c.asr_language.as_str()), ("en", "zh", "auto"));
         // 老配置没有这三节、或者填了不认识的值：用默认
         std::fs::write(&p, "[llm]\nmodel = \"m\"\n\n[asr]\nlanguage = \"fr\"\n\n[minutes]\nlanguage = \"EN\"\n").unwrap();
         let c = load(&p);
         assert_eq!((c.ui_language.as_str(), c.minutes_language.as_str(), c.asr_language.as_str()), ("auto", "en", "zh"));
+    }
+
+    #[test]
+    fn record_section_roundtrip() {
+        let p = tmp("record");
+        let cfg = Config { auto_stop_silence_min: 0, auto_stop_app_quit: false, ..Default::default() };
+        save(&p, &cfg).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        // 接在 [asr] 之后，格式固定
+        assert!(text.ends_with("[asr]\nlanguage = \"zh\"\n\n[record]\nauto_stop_silence_min = 0\nauto_stop_app_quit = false\n"));
+        let c = load(&p);
+        assert_eq!((c.auto_stop_silence_min, c.auto_stop_app_quit), (0, false));
+        save(&p, &Config { auto_stop_silence_min: 240, ..Default::default() }).unwrap();
+        let c = load(&p);
+        assert_eq!((c.auto_stop_silence_min, c.auto_stop_app_quit), (240, true));
+        // 没有这一节、或者值不合法：用默认
+        assert_eq!(load(Path::new("/nonexistent/tingo.toml")).auto_stop_silence_min, 10);
+        std::fs::write(&p, "[record]\nauto_stop_silence_min = 999\n").unwrap();
+        let c = load(&p);
+        assert_eq!((c.auto_stop_silence_min, c.auto_stop_app_quit), (10, true));
     }
 }

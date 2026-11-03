@@ -483,3 +483,57 @@ def test_anthropic_models_url_and_headers(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", lambda url, headers, timeout: Bad())
     assert server._list_models("https://api.anthropic.com", "bad", "anthropic") is None
+
+
+def test_templates_ask_for_terms_block_last(monkeypatch):
+    for template, marker in ((sm.MINUTES_PROMPT, "转写："), (sm.MINUTES_PROMPT_EN, "Transcript:")):
+        text = template.format(meeting_date="D", transcript="T")
+        head = text.split(marker)[0]
+        assert head.index("```fishbone") < head.index('```terms\n{"terms": [{"term":')
+        assert '{"terms": []}' in head and "30" in head
+    # 长会议：合并提示词里同样要求
+    calls = _capture(monkeypatch, lambda p: "# 合并" if "分段笔记" in p else "- 要点")
+    sm.summarize(_tr(40), LLMConfig(api_key="x"), max_chars=200)
+    assert "```terms" in calls[-1][0] and "原样输出 terms 代码块" in calls[-1][0]
+    assert "```terms" not in calls[0][0]
+
+
+def test_parse_speaker_guess_tolerates_wrapping_and_drops_bad_items():
+    text = (
+        "好的，结果如下：\n```json\n"
+        '{"suggestions": [{"index": 1, "name": "  林舟  ", "evidence": "[00:30] 说话人1：林舟你说一下"},'
+        ' {"index": 5, "name": "越界"}, {"index": -1, "name": "负数"}, {"index": true, "name": "布尔"},'
+        ' {"index": "0", "name": "字符串"}, {"index": 0, "name": "   "}, {"index": 0, "name": 3},'
+        ' {"index": 0, "name": "' + "王" * 30 + '"}, {"index": 1, "name": "重复"}]}\n```\n以上。'
+    )
+    assert sm.parse_speaker_guess(text, 2) == [
+        {"index": 1, "name": "林舟", "evidence": "[00:30] 说话人1：林舟你说一下"},
+        {"index": 0, "name": "王" * 20, "evidence": ""},
+    ]
+    assert sm.parse_speaker_guess('<think>{"x": 1}</think>{"suggestions": []}', 3) == []
+    for bad in ("没有线索", "{不是 JSON}", '{"suggestions": {}}', "[1, 2]", '{"other": []}'):
+        with pytest.raises(sm.GuessError):
+            sm.parse_speaker_guess(bad, 2)
+
+
+def test_guess_prompt_lists_speakers_and_truncates(monkeypatch):
+    tr = _tr(4)
+    tr.rename(["", "王总"])
+    p = sm.guess_prompt(tr, en=False)
+    assert "- 0：说话人1\n- 1：王总" in p and "[00:01] 王总：第1句话。" in p and "只输出 JSON" in p
+    p = sm.guess_prompt(tr, en=True)
+    assert "- 0: Speaker 1\n- 1: 王总" in p and "[00:00] Speaker 1: 第0句话。" in p and "Output only JSON" in p
+    long = Transcript("m.wav", 0, [Sentence(0, 0, 1, "字" * 20000)])
+    assert len(sm.guess_prompt(long, en=False).rsplit("转写：\n", 1)[1]) == sm.GUESS_MAX_CHARS + 1  # 末尾换行
+
+    calls = []
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None, **kw):
+        calls.append({"think": think, **kw})
+        return '{"suggestions": [{"index": 0, "name": "林舟", "evidence": "我是林舟"}]}'
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    assert sm.guess_speakers(tr, LLMConfig(api_key="x"), en=True) == [
+        {"index": 0, "name": "林舟", "evidence": "我是林舟"}
+    ]
+    assert calls == [{"think": False, "system": sm.GUESS_SYSTEM_EN}]

@@ -93,7 +93,7 @@ export function closeModal(): void {
 }
 
 export function setupModal(): void {
-  $("#modal").addEventListener("mousedown", (e) => {
+  $("#modal").addEventListener("pointerdown", (e) => {
     if ((e.target as HTMLElement).id === "modal") closeModal();
   });
   document.addEventListener("keydown", (e) => {

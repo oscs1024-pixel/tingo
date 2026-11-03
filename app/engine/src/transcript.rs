@@ -141,6 +141,28 @@ impl Transcript {
             .join("\n")
     }
 
+    /// SRT 字幕：每句一条，序号从 1 开始，文字是「说话人名：句子」（英文界面用 ": "，没改名的叫 Speaker N），
+    /// 条目之间空一行，换行用 \n。
+    pub fn to_srt(&self, lang: Lang) -> String {
+        let t = self.localized(lang);
+        let sep = lang.pick("：", ": ");
+        t.sentences
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                format!(
+                    "{}\n{} --> {}\n{}{sep}{}\n",
+                    i + 1,
+                    srt_time(s.start_ms),
+                    srt_time(s.end_ms),
+                    t.name_of(s.speaker),
+                    s.text.trim()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn load(path: &Path) -> std::io::Result<Self> {
         let text = std::fs::read_to_string(path)?;
         serde_json::from_str(&text).map_err(std::io::Error::other)
@@ -162,6 +184,12 @@ pub fn fmt_ts(ms: u64) -> String {
     } else {
         format!("{m:02}:{sec:02}")
     }
+}
+
+/// SRT 的时间：HH:MM:SS,mmm
+pub fn srt_time(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{:02}:{:02}:{:02},{:03}", s / 3600, s / 60 % 60, s % 60, ms % 1000)
 }
 
 mod string_keys {
@@ -285,6 +313,21 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
         assert_eq!(back["speaker_names"]["1"], "张三");
         assert_eq!(back["sentences"][0]["start_ms"], 0);
+    }
+
+    #[test]
+    fn srt_subtitles() {
+        assert_eq!(srt_time(0), "00:00:00,000");
+        assert_eq!(srt_time(3_725_042), "01:02:05,042");
+        let mut t = tr();
+        t.rename(&["张三".into()]);
+        let zh = t.to_srt(Lang::Zh);
+        assert!(zh.starts_with("1\n00:00:00,000 --> 00:00:01,000\n张三：大家好，\n\n2\n00:00:01,000 --> 00:00:02,000\n张三：开始吧。\n\n3\n00:00:02,500 --> 00:00:04,000\n说话人1：好的。\n"));
+        assert!(zh.ends_with("4\n00:01:01,000 --> 00:01:02,000\n张三：散会。\n"));
+        assert!(!zh.contains("\r") && !zh.ends_with("\n\n"));
+        let en = t.to_srt(Lang::En);
+        assert!(en.contains("\n3\n00:00:02,500 --> 00:00:04,000\nSpeaker 1: 好的。\n"));
+        assert_eq!(Transcript::default().to_srt(Lang::Zh), "");
     }
 
     #[test]

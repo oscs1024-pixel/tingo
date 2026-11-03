@@ -1,8 +1,8 @@
 //! 音频小工具：读取正在写入的 wav、重采样、外放回声"让路"、电平、找停顿切点。
 //! 都是 Python 版 record.py / live.py 的移植，参数和行为保持一致。
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::asr::SR;
@@ -212,13 +212,47 @@ pub fn track_level(path: &Path, window_s: f64) -> f32 {
     if end <= 0.0 {
         return 0.0;
     }
-    let x = w.read((end - window_s).max(0.0), end);
+    level(&w.read((end - window_s).max(0.0), end))
+}
+
+/// 一段样本的音量，0～1（-60 dB 以下为 0，-10 dB 以上为 1），和 [`track_level`] 同一刻度。
+pub fn level(x: &[f32]) -> f32 {
     if x.is_empty() {
         return 0.0;
     }
     let e: f32 = x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32;
     let db = 10.0 * (e + 1e-12).log10();
     ((db + 60.0) / 50.0).clamp(0.0, 1.0)
+}
+
+/// 整个 wav 里每 window_s 秒一段、最响那段的音量（0～1）；文件读不出或没有数据时返回 None。
+pub fn max_level(path: &Path, window_s: f64) -> Option<f32> {
+    let x = read_wav16k(path)?;
+    let win = ((window_s * SR as f64) as usize).max(1);
+    Some(x.chunks(win).map(level).fold(0.0, f32::max))
+}
+
+/// 把 wav 截到前 keep_s 秒：截短文件，并改写 data 块长度和 RIFF 头里的总长度。
+/// 本来就不比 keep_s 长时不动它，返回 false。
+pub fn truncate_wav(path: &Path, keep_s: f64) -> std::io::Result<bool> {
+    let Some(h) = parse_header(path) else {
+        return Err(std::io::Error::other("not a PCM wav file"));
+    };
+    let size = std::fs::metadata(path)?.len();
+    let frame = (h.width * h.channels) as u64;
+    let frames = size.saturating_sub(h.data_start) / frame;
+    let keep = (keep_s.max(0.0) * h.rate as f64) as u64;
+    if keep >= frames {
+        return Ok(false);
+    }
+    let data_len = keep * frame;
+    let mut f = OpenOptions::new().write(true).open(path)?;
+    f.set_len(h.data_start + data_len)?;
+    f.seek(SeekFrom::Start(4))?;
+    f.write_all(&((h.data_start + data_len - 8) as u32).to_le_bytes())?;
+    f.seek(SeekFrom::Start(h.data_start - 4))?;
+    f.write_all(&(data_len as u32).to_le_bytes())?;
+    Ok(true)
 }
 
 pub const MIN_CHUNK_S: f64 = 10.0;
@@ -298,6 +332,29 @@ mod tests {
         let speech = tone(30.0, 0.3);
         assert_eq!(find_cut(&speech, false, 20.0, 10.0), None);
         assert!(find_cut(&speech, true, 20.0, 10.0).is_some());
+    }
+
+    #[test]
+    fn truncate_wav_rewrites_header() {
+        let dir = std::env::temp_dir().join(format!("tingo-trunc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("mic.wav");
+        crate::record::write_wav16(&p, &[tone(1.0, 0.3), silence(2.0)].concat()).unwrap();
+        assert!(truncate_wav(&p, 1.5).unwrap());
+        let bytes = std::fs::read(&p).unwrap();
+        let data_len = (1.5 * SR as f64) as u32 * 2;
+        assert_eq!(bytes.len() as u32, 44 + data_len);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 36 + data_len);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), data_len);
+        assert_eq!(read_wav16k(&p).unwrap().len(), (1.5 * SR as f64) as usize);
+        // 已经比要截的短：不动
+        assert!(!truncate_wav(&p, 10.0).unwrap());
+        assert_eq!(std::fs::metadata(&p).unwrap().len() as u32, 44 + data_len);
+        // 电平：有声的那段够响，静音为 0
+        assert!(max_level(&p, 0.15).unwrap() > 0.5);
+        crate::record::write_wav16(&p, &silence(1.0)).unwrap();
+        assert!(max_level(&p, 0.15).unwrap() < 0.01);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

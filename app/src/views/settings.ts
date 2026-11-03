@@ -1,11 +1,13 @@
 /* 设置：左边二级菜单，右边一次只显示一项——大模型（本机中转一键选择 + 远程服务 + 自定义）、识别模型（桌面版可下载切换）、
    热词、推送到群、Obsidian、运行环境。每一项单独保存。 */
 
-import { api, type Config, type Job, type LocalProvider } from "../api";
+import { api, type Config, isIOS, type Job, type LocalProvider } from "../api";
 import { $, $$, $maybe, errorMessage, esc, ICON, main, toast } from "../dom";
 import { refreshEnv } from "../sidebar";
 import { isBusy, S } from "../state";
 import { applyLang, type LangPref, renderShell, t } from "../i18n";
+import { checkUpdate, showUpdate } from "../update";
+import { onboarded } from "./welcome";
 import { refreshMeetings } from "../sidebar";
 
 interface Preset {
@@ -217,7 +219,7 @@ export function updateSettingsJob(job: Job, prev: Job): void {
   } else updateAsrProgress(job);
 }
 
-type Tab = "llm" | "asr" | "lang" | "hotwords" | "push" | "obsidian" | "about";
+type Tab = "llm" | "asr" | "record" | "lang" | "hotwords" | "push" | "obsidian" | "about";
 
 interface Ctx {
   c: Config;
@@ -229,12 +231,13 @@ interface Ctx {
 const tabs = (): { id: Tab; name: string; icon: keyof typeof ICON }[] => [
   { id: "llm", name: t("大模型", "LLM"), icon: "bot" },
   { id: "asr", name: t("识别模型", "Speech model"), icon: "mic" },
+  { id: "record", name: t("录音", "Recording"), icon: "mic" },
   { id: "lang", name: t("语言", "Language"), icon: "globe" },
   { id: "hotwords", name: t("热词", "Hotwords"), icon: "spark" },
   { id: "push", name: t("推送到群", "Share to chat"), icon: "send" },
   { id: "obsidian", name: "Obsidian", icon: "vault" },
   { id: "about", name: t("运行环境", "About"), icon: "monitor" },
-];
+].filter((x) => !(isIOS() && x.id === "obsidian")) as { id: Tab; name: string; icon: keyof typeof ICON }[];
 
 const LANG_NAMES: Record<string, [string, string]> = {
   auto: ["跟随系统", "System"],
@@ -266,6 +269,10 @@ function subtitle(tab: Tab, x: Ctx): string {
       return c.obsidian.vault
         ? c.obsidian.vault.split("/").filter(Boolean).pop() + (c.obsidian.auto ? t(" · 自动存", " · auto") : "")
         : t("未设置", "Not set");
+    case "record": {
+      const n = c.auto_stop_silence_min ?? 10;
+      return n ? t(`${n} 分钟没声音自动结束`, `Auto-stop after ${n} min of silence`) : t("手动结束", "Stop manually");
+    }
     case "lang": {
       const ui = LANG_NAMES[c.ui_language ?? "auto"] ?? LANG_NAMES.auto;
       return t(ui[0], ui[1]);
@@ -308,7 +315,9 @@ async function save(x: Ctx, patch: Record<string, unknown>, tab: Tab): Promise<v
 const panelFoot = (extra = "") => `<div class="panel-foot">${extra}<span class="grow"></span><button class="btn primary" id="sSave">${t("保存", "Save")}</button></div>`;
 
 export async function renderSettings(tab: string = "llm"): Promise<void> {
-  main().innerHTML = `<div class="page"><div class="page-head"><div><h1>${t("设置", "Settings")}</h1><div class="sub">${t("保存在本机配置文件里", "Stored in a local config file")}</div></div></div><div id="sBody"></div></div>`;
+  main().innerHTML = `<div class="page"><div class="page-head"><div><h1>${t("设置", "Settings")}</h1><div class="sub">${t("保存在本机配置文件里", "Stored in a local config file")}</div></div><span class="grow"></span>${
+    onboarded() ? "" : `<a class="btn" href="#/welcome/llm">${t("回到新手引导", "Back to the tour")} ${ICON.chevron}</a>`
+  }</div><div id="sBody"></div></div>`;
   let x: Ctx;
   try {
     const [c, local, vaults, hasAsr] = await Promise.all([
@@ -347,6 +356,7 @@ const PANELS: Record<Tab, (x: Ctx) => void> = {
   llm: panelLlm,
   asr: panelAsr,
   lang: panelLang,
+  record: panelRecord,
   hotwords: panelHotwords,
   push: panelPush,
   obsidian: panelObsidian,
@@ -393,6 +403,43 @@ function panelAsr(x: Ctx): void {
     };
   });
   drawAsr();
+}
+
+function panelRecord(x: Ctx): void {
+  const c = x.c;
+  const cur = String(c.auto_stop_silence_min ?? 10);
+  $("#sPanel").innerHTML = `
+    <h2>${t("录音", "Recording")}</h2>
+    <p class="hint">${t("忘了点结束也没关系：会开完、没人说话了就自动结束，并把末尾的空白截掉。", "Forgot to stop? Tingo ends the recording when the meeting is over and trims the silent tail.")}</p>
+    <div class="s-grid">
+      <div class="field"><label>${t("连续多久没人说话就自动结束", "Stop automatically after this much silence")}</label>
+        ${segChoice(
+          "sSilence",
+          ["0", "5", "10", "20", "30"].includes(cur) ? cur : "10",
+          [
+            ["0", "不自动结束", "Never"],
+            ["5", "5 分钟", "5 min"],
+            ["10", "10 分钟", "10 min"],
+            ["20", "20 分钟", "20 min"],
+            ["30", "30 分钟", "30 min"],
+          ],
+        )}</div>
+      <div class="s-toggles desk-only">
+        <button class="toggle ${c.auto_stop_app_quit !== false ? "on" : ""}" id="sAppQuit">${ICON.monitor}${t(
+          "会议软件退出时自动结束",
+          "Stop when the meeting app quits",
+        )}</button>
+      </div>
+      <small class="hint desk-only">${t(
+        "会议软件包括腾讯会议、飞书、钉钉、Zoom、Teams、Webex、Slack：开始录音时开着的，全部退出后就结束。",
+        "Meeting apps: Zoom, Teams, Webex, Slack, Tencent Meeting, Feishu, DingTalk — recording ends once all that were open at the start have quit.",
+      )}</small>
+    </div>
+    ${panelFoot()}`;
+  const silence = bindSeg("sSilence");
+  $("#sAppQuit").onclick = () => $("#sAppQuit").classList.toggle("on");
+  $("#sSave").onclick = () =>
+    save(x, { auto_stop_silence_min: Number(silence()), auto_stop_app_quit: $("#sAppQuit").classList.contains("on") }, "record");
 }
 
 function panelLang(x: Ctx): void {
@@ -692,17 +739,42 @@ function panelObsidian(x: Ctx): void {
     );
 }
 
+function bindUpdateButton(): void {
+  const b = $maybe<HTMLButtonElement>("#sUpd");
+  if (!b) return;
+  b.onclick = async () => {
+    const msg = $("#sUpdMsg");
+    msg.className = "test-msg";
+    msg.textContent = t("检查中…", "Checking…");
+    const u = await checkUpdate(true);
+    if (!u) {
+      msg.textContent = t("这个版本不支持检查更新", "Update checks aren't available in this version");
+    } else if (u.error) {
+      msg.className = "test-msg bad";
+      msg.textContent = t(`检查失败：${u.error}`, `Check failed: ${u.error}`);
+    } else if (u.newer) {
+      msg.className = "test-msg ok";
+      msg.textContent = t(`有新版本 ${u.latest}`, `Version ${u.latest} is available`);
+      refreshEnv();
+      showUpdate();
+    } else {
+      msg.className = "test-msg ok";
+      msg.textContent = t(`已经是最新版本（${u.current}）`, `You're up to date (${u.current})`);
+    }
+  };
+}
+
 function panelAbout(x: Ctx): void {
   const env = S.env;
   const checks: [boolean, string, string][] = [
     ...(env?.models_downloadable ? [] : ([[!!env?.ffmpeg, "ffmpeg", env?.ffmpeg ? t("已安装", "Installed") : "brew install ffmpeg"]] as [boolean, string, string][])),
-    [
+    ...(isIOS() ? [] : ([[
       !!env?.system_audio,
       t("录系统声音", "System audio"),
       env?.system_audio
         ? t("可以录腾讯会议、飞书里对方的声音", "Can record the other side in Zoom, Teams, Tencent Meeting, Feishu…")
         : t("需要 macOS 15+ 和 Xcode 命令行工具；不影响导入录音", "Needs macOS 15+ and Xcode Command Line Tools; importing recordings still works"),
-    ],
+    ]] as [boolean, string, string][])),
     [
       !!env?.model_cached,
       t("识别模型", "Speech model"),
@@ -717,6 +789,11 @@ function panelAbout(x: Ctx): void {
       <div><span>${t("配置文件", "Config")}</span><code>${esc(x.c.path)}</code></div>
       <div><span>${t("版本", "Version")}</span><code>${esc(env?.version ?? "")}</code></div>
     </div>
+    <div class="about-actions">
+      <button class="btn desk-only" id="sUpd">${ICON.redo}${t("检查更新", "Check for updates")}</button><span class="test-msg" id="sUpdMsg"></span>
+      <span class="grow"></span>
+      <a class="btn ghost" href="#/welcome">${t("重新打开新手引导", "Reopen the tour")}</a>
+    </div>
     <div class="checks">
       ${checks
         .map(
@@ -724,5 +801,5 @@ function panelAbout(x: Ctx): void {
             `<div class="check"><span class="dot" style="background:${ok ? "var(--green)" : "var(--amber)"}"></span>${name}<small>${esc(note)}</small></div>`,
         )
         .join("")}
-    </div>`;
+    </div>`;  bindUpdateButton();
 }

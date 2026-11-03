@@ -1,17 +1,48 @@
 //! 录音与音频文件：启停 Swift 录音组件、解码任意音视频、录完后混音并压成 m4a。
 //! 全部依赖 macOS 自带能力（ScreenCaptureKit、AVFoundation、afconvert），不需要 ffmpeg。
+//! iOS 上不能起子进程，这些能力由外壳通过 [`set_native`] 注入（Swift 插件）。
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::asr::SR;
 use crate::audio::{duck_mix_default, read_wav16k};
 use crate::i18n::tr;
 
+/// 由 App 进程自己提供的录音、解码、排版能力（iOS）。设置后代替 tingo-recorder 子进程、afconvert。
+/// 录音的约定和子进程一样：往 `<dir>/mic.wav` 持续追加，边录边转直接读这个文件。
+pub trait Native: Send + Sync {
+    /// 开始录麦克风，写到 `<dir>/mic.wav`；没有权限等情况直接返回错误
+    fn start_mic(&self, dir: &Path) -> Result<(), String>;
+    /// 停止录音并写好文件头
+    fn stop_mic(&self);
+    /// 录音中途出错停下了（比如被电话打断后起不来）时返回错误
+    fn mic_error(&self) -> Option<String>;
+    /// 任意音视频 → 16 kHz 单声道 16 位 wav
+    fn decode(&self, input: &Path, out_wav: &Path) -> Result<(), String>;
+    /// wav → m4a（AAC）
+    fn compress(&self, wav: &Path, out_m4a: &Path) -> Result<(), String>;
+    /// HTML 文件 → A4 分页的 PDF
+    fn html_to_pdf(&self, html: &Path, out: &Path) -> Result<(), String>;
+}
+
+static NATIVE: OnceLock<Arc<dyn Native>> = OnceLock::new();
+
+/// 外壳启动时调用一次（只在 iOS 上）。
+pub fn set_native(n: Arc<dyn Native>) {
+    let _ = NATIVE.set(n);
+}
+
+pub fn native() -> Option<&'static Arc<dyn Native>> {
+    NATIVE.get()
+}
+
 pub struct Recorder {
-    child: Child,
+    /// 子进程录音时有值；`Native` 录音时为空
+    child: Option<Child>,
     stdout: Option<BufReader<ChildStdout>>,
     pub dir: PathBuf,
     pub sources: Vec<String>,
@@ -29,6 +60,19 @@ impl Recorder {
             .into());
         }
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        if let Some(n) = native() {
+            if !mic {
+                return Err(tr("这台设备只能录麦克风", "Only the microphone can be recorded on this device").into());
+            }
+            n.start_mic(dir)?;
+            return Ok(Self {
+                child: None,
+                stdout: None,
+                dir: dir.to_path_buf(),
+                sources: vec!["mic".into()],
+                started: Instant::now(),
+            });
+        }
         let mut cmd = Command::new(bin);
         cmd.arg(dir);
         if !mic {
@@ -62,7 +106,7 @@ impl Recorder {
             .map(|(s, _)| s.to_string())
             .collect();
         Ok(Self {
-            child,
+            child: Some(child),
             stdout: Some(stdout),
             dir: dir.to_path_buf(),
             sources,
@@ -76,7 +120,10 @@ impl Recorder {
 
     /// 录音组件是否中途退出了（比如权限被收回）；退出时返回它最后报的错。
     pub fn exited(&mut self) -> Option<String> {
-        match self.child.try_wait() {
+        let Some(child) = self.child.as_mut() else {
+            return native().and_then(|n| n.mic_error());
+        };
+        match child.try_wait() {
             Ok(Some(_)) => {
                 let mut rest = String::new();
                 if let Some(mut out) = self.stdout.take() {
@@ -95,21 +142,27 @@ impl Recorder {
 
     /// 停止录音：发 SIGINT 让它写完文件头，15 秒内没退出就强杀。原始音轨留着。
     pub fn stop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_some() {
+        let Some(child) = self.child.as_mut() else {
+            if let Some(n) = native() {
+                n.stop_mic();
+            }
+            return;
+        };
+        if child.try_wait().ok().flatten().is_some() {
             return;
         }
         unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGINT);
+            libc::kill(child.id() as i32, libc::SIGINT);
         }
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
-            if self.child.try_wait().ok().flatten().is_some() {
+            if child.try_wait().ok().flatten().is_some() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -124,6 +177,11 @@ impl Drop for Recorder {
 pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
     let tmp = std::env::temp_dir().join(format!("tingo-pdf-{}-{}.html", std::process::id(), rand_suffix()));
     std::fs::write(&tmp, html).map_err(|e| e.to_string())?;
+    if let Some(n) = native() {
+        let res = n.html_to_pdf(&tmp, out);
+        let _ = std::fs::remove_file(&tmp);
+        return res;
+    }
     let res = Command::new(bin).arg("pdf").arg(&tmp).arg(out).output();
     let _ = std::fs::remove_file(&tmp);
     let res = res.map_err(|e| {
@@ -140,6 +198,62 @@ pub fn html_to_pdf(bin: &Path, html: &str, out: &Path) -> Result<(), String> {
         .to_string())
 }
 
+pub const TEXTUTIL: &str = "/usr/bin/textutil";
+
+/// HTML → Word：macOS 自带的 textutil。没有 textutil（非 macOS）时报错。
+pub fn html_to_docx(html: &str, out: &Path) -> Result<(), String> {
+    if !Path::new(TEXTUTIL).is_file() {
+        return Err(tr("导出 Word 只支持 macOS", "Word export is only available on macOS").into());
+    }
+    let tmp = std::env::temp_dir().join(format!("tingo-docx-{}-{}.html", std::process::id(), rand_suffix()));
+    std::fs::write(&tmp, html).map_err(|e| e.to_string())?;
+    // 不指定输入编码时，HTML 里没写 charset 的话中文会变成乱码
+    let res = Command::new(TEXTUTIL)
+        .args(["-inputencoding", "UTF-8", "-convert", "docx", "-output"])
+        .arg(out)
+        .arg(&tmp)
+        .output();
+    let _ = std::fs::remove_file(&tmp);
+    let res = res.map_err(|e| {
+        tr(&format!("启动 textutil 失败：{e}"), &format!("Couldn't start textutil: {e}")).to_string()
+    })?;
+    if res.status.success() && out.is_file() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&res.stderr).trim().to_string();
+    Err(tr(&format!("导出 Word 失败：{err}"), &format!("Word export failed: {err}")).into())
+}
+
+/// 试录 `secs` 秒（录进临时目录，录完就删），返回每条音轨（system / mic）最响那段的音量（0～1）；
+/// 音轨没录出来时是 None。录音组件起不来或中途退出时返回它报的错。
+pub fn probe(bin: &Path, system: bool, mic: bool, secs: u64) -> Result<Vec<(String, Option<f32>)>, String> {
+    let dir = std::env::temp_dir().join(format!("tingo-rectest-{}-{}", std::process::id(), rand_suffix()));
+    let result = (|| {
+        let mut rec = Recorder::start(bin, &dir, system, mic)?;
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if let Some(e) = rec.exited() {
+                return Err(e);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        rec.stop();
+        Ok(rec
+            .sources
+            .iter()
+            .map(|s| (s.clone(), crate::audio::max_level(&dir.join(format!("{s}.wav")), 0.15)))
+            .collect())
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+/// 录音组件报的错是不是没有权限（录屏与系统录音、麦克风）
+pub fn is_permission_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    ["权限", "permission", "declined", "not authorized", "not permitted", "tcc"].iter().any(|k| m.contains(k))
+}
+
 pub fn decode(bin: &Path, input: &Path) -> Result<Vec<f32>, String> {
     if input
         .extension()
@@ -154,6 +268,13 @@ pub fn decode(bin: &Path, input: &Path) -> Result<Vec<f32>, String> {
         std::process::id(),
         rand_suffix()
     ));
+    if let Some(n) = native() {
+        let res = n.decode(input, &tmp).and_then(|()| {
+            read_wav16k(&tmp).ok_or_else(|| tr("解码结果读不出来", "Couldn't read the decoded audio").to_string())
+        });
+        let _ = std::fs::remove_file(&tmp);
+        return res;
+    }
     let out = Command::new(bin)
         .arg("decode")
         .arg(input)
@@ -215,6 +336,13 @@ pub fn mixdown(dir: &Path, dest: &Path) -> Result<(), String> {
     };
     let wav = dir.join("mixed.wav");
     write_wav16(&wav, &mixed).map_err(|e| e.to_string())?;
+    if let Some(n) = native() {
+        n.compress(&wav, dest)?;
+        for p in [&wav, &sys, &mic] {
+            let _ = std::fs::remove_file(p);
+        }
+        return Ok(());
+    }
     let out = Command::new("/usr/bin/afconvert")
         .args(["-f", "m4af", "-d", "aac", "-b", "48000"]) // 16 kHz 单声道 AAC 最高 48 kbps
         .arg(&wav)

@@ -45,6 +45,10 @@ MINUTES_PROMPT = """\
 {{"problem": "<被分析的问题，用问句>", "branches": [{{"title": "<一个原因，10 字以内>", "detail": "<一句话补充>", "refs": ["mm:ss", "mm:ss"]}}]}}
 ```
 
+```terms
+{{"terms": [{{"term": "<正确写法>", "variants": ["<转写里出现过的听错写法>"]}}]}}
+```
+
 要求：
 1. 只依据转写内容，不编造。负责人或截止时间没有明确说出的，写"未明确"。
 2. 转写有同音错字，结合上下文改正明显的错误；拿不准的保留原文。
@@ -53,6 +57,7 @@ MINUTES_PROMPT = """\
 5. 某一节没有内容时写"无"，不要删掉这一节（「原因分析」除外，见第 7 条）。
 6. 去掉寒暄和口头禅，语言简洁、书面化。
 7. 只有会议里明确分析了某个问题的原因时，才写「原因分析」这一节：每个问题一个 fishbone 代码块（最多两个），每块 2～6 个分支，内容是合法 JSON。refs 填支撑这个原因的原话的时间戳，必须是上面转写里出现过的 [mm:ss]（不带方括号）；找不到原话支撑就留空数组，不要编。没有分析原因的会议，整节省略，不要写"无"。
+8. 全文最后（鱼骨图之后）必须原样输出 terms 代码块，内容是合法 JSON：列出会上出现的人名、产品、项目、专有名词的正确写法（优先用术语表/热词里的写法），variants 写转写里出现过的听错写法（没有就空数组）；最多 30 个；没有就写 {{"terms": []}}。纪要正文一律用正确写法。
 
 转写：
 {transcript}
@@ -113,6 +118,10 @@ Turn it into meeting minutes using exactly the following Markdown structure, and
 {{"problem": "<the problem analyzed, phrased as a question>", "branches": [{{"title": "<one cause, a few words>", "detail": "<one sentence>", "refs": ["mm:ss", "mm:ss"]}}]}}
 ```
 
+```terms
+{{"terms": [{{"term": "<correct spelling>", "variants": ["<misrecognized spelling seen in the transcript>"]}}]}}
+```
+
 Rules:
 1. Use only what is in the transcript; do not make anything up. If an owner or due date was not stated explicitly, write "Not specified".
 2. The transcript contains recognition errors such as homophones; fix obvious ones from context, and keep the original wording when unsure.
@@ -121,6 +130,7 @@ Rules:
 5. If a section has no content, write "None" instead of removing it (except "Root Cause Analysis", see rule 7).
 6. Drop small talk and filler words; keep the language concise and formal.
 7. Write the "Root Cause Analysis" section only when the meeting explicitly analyzed the causes of a problem: one fishbone code block per problem (at most two), 2-6 branches each, valid JSON. refs are the timestamps of the statements supporting that cause and must be [mm:ss] values that appear in the transcript above (without the brackets); if nothing in the transcript supports it, use an empty array, do not invent one. If the meeting did not analyze causes, omit the whole section; do not write "None".
+8. Always end the minutes with the terms code block exactly as shown (after everything else, including the fishbone blocks), as valid JSON: list the correct spelling of the people, products, projects and proper nouns mentioned in the meeting (prefer the spelling in the glossary / hotwords), and in variants the misrecognized spellings that appear in the transcript (an empty array if none); at most 30 entries; if there are none, write {{"terms": []}}. Always use the correct spelling in the minutes themselves.
 
 Transcript:
 {transcript}
@@ -578,3 +588,108 @@ def _strip_fence(text: str) -> str:
         if t.rstrip().endswith("```"):
             t = t.rstrip()[:-3]
     return t.strip()
+
+
+# ---------- 猜说话人名字 ----------
+
+GUESS_MAX_CHARS = 12000  # 转写太长时只看开头这么多字：自我介绍、点名大多在前面
+GUESS_NAME_MAX = 20
+
+GUESS_SYSTEM = "你是一位细心的会议助理，只根据会议转写里的明确线索判断每位说话人是谁。"
+
+GUESS_PROMPT = """\
+下面是一场会议的语音转写，格式为「[时间戳] 说话人：内容」。转写按声音把人分开了，但只标了编号：
+
+{speakers}
+
+请根据明确线索推断每位说话人的名字或称呼（如"王总""小李"）：
+- 线索只能是：自我介绍（"我是林舟"）、被别人点名称呼（"林舟你说一下"之后由这位说话人接话）、回应点名（"小李？""在"）等。
+- 不能凭说话内容猜职位或身份；没有明确线索的说话人不要输出。
+- name 写转写里出现的名字或称呼本身；evidence 照抄能证明的那一句原话，带时间戳和说话人。
+- 转写有同音错字，名字明显听错时可以改正。
+
+只输出 JSON，不要输出其他内容：
+{{"suggestions": [{{"index": 0, "name": "<名字或称呼>", "evidence": "[mm:ss] 说话人N：<原话>"}}]}}
+index 是上面列表里的编号。
+
+转写：
+{transcript}
+"""
+
+GUESS_SYSTEM_EN = (
+    "You are a careful meeting assistant. You identify each speaker in a meeting transcript "
+    "only from explicit clues in what was said."
+)
+
+GUESS_PROMPT_EN = """\
+Below is a speech transcript of a meeting, formatted as "[timestamp] speaker: text". The transcript separates people by voice but only labels them with numbers:
+
+{speakers}
+
+Infer each speaker's name or form of address (e.g. "Mr. Wang", "Lisa") from explicit clues only:
+- Valid clues are: self-introductions ("I'm Lin Zhou"), being addressed by name by someone else ("Lin, go ahead" followed by this speaker answering), answering a roll call, and the like.
+- Do not guess job titles or roles from what someone talks about; leave out any speaker without an explicit clue.
+- name is the name or form of address as it appears in the transcript; evidence quotes the line that proves it, with its timestamp and speaker.
+- The transcript may contain recognition errors; you may correct a name that was clearly misheard.
+
+Output only JSON and nothing else:
+{{"suggestions": [{{"index": 0, "name": "<name or form of address>", "evidence": "[mm:ss] Speaker N: <quote>"}}]}}
+index is the number from the list above.
+
+Transcript:
+{transcript}
+"""
+
+
+class GuessError(Exception):
+    """大模型没有给出可用的结果。"""
+
+
+def parse_speaker_guess(text: str, count: int) -> list[dict]:
+    """解析猜名字的输出：容忍 ```json 包裹和前后多余文字（取第一个 { 到最后一个 }）。
+
+    名字去空白、最长 GUESS_NAME_MAX 字；index 越界或不是整数的丢掉，同一个 index 只留第一条。
+    整体解析不了时抛 GuessError。
+    """
+    import json
+
+    text = strip_think(text)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise GuessError(text)
+    try:
+        data = json.loads(text[start : end + 1])
+    except ValueError as e:
+        raise GuessError(text) from e
+    items = data.get("suggestions") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise GuessError(text)
+    out: list[dict] = []
+    seen: set[int] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        index, name, evidence = item.get("index"), item.get("name"), item.get("evidence", "")
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < count or index in seen:
+            continue
+        if not isinstance(name, str) or not (name := name.strip()[:GUESS_NAME_MAX].strip()):
+            continue
+        seen.add(index)
+        out.append({"index": index, "name": name, "evidence": evidence.strip() if isinstance(evidence, str) else ""})
+    return out
+
+
+def guess_prompt(transcript: Transcript, en: bool) -> str:
+    """en 跟界面语言：英文界面时默认名叫 Speaker N。"""
+    order = transcript.speakers_in_order()
+    sep = ": " if en else "："
+    speakers = "\n".join(f"- {i}{sep}{transcript.name_of(s, en)}" for i, s in enumerate(order))
+    text = transcript.to_prompt_text(en)[:GUESS_MAX_CHARS]
+    return (GUESS_PROMPT_EN if en else GUESS_PROMPT).format(speakers=speakers, transcript=text)
+
+
+def guess_speakers(transcript: Transcript, cfg: LLMConfig, en: bool = False) -> list[dict]:
+    """让大模型根据自我介绍、点名等线索猜说话人的名字：[{index, name, evidence}]。"""
+    _api_key(cfg)  # 没配大模型时先报和生成纪要一样的错
+    reply = _chat(cfg, guess_prompt(transcript, en), think=False, system=GUESS_SYSTEM_EN if en else GUESS_SYSTEM)
+    return parse_speaker_guess(reply, len(transcript.speakers_in_order()))

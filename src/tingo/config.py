@@ -78,6 +78,21 @@ class ObsidianConfig:
 
 
 @dataclass
+class RecordConfig:
+    """[record]：连续多少分钟没人说话自动结束录音（0 = 不自动结束）；会议软件退出时是否自动结束"""
+
+    auto_stop_silence_min: int = 10
+    auto_stop_app_quit: bool = True
+
+
+SILENCE_MIN_MAX = 240
+
+
+def valid_silence_min(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= SILENCE_MIN_MAX
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     hotwords: list[str] = field(default_factory=list)
@@ -87,6 +102,7 @@ class Config:
     ui_language: str = "auto"  # [ui] language：auto | zh | en，auto 由界面按系统语言决定
     minutes_language: str = "auto"  # [minutes] language：auto | zh | en，auto 跟会议转写的语言
     asr_language: str = "zh"  # [asr] language：zh | en | auto，桌面版的识别模型用；这里的 Paraformer 只认中文
+    record: RecordConfig = field(default_factory=RecordConfig)
 
 
 UI_LANGUAGES = MINUTES_LANGUAGES = ("auto", "zh", "en")
@@ -107,6 +123,10 @@ def load() -> Config:
     llm = data.get("llm", {})
     push = data.get("push", {})
     obs = data.get("obsidian", {})
+    rec = data.get("record", {})
+    rec = rec if isinstance(rec, dict) else {}
+    silence = rec.get("auto_stop_silence_min")
+    app_quit = rec.get("auto_stop_app_quit")
     cfg = Config(
         llm=LLMConfig(
             base_url=llm.get("base_url", LLMConfig.base_url),
@@ -126,6 +146,10 @@ def load() -> Config:
         ui_language=_choice(data.get("ui"), UI_LANGUAGES, Config.ui_language),
         minutes_language=_choice(data.get("minutes"), MINUTES_LANGUAGES, Config.minutes_language),
         asr_language=_choice(data.get("asr"), ASR_LANGUAGES, Config.asr_language),
+        record=RecordConfig(
+            auto_stop_silence_min=silence if valid_silence_min(silence) else RecordConfig.auto_stop_silence_min,
+            auto_stop_app_quit=app_quit if isinstance(app_quit, bool) else RecordConfig.auto_stop_app_quit,
+        ),
     )
 
     cfg.llm.base_url = env_var("LLM_BASE_URL", cfg.llm.base_url)
@@ -179,7 +203,10 @@ def save(cfg: Config) -> Path:
         "[minutes]\n"
         f"language = {_toml_str(cfg.minutes_language)}\n\n"
         "[asr]\n"
-        f"language = {_toml_str(cfg.asr_language)}\n"
+        f"language = {_toml_str(cfg.asr_language)}\n\n"
+        "[record]\n"
+        f"auto_stop_silence_min = {cfg.record.auto_stop_silence_min}\n"
+        f"auto_stop_app_quit = {_toml_bool(cfg.record.auto_stop_app_quit)}\n"
     )
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(text, encoding="utf-8")

@@ -33,14 +33,19 @@ pub fn default_root() -> PathBuf {
     crate::config::with_legacy(docs.join("Tingo"), docs.join("jiyao"))
 }
 
-pub fn new_folder(root: &Path, title: &str, when: NaiveDateTime) -> PathBuf {
+/// 会议文件夹名里的标题部分：去掉文件名里不能用的字符和空白
+pub fn folder_title(title: &str) -> String {
     static UNSAFE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[\\/:*?"<>|\s]+"#).unwrap());
     let safe = UNSAFE.replace_all(title.trim(), "_");
-    let safe = if safe.is_empty() {
+    if safe.is_empty() {
         "会议".into()
     } else {
-        safe
-    };
+        safe.into_owned()
+    }
+}
+
+pub fn new_folder(root: &Path, title: &str, when: NaiveDateTime) -> PathBuf {
+    let safe = folder_title(title);
     let base = format!("{}_{safe}", when.format("%Y-%m-%d_%H%M"));
     let mut path = root.join(&base);
     let mut n = 2;
@@ -150,7 +155,7 @@ pub fn summary(dir: &Path) -> Summary {
         title: minutes_title(&minutes).unwrap_or(fallback),
         date: meeting_date(dir).format("%Y-%m-%d").to_string(),
         time,
-        summary: one_liner(&minutes),
+        summary: one_liner(&crate::terms::strip(&minutes)),
         has_minutes: !minutes.is_empty(),
         has_transcript: tr.is_some(),
         duration: tr

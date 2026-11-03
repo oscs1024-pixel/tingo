@@ -13,6 +13,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
+from . import terms
 from .config import with_legacy
 from .transcript import Transcript, fmt_ts
 
@@ -27,9 +28,14 @@ _RAW_TRACKS = {"system.wav", "mic.wav", "mixed.wav"}  # 录音进行中的原始
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".mp4", ".aac", ".flac", ".ogg", ".webm", ".mov", ".mkv"}
 
 
+def folder_title(title: str) -> str:
+    """会议标题里不能进文件夹名的字符（路径分隔符、空白等）换成下划线。"""
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", title.strip()) or "会议"
+
+
 def new_folder(root: Path, title: str, when: datetime | None = None) -> Path:
     when = when or datetime.now()
-    safe = re.sub(r'[\\/:*?"<>|\s]+', "_", title.strip()) or "会议"
+    safe = folder_title(title)
     path = root / f"{when:%Y-%m-%d_%H%M}_{safe}"
     n = 2
     while path.exists():
@@ -71,8 +77,8 @@ def minutes_title(text: str) -> str | None:
 
 
 def one_liner(text: str) -> str:
-    """纪要里"一句话总结"（英文纪要是 Summary）下面的那句。"""
-    lines = text.splitlines()
+    """纪要里"一句话总结"（英文纪要是 Summary）下面的那句。术语表代码块不算。"""
+    lines = terms.remove(text).splitlines()
     for i, line in enumerate(lines):
         if line.strip() in ("## 一句话总结", "## Summary"):
             for nxt in lines[i + 1 :]:

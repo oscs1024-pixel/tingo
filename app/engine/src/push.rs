@@ -152,7 +152,8 @@ pub fn build_request(
     let platform = detect(webhook)?;
     let lang = doc_lang(minutes);
     let t = title(minutes);
-    let minutes = &fishbone_to_text(minutes);
+    // 术语表只给搜索用，群里不发
+    let minutes = &fishbone_to_text(&crate::terms::strip(minutes));
     if platform == Platform::Feishu {
         let mut body = serde_json::json!({
             "msg_type": "interactive",
@@ -261,6 +262,15 @@ mod tests {
         let out = fishbone_to_text(md);
         assert!(out.contains("**为什么慢？**\n- 页面大：6 秒（01:06）\n- 猜的（无原文依据）"));
         assert!(!out.contains("```"));
+    }
+
+    #[test]
+    fn terms_block_not_pushed() {
+        let md = format!("{MINUTES}\n```terms\n{{\"terms\": [{{\"term\": \"支付模块\", \"variants\": []}}]}}\n```\n");
+        for hook in ["https://open.feishu.cn/open-apis/bot/v2/hook/abc", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k"] {
+            let (_, b) = build_request(hook, &md, "", 0.0).unwrap();
+            assert!(!b.to_string().contains("terms"));
+        }
     }
 
     #[test]

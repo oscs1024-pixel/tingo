@@ -217,7 +217,8 @@ fn final_exists(paths: &ModelPaths, to: &str) -> bool {
 }
 
 /// 断点续传下载，失败自动重试几次（GitHub 在国内经常中途断开）。
-fn fetch(
+/// 下载到 dest（先写 .part，断点续传、失败重试）。`progress(已写字节)`。
+pub fn fetch(
     client: &reqwest::blocking::Client,
     url: &str,
     dest: &Path,

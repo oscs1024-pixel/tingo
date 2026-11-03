@@ -2,6 +2,7 @@
 
 pub mod asr;
 pub mod audio;
+pub mod autostop;
 pub mod chunked;
 pub mod cluster;
 pub mod config;
@@ -13,5 +14,8 @@ pub mod obsidian;
 pub mod push;
 pub mod record;
 pub mod server;
+pub mod speakers;
 pub mod summarize;
+pub mod terms;
 pub mod transcript;
+pub mod update;

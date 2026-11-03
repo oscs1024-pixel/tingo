@@ -4,6 +4,8 @@ import { lang, t } from "./i18n";
 
 export interface Env {
   version: string;
+  /** macos | ios | linux…（桌面版 Rust 后端） */
+  platform?: string;
   root: string;
   ffmpeg: boolean;
   system_audio: boolean;
@@ -68,7 +70,7 @@ export interface Job {
   /** 任务编号（桌面版和新版 Python 后端都有；旧接口只有一个任务时为空） */
   id?: string;
   state: JobState;
-  kind?: "record" | "process" | "summarize" | "models";
+  kind?: "record" | "process" | "summarize" | "models" | "update";
   meeting?: string;
   error?: string;
   minutes?: string;
@@ -81,6 +83,9 @@ export interface Job {
   notice?: string;
   /** 推理模型已经思考了多少字 */
   thinking?: number;
+  /** 录音中：距最后有人说话过了多少秒；还有多少秒自动结束 */
+  silent_s?: number;
+  auto_stop_s?: number;
 }
 
 export interface Config {
@@ -100,6 +105,10 @@ export interface Config {
   minutes_language?: string;
   /** zh | en | auto（会议语言，桌面版识别用） */
   asr_language?: string;
+  /** 连续多少分钟没人说话自动结束录音，0 = 不自动结束 */
+  auto_stop_silence_min?: number;
+  /** 会议软件退出时自动结束录音 */
+  auto_stop_app_quit?: boolean;
 }
 
 export interface ObsidianConfig {
@@ -132,6 +141,39 @@ export async function initApi(): Promise<void> {
 
 export const url = (path: string): string => base + path;
 
+export const isIOS = (): boolean => document.documentElement.classList.contains("ios");
+
+/** iOS 把 App 挂起后，系统可能收回本地服务监听的 socket：请求连不上时让外壳重新监听一次，录音和任务都还在。 */
+let reconnecting: Promise<boolean> | null = null;
+function reconnect(): Promise<boolean> {
+  if (!("__TAURI_INTERNALS__" in window)) return Promise.resolve(false);
+  reconnecting ??= import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke<string>("backend_restart"))
+    .then((u) => {
+      base = u;
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => setTimeout(() => (reconnecting = null), 1000));
+  return reconnecting;
+}
+
+async function send(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url(path), init);
+  } catch (e) {
+    // 只有连不上（TypeError）才重连；FormData 之类的请求体可以再发一次
+    if (e instanceof TypeError && (await reconnect())) return fetch(url(path), init);
+    throw e;
+  }
+}
+
+/** iOS：用系统分享面板发出导出的文件（存到「文件」、微信、AirDrop） */
+export async function share(path: string): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("plugin:recorder|share", { path });
+}
+
 interface ApiOptions extends RequestInit {
   json?: unknown;
 }
@@ -145,7 +187,7 @@ export async function api<T = Record<string, unknown>>(path: string, opts: ApiOp
     init.body = JSON.stringify(json);
   }
   init.headers = headers;
-  const res = await fetch(url(path), init);
+  const res = await send(path, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : t(`请求失败（${res.status}）`, `Request failed (${res.status})`));
   return data as T;

@@ -9,27 +9,35 @@ from __future__ import annotations
 import itertools
 import os
 import platform
+import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, config, i18n, meetings
+from . import __version__, config, i18n, meetings, terms
 from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
 from .summarize import anthropic_models, is_ollama
 from .transcript import Transcript, fmt_ts
 
 WEB_DIR = Path(__file__).with_name("web")
+SAMPLE_DIR = Path(__file__).with_name("sample")  # 内置示例会议（包数据）
+TEXTUTIL = "/usr/bin/textutil"  # macOS 自带，HTML → Word
+
+# 内置示例会议的文件夹（会议时间 + 标题，标题按界面语言）
+DEMO_WHEN = "2026-10-28_1400"
+DEMO_TITLE = {"zh": "示例·注册转化复盘", "en": "Sample · Signup conversion review"}
 
 # 本机常见的 OpenAI 兼容中转。recommended 是实测过、又快又好的纪要模型（76 分钟会议 51 秒出纪要）
 LOCAL_PROVIDERS = [
@@ -112,6 +120,8 @@ def _next_job_id() -> str:
 
 
 KEEP_FINISHED = 5  # 结束了的任务只留最近几个，给界面显示结果
+SEARCH_HITS = 5  # 搜索：每场会议最多返回几句
+SEARCH_MEETINGS = 30  # 搜索：最多返回几场会议
 
 
 @dataclass
@@ -169,6 +179,9 @@ class ConfigRequest(BaseModel):
     ui_language: str | None = None  # auto | zh | en，None 表示不改
     minutes_language: str | None = None  # auto | zh | en
     asr_language: str | None = None  # zh | en | auto
+    # 自动结束录音，None 表示不改；类型自己检查（不对时回 400，不是 422）
+    auto_stop_silence_min: Any = None  # 0～240 的整数，0 = 不自动结束
+    auto_stop_app_quit: Any = None  # 布尔
 
 
 AUDIO_MIME = {
@@ -192,6 +205,73 @@ class OpenRequest(BaseModel):
     open: bool = False
 
 
+class RecordTestRequest(BaseModel):
+    seconds: Any = 3  # 1～10
+
+
+def _is_number(v: object) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+_CODE_BLOCK = re.compile(r"```.*?(?:\n```[ \t]*(?=\n|\Z)|\Z)", re.DOTALL)
+
+
+def _norm(s: str) -> str:
+    """搜索词比较：忽略大小写和空白"""
+    return "".join(s.split()).lower()
+
+
+def _fuzzy_find(text: str, q: str) -> str | None:
+    """text 里和 q 等长、只差一个字符的片段（都已小写）；没有返回 None。"""
+    n = len(q)
+    for i in range(len(text) - n + 1):
+        diff = 0
+        for a, b in zip(text[i : i + n], q):
+            if a != b:
+                diff += 1
+                if diff > 1:
+                    break
+        if diff == 1:
+            return text[i : i + n]
+    return None
+
+
+FUZZY_MIN_CHARS = 4  # 查询词至少这么多字才容许错一个字（3 个字时误命中太多，如"验证码"→"验证手"）
+
+
+class _Matcher:
+    """exact：命中查询集合任一项（忽略大小写）；fuzzy：q 有 FUZZY_MIN_CHARS 个字以上时，和 q 等长、只差一个字符。
+    都返回命中的那段原文，没命中返回 None。"""
+
+    def __init__(self, needles: list[str], q: str):
+        self.lowered = [x.lower() for x in needles if x]
+        self.q = q.lower() if len(q) >= FUZZY_MIN_CHARS else ""
+
+    @staticmethod
+    def _original(text: str, low: str, hit: str) -> str:
+        if len(low) != len(text):  # 少数字符小写后长度会变，这时退回小写的命中词
+            return hit
+        at = low.find(hit)
+        return text[at : at + len(hit)]
+
+    def exact(self, text: str) -> str | None:
+        low = text.lower()
+        for x in self.lowered:
+            if x in low:
+                return self._original(text, low, x)
+        return None
+
+    def fuzzy(self, text: str) -> str | None:
+        if not self.q:
+            return None
+        low = text.lower()
+        hit = _fuzzy_find(low, self.q)
+        return None if hit is None else self._original(text, low, hit)
+
+    def any(self, text: str) -> str | None:
+        return self.exact(text) or self.fuzzy(text)
+
+
 class LLMTestRequest(BaseModel):
     base_url: str
     model: str
@@ -212,7 +292,8 @@ def create_app(root: Path | None = None) -> FastAPI:
     app = FastAPI(title="tingo", docs_url=None, redoc_url=None)
     lock = threading.Lock()  # 保护 jobs 列表和录音状态
     jobs: list[Job] = []  # 进行中和刚结束（还没被界面收起）的任务，按开始先后
-    state: dict = {"recording": None, "live": None, "hotwords": []}  # 正在进行的那一场录音
+    # 正在进行的那一场录音；auto 是自动结束的判断（record.AutoStop），watch_stop 让检查线程退出
+    state: dict = {"recording": None, "live": None, "hotwords": [], "auto": None, "watch_stop": None, "testing": False}
 
     def folder(meeting_id: str) -> Path:
         path = (root / meeting_id).resolve()
@@ -260,6 +341,10 @@ def create_app(root: Path | None = None) -> FastAPI:
         data["elapsed"] = (job.finished_at or time.time()) - job.started_at
         return data
 
+    def add_notice(job: Job, msg: str) -> None:
+        """追加给用户的提示（自动结束录音的提示之后还可能有"已同步到 Obsidian"）"""
+        job.notice = f"{job.notice}{i18n.tr('；', '; ')}{msg}" if job.notice else msg
+
     # ---------- 处理流程 ----------
 
     def run_summarize(job: Job, tr: Transcript, out: Path) -> None:
@@ -298,9 +383,9 @@ def create_app(root: Path | None = None) -> FastAPI:
 
             try:
                 obsidian.export(cfg.obsidian, out)
-                job.notice = i18n.tr("纪要已同步到 Obsidian", "Minutes synced to Obsidian")
+                add_notice(job, i18n.tr("纪要已同步到 Obsidian", "Minutes synced to Obsidian"))
             except Exception as e:  # noqa: BLE001
-                job.notice = i18n.tr(f"没能同步到 Obsidian：{e}", f"Couldn't sync to Obsidian: {e}")
+                add_notice(job, i18n.tr(f"没能同步到 Obsidian：{e}", f"Couldn't sync to Obsidian: {e}"))
                 log.warning("%s 同步到 Obsidian 失败：%s", out.name, e)
 
     def run_process(job: Job, audio: Path, out: Path, hotwords: list[str]) -> None:
@@ -365,6 +450,8 @@ def create_app(root: Path | None = None) -> FastAPI:
             "ui_language": cfg.ui_language,
             "minutes_language": cfg.minutes_language,
             "asr_language": cfg.asr_language,
+            "auto_stop_silence_min": cfg.record.auto_stop_silence_min,
+            "auto_stop_app_quit": cfg.record.auto_stop_app_quit,
             "path": str(config.CONFIG_PATH),
         }
 
@@ -406,6 +493,22 @@ def create_app(root: Path | None = None) -> FastAPI:
             cfg.minutes_language = req.minutes_language
         if req.asr_language is not None:
             cfg.asr_language = req.asr_language
+        if req.auto_stop_silence_min is not None:
+            if not config.valid_silence_min(req.auto_stop_silence_min):
+                raise HTTPException(
+                    400,
+                    i18n.tr(
+                        f"自动结束录音的分钟数只能是 0～{config.SILENCE_MIN_MAX} 的整数",
+                        f"The auto-stop minutes must be a whole number from 0 to {config.SILENCE_MIN_MAX}",
+                    ),
+                )
+            cfg.record.auto_stop_silence_min = req.auto_stop_silence_min
+        if req.auto_stop_app_quit is not None:
+            if not isinstance(req.auto_stop_app_quit, bool):
+                raise HTTPException(
+                    400, i18n.tr("auto_stop_app_quit 只能是 true 或 false", "auto_stop_app_quit must be true or false")
+                )
+            cfg.record.auto_stop_app_quit = req.auto_stop_app_quit
         config.save(cfg)
         return get_config()
 
@@ -457,11 +560,104 @@ def create_app(root: Path | None = None) -> FastAPI:
             }
         return {"ok": True, "message": i18n.tr("连接正常", "Connection OK")}
 
+    def export_stem(path: Path) -> str:
+        """导出文件的文件名（不含扩展名）：纪要标题，没有纪要时用文件夹里的会议名。"""
+        minutes = (path / MINUTES).read_text(encoding="utf-8") if (path / MINUTES).exists() else ""
+        from .obsidian import safe_name
+
+        title = meetings.minutes_title(minutes) or (path.name.split("_", 2)[-1] or path.name)
+        return safe_name(title) or safe_name(path.name)
+
     # ---------- 会议 ----------
 
     @app.get("/api/meetings")
     def list_meetings() -> list[dict]:
         return meetings.list_meetings(root)
+
+    @app.get("/api/search")
+    def search(q: str = "") -> dict:
+        """跨会议搜索转写句子和纪要正文：按各场纪要的术语表扩展查询词，4 个字以上的查询词容许错一个字。
+        每场会议先列精确命中的句子，名额（5 句）没满再补只是模糊命中的。"""
+        query = q.strip()
+        if not query:
+            raise HTTPException(400, i18n.tr("请输入要搜索的内容", "Enter something to search for"))
+        loaded = []
+        for info in meetings.list_meetings(root):  # 按会议时间倒序
+            p = root / info["id"]
+            try:
+                minutes = (p / MINUTES).read_text(encoding="utf-8") if (p / MINUTES).exists() else ""
+            except OSError:
+                minutes = ""
+            loaded.append((info, p, minutes))
+        nq = _norm(query)
+        expanded: list[str] = []
+        for _, _, minutes in loaded:
+            for term, variants in terms.parse(minutes):
+                group = [term, *variants]
+                if any(_norm(x) == nq for x in group):
+                    expanded += [x for x in group if x.lower() not in {e.lower() for e in expanded}]
+        if query.lower() not in {e.lower() for e in expanded}:
+            expanded.append(query)
+        matcher = _Matcher(expanded, query)
+        en = i18n.is_en()
+        results = []
+        for info, p, minutes in loaded:
+            hits: list[dict] = []
+            if info["has_transcript"]:
+                try:
+                    tr = Transcript.load(p / TRANSCRIPT_JSON)
+                except Exception:  # noqa: BLE001 - 坏掉的转写不影响搜别的会议
+                    tr = None
+                sentences = tr.sentences if tr else []
+                taken: set[int] = set()
+                # 先放精确命中的句子，名额没满再补只是模糊命中的
+                for how in (matcher.exact, matcher.fuzzy):
+                    for k, s in enumerate(sentences):
+                        if len(hits) >= SEARCH_HITS:
+                            break
+                        if k in taken or (match := how(s.text)) is None:
+                            continue
+                        taken.add(k)
+                        hits.append(
+                            {"ms": s.start_ms, "speaker": tr.name_of(s.speaker, en), "text": s.text, "match": match}
+                        )
+            minutes_hit = bool(minutes) and matcher.any(_CODE_BLOCK.sub("", minutes)) is not None
+            if hits or minutes_hit:
+                results.append(
+                    {
+                        "id": info["id"],
+                        "title": info["title"],
+                        "date": info["date"],
+                        "time": info["time"],
+                        "minutes_hit": minutes_hit,
+                        "hits": hits,
+                    }
+                )
+                if len(results) >= SEARCH_MEETINGS:
+                    break
+        return {"q": query, "expanded": expanded, "results": results}
+
+    @app.post("/api/demo")
+    def demo() -> dict:
+        """把内置的示例会议复制进会议目录（标题和纪要按界面语言）；已经有了就直接返回。"""
+        lang = "en" if i18n.is_en() else "zh"
+        name = f"{DEMO_WHEN}_{meetings.folder_title(DEMO_TITLE[lang])}"
+        dst = root / name
+        if dst.exists():
+            return {"id": name}
+        files = {
+            TRANSCRIPT_JSON: TRANSCRIPT_JSON,
+            AUDIO: AUDIO,
+            MINUTES: "纪要.en.md" if lang == "en" else MINUTES,
+        }
+        try:
+            dst.mkdir(parents=True)
+            for target, source in files.items():
+                shutil.copyfile(SAMPLE_DIR / source, dst / target)
+        except OSError as e:
+            shutil.rmtree(dst, ignore_errors=True)
+            raise HTTPException(500, i18n.tr(f"复制示例会议失败：{e}", f"Couldn't copy the sample meeting: {e}")) from e
+        return {"id": name}
 
     @app.get("/api/meetings/{meeting_id}")
     def get_meeting(meeting_id: str) -> dict:
@@ -636,20 +832,89 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.post("/api/meetings/{meeting_id}/pdf")
     def post_pdf(meeting_id: str, req: PdfRequest) -> dict:
         """导出 PDF：界面排好版的 HTML 交给录音组件，用系统 WebKit 转成 A4 PDF，存进会议文件夹并在访达里选中。"""
-        from . import obsidian, record
+        from . import record
 
         path = folder(meeting_id)
         if not (path / MINUTES).exists():
             raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
-        minutes = (path / MINUTES).read_text(encoding="utf-8")
-        title = meetings.minutes_title(minutes) or (meeting_id.split("_", 2)[-1] or meeting_id)
-        out = path / f"{obsidian.safe_name(title)}.pdf"
+        out = path / f"{export_stem(path)}.pdf"
         try:
             record.html_to_pdf(req.html, out)
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             raise HTTPException(500, str(e)) from e
         _open(str(out), reveal=True)
         return {"ok": True, "path": str(out)}
+
+    @app.post("/api/meetings/{meeting_id}/srt")
+    def post_srt(meeting_id: str) -> dict:
+        """导出 SRT 字幕（一句一条），存进会议文件夹并在访达里选中。说话人名、冒号按界面语言。"""
+        path = folder(meeting_id)
+        try:
+            tr = Transcript.load(path / TRANSCRIPT_JSON)
+        except (OSError, ValueError, KeyError, TypeError):
+            tr = None
+        if tr is None or not tr.sentences:
+            raise HTTPException(400, i18n.tr("还没有转写", "No transcript yet"))
+        out = path / f"{export_stem(path)}.srt"
+        try:
+            out.write_text(tr.to_srt(i18n.is_en()), encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(500, str(e)) from e
+        _open(str(out), reveal=True)
+        return {"ok": True, "path": str(out)}
+
+    @app.post("/api/meetings/{meeting_id}/docx")
+    def post_docx(meeting_id: str, req: PdfRequest) -> dict:
+        """导出 Word：界面排好版的 HTML 交给 macOS 自带的 textutil 转成 .docx，存进会议文件夹并在访达里选中。"""
+        path = folder(meeting_id)
+        if not Path(TEXTUTIL).exists():
+            raise HTTPException(500, i18n.tr("导出 Word 只支持 macOS", "Word export is only available on macOS"))
+        out = path / f"{export_stem(path)}.docx"
+        try:
+            out.unlink(missing_ok=True)
+            with tempfile.TemporaryDirectory(prefix="tingo-docx-") as tmp:
+                src = Path(tmp) / "minutes.html"
+                src.write_text(req.html, encoding="utf-8")
+                # 不指定编码时，没写 <meta charset> 的 HTML 会被当成别的编码，中文变乱码
+                res = subprocess.run(
+                    [TEXTUTIL, "-convert", "docx", "-inputencoding", "UTF-8", "-output", str(out), str(src)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(500, str(e)) from e
+        if res.returncode != 0 or not out.exists():
+            raise HTTPException(500, res.stderr.strip() or i18n.tr("导出 Word 失败", "Word export failed"))
+        _open(str(out), reveal=True)
+        return {"ok": True, "path": str(out)}
+
+    @app.post("/api/meetings/{meeting_id}/speakers/guess")
+    def guess_speakers(meeting_id: str) -> dict:
+        """让大模型根据自我介绍、点名等线索猜每位说话人的名字，只返回建议，不改转写。"""
+        from . import summarize as sm
+
+        path = folder(meeting_id)
+        if not (path / TRANSCRIPT_JSON).exists():
+            raise HTTPException(400, i18n.tr("还没有转写", "No transcript yet"))
+        tr = Transcript.load(path / TRANSCRIPT_JSON)
+        cfg = config.load()
+        try:
+            sm._api_key(cfg.llm)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
+        try:
+            suggestions = sm.guess_speakers(tr, cfg.llm, i18n.is_en())
+        except sm.GuessError as e:
+            log.warning("%s 猜说话人名字：模型输出解析不了：%.300s", meeting_id, e)
+            raise HTTPException(
+                502, i18n.tr("大模型没有给出可用的结果", "The model didn't return a usable result")
+            ) from e
+        except Exception as e:
+            log.warning("%s 猜说话人名字失败：%s", meeting_id, e)
+            raise HTTPException(502, str(e) or e.__class__.__name__) from e
+        return {"suggestions": suggestions}
 
     @app.get("/api/obsidian/vaults")
     def obsidian_vaults() -> list[dict]:
@@ -681,39 +946,113 @@ def create_app(root: Path | None = None) -> FastAPI:
                 jobs[:] = [j for j in jobs if j.id != job.id]
             shutil.rmtree(out, ignore_errors=True)
             raise HTTPException(500, str(e)) from e
+        from . import record
         from .live import LiveTranscriber
 
+        started = time.time()
+        cfg = config.load()
         # 边录边转：录音时就分段识别，结束后只剩最后一段和一次说话人聚类
-        live = LiveTranscriber(out, rec.sources, hotwords=config.load().hotwords + req.hotwords)
+        live = LiveTranscriber(out, rec.sources, hotwords=cfg.hotwords + req.hotwords)
         live.start()
+        rc = cfg.record
+        apps = record.running_meeting_apps() if rc.auto_stop_app_quit else set()
+        auto = record.AutoStop(rc.auto_stop_silence_min, rc.auto_stop_app_quit, apps, started)
+        watch_stop = threading.Event()
         with lock:
             state["recording"], state["hotwords"], state["live"] = rec, req.hotwords, live
-        log.info("%s 开始录音：%s", out.name, "+".join(rec.sources))
+            state["auto"], state["watch_stop"] = auto, watch_stop
+        threading.Thread(
+            target=watch_recording, args=(job, out, list(rec.sources), live, auto, watch_stop), daemon=True
+        ).start()
+        log.info(
+            "%s 开始录音：%s（%s 分钟没人说话自动结束%s）",
+            out.name,
+            "+".join(rec.sources),
+            rc.auto_stop_silence_min or "不",
+            f"，会议软件 {'、'.join(sorted(apps))} 退出时自动结束" if auto.watch_apps else "",
+        )
         return asdict(job)
+
+    def watch_recording(job: Job, out: Path, sources: list[str], live, auto, stop: threading.Event) -> None:
+        """录音时每 5 秒看一次有没有人说话（任一音轨最近 5 秒的电平，或边录边转出了新文字）、
+        会议软件还在不在，该结束时走和"结束录音"一样的流程。"""
+        from . import record
+
+        seen = len(getattr(live, "lines", []))
+        while not stop.wait(record.CHECK_S):
+            try:
+                voiced = any(
+                    record.track_level(out / f"{s}.wav", window_s=record.CHECK_S) >= record.VOICE_LEVEL for s in sources
+                )
+                n = len(getattr(live, "lines", []))
+                voiced, seen = voiced or n > seen, n
+                apps = record.running_meeting_apps() if auto.watch_apps else None
+                reason = auto.observe(time.time(), voiced, apps)
+            except Exception as e:  # noqa: BLE001 - 检查出错不影响录音本身
+                log.warning("%s 自动结束录音的检查出错：%s", job.meeting, e)
+                continue
+            if reason == record.AutoStop.SILENCE:
+                n_min = auto.silence_min
+                notice = i18n.tr(
+                    f"{n_min} 分钟没人说话，已自动结束录音",
+                    f"No one spoke for {n_min} minutes — recording stopped automatically",
+                )
+                if stop_recording(only=job, notice=notice, keep_s=auto.keep_s()) is not None:
+                    log.info("%s %d 分钟没人说话，自动结束录音", job.meeting, n_min)
+                return
+            if reason == record.AutoStop.APP_QUIT:
+                notice = i18n.tr(
+                    "会议软件已退出，已自动结束录音", "The meeting app quit — recording stopped automatically"
+                )
+                if stop_recording(only=job, notice=notice) is not None:
+                    log.info("%s 会议软件已退出，自动结束录音", job.meeting)
+                return
 
     @app.post("/api/record/stop")
     def record_stop() -> dict:
+        reply = stop_recording()
+        if reply is None:
+            raise HTTPException(400, i18n.tr("没有正在进行的录音", "No recording in progress"))
+        return reply
+
+    def stop_recording(only: Job | None = None, notice: str = "", keep_s: float | None = None) -> dict | None:
+        """结束正在进行的录音，转写、生成纪要转到后台。没有在录的返回 None。
+
+        only：自动结束时只结束这一场（检查线程醒来时用户可能已经结束了它、又开了下一场）。
+        keep_s：因为没人说话而自动结束时，原始音轨截到前这么多秒（最后有声之后再留 30 秒）。
+        """
         with lock:
             job = next((j for j in jobs if j.kind == "record" and j.state == "recording"), None)
             rec = state["recording"]
-            if job is None or rec is None:
-                raise HTTPException(400, i18n.tr("没有正在进行的录音", "No recording in progress"))
+            if job is None or rec is None or (only is not None and job is not only):
+                return None
             # 录音停下后转到后台：转写、生成纪要的同时就可以开下一场
             job.state = "saving"
+            if notice:
+                job.notice = notice
             reply = asdict(job)  # 后台线程马上会改状态，回给界面的固定是 saving
             live, hotwords = state["live"], state["hotwords"]
+            if state["watch_stop"] is not None:
+                state["watch_stop"].set()
             state["recording"], state["live"], state["hotwords"] = None, None, []
+            state["auto"], state["watch_stop"] = None, None
 
         def work() -> None:
-            from .record import mixdown
+            from .record import mixdown, truncate_wav
 
             out = root / job.meeting
             final = out / AUDIO
             stopped = time.time()
             try:
                 rec.stop_capture()
+                if keep_s is not None:
+                    for s in rec.sources:
+                        if (out / f"{s}.wav").exists() and truncate_wav(out / f"{s}.wav", keep_s):
+                            log.info("%s %s.wav 截到前 %.0f 秒", out.name, s, keep_s)
                 job.state = "finalizing"
                 tr = live.finish(final) if live else None  # 原始音轨合成前先把最后几秒转完
+                if tr is not None and keep_s is not None:
+                    tr.duration_ms = min(tr.duration_ms, round(keep_s * 1000))
             except Exception as e:  # noqa: BLE001
                 fail(job, e)
                 return
@@ -769,6 +1108,40 @@ def create_app(root: Path | None = None) -> FastAPI:
         threading.Thread(target=work, daemon=True).start()
         return reply
 
+    @app.post("/api/record/test")
+    def record_test(req: RecordTestRequest | None = None) -> dict:
+        """试录几秒（系统声音 + 麦克风），报告每一路录没录到声音。第一次调用会触发 macOS 的权限弹窗，新手引导用。"""
+        from . import record
+
+        seconds = req.seconds if req is not None else 3
+        if not _is_number(seconds) or not 1 <= seconds <= 10:
+            raise HTTPException(400, i18n.tr("试录时长只能是 1～10 秒", "The test length must be 1–10 seconds"))
+        with lock:
+            if any(j.state == "recording" for j in jobs) or state["recording"] is not None:
+                raise HTTPException(
+                    409, i18n.tr("正在录音，先结束录音再测试", "A recording is in progress; stop it before testing")
+                )
+            if state["testing"]:
+                raise HTTPException(409, i18n.tr("正在试录，等它结束", "A test recording is already running"))
+            state["testing"] = True
+        try:
+            result = record.probe_devices(float(seconds))
+        finally:
+            with lock:
+                state["testing"] = False
+        if not result.get("message"):
+            labels = (
+                {"ok": "OK", "silent": "almost silent", "denied": "no permission", "unsupported": "not supported"}
+                if i18n.is_en()
+                else {"ok": "正常", "silent": "几乎没声音", "denied": "没有权限", "unsupported": "本机不支持"}
+            )
+            sys_l = labels.get(result["system"], result["system"])
+            mic_l = labels.get(result["mic"], result["mic"])
+            result["message"] = i18n.tr(
+                f"系统声音：{sys_l}；麦克风：{mic_l}", f"System audio: {sys_l}; microphone: {mic_l}"
+            )
+        return result
+
     @app.post("/api/import")
     def import_file(
         file: Annotated[UploadFile, File()],
@@ -799,13 +1172,18 @@ def create_app(root: Path | None = None) -> FastAPI:
         loaded = asr.model_loaded()
         with lock:
             data = [job_json(j) for j in jobs]
-            live = state["live"]
+            live, auto = state["live"], state["auto"]
+        now = time.time()
         for d in data:
             d["model_loaded"] = loaded
             if d["state"] == "recording":
                 out = root / d["meeting"]
                 d["levels"] = {s: track_level(out / f"{s}.wav") for s in d["sources"]}
                 d["live"] = live.recent(8) if live else []
+                if auto is not None:
+                    d["silent_s"] = auto.silent_s(now)
+                    if (left := auto.auto_stop_s(now)) is not None:
+                        d["auto_stop_s"] = left
         return data
 
     @app.get("/api/jobs")

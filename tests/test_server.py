@@ -1,5 +1,7 @@
 import io
+from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -256,6 +258,7 @@ def fake_recorder(monkeypatch):
     monkeypatch.setattr(record, "system_audio_supported", lambda: False)
     monkeypatch.setattr(record, "track_level", lambda path, window_s=0.15: 0.5)
     monkeypatch.setattr(record, "mixdown", mixdown)
+    monkeypatch.setattr(record, "running_meeting_apps", lambda: set())
     monkeypatch.setattr(live, "LiveTranscriber", Live)
     monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
     monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, on_token=None, think=True, on_think=None: "# 录音会")
@@ -527,7 +530,7 @@ def test_config_language_fields(client, tmp_path):
     c = client.put("/api/config", json={**body, "asr_language": "auto"}).json()  # 不传的不改
     assert (c["ui_language"], c["minutes_language"], c["asr_language"]) == ("en", "zh", "auto")
     text = (tmp_path / "config.toml").read_text()
-    assert text.endswith('[ui]\nlanguage = "en"\n\n[minutes]\nlanguage = "zh"\n\n[asr]\nlanguage = "auto"\n')
+    assert '[ui]\nlanguage = "en"\n\n[minutes]\nlanguage = "zh"\n\n[asr]\nlanguage = "auto"\n\n[record]\n' in text
     r = client.put("/api/config", json={**body, "minutes_language": "fr"}, headers={"X-Tingo-Lang": "en"})
     assert r.status_code == 400 and r.json()["detail"] == "Unsupported language: fr"
 
@@ -638,3 +641,355 @@ def test_llm_models_and_test_pick_protocol(client, monkeypatch):
     assert seen == [("anthropic", "https://api.anthropic.com/", "sk-ant")]
     r = client.post("/api/config/test", json={**probe, "model": "claude-x"}).json()
     assert not r["ok"] and "claude-haiku-4-5" in r["message"]
+
+
+# ---------- 导出 SRT / Word ----------
+
+
+def test_srt_export(client, root, opened):
+    mid = "2026-11-02_1430_周会"
+    client.put(f"/api/meetings/{mid}/speakers", json={"names": ["林舟", ""]})
+    d = client.post(f"/api/meetings/{mid}/srt").json()
+    assert d == {"ok": True, "path": str(root / mid / "周会.srt")} and opened == [(d["path"], True)]
+    raw = (root / mid / "周会.srt").read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw
+    assert raw.decode() == (
+        "1\n00:00:00,000 --> 00:00:01,000\n林舟：下周五上线。\n\n2\n00:00:01,500 --> 00:00:02,500\n说话人2：好的。\n"
+    )
+    # 英文界面；没有纪要时用文件夹里的会议名
+    (root / mid / "纪要.md").unlink()
+    client.post(f"/api/meetings/{mid}/srt", headers={"X-Tingo-Lang": "en"})
+    assert "\nSpeaker 2: 好的。\n" in (root / mid / "周会.srt").read_text()
+    (root / mid / "transcript.json").unlink()
+    r = client.post(f"/api/meetings/{mid}/srt")
+    assert r.status_code == 400 and r.json()["detail"] == "No transcript yet"
+    assert client.post(f"/api/meetings/{mid}/srt", headers={"X-Tingo-Lang": "zh"}).json()["detail"] == "还没有转写"
+
+
+def test_docx_export(client, root, opened, tmp_path, monkeypatch):
+    from tingo import server
+
+    mid = "2026-11-02_1430_周会"
+    (root / mid / "纪要.md").write_text("# 周会：发布/排期\n\n## 一句话总结\n定了")
+    seen = tmp_path / "seen.txt"
+    fake = tmp_path / "textutil"
+    # 假的 textutil：记下参数，把 HTML 原样当成 docx 写出去
+    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{seen}"\ncat "$7" > "$6"\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(server, "TEXTUTIL", str(fake))
+    d = client.post(f"/api/meetings/{mid}/docx", json={"html": "<p>纪要</p>"}).json()
+    assert d == {"ok": True, "path": str(root / mid / "周会：发布 排期.docx")} and opened == [(d["path"], True)]
+    assert (root / mid / "周会：发布 排期.docx").read_text() == "<p>纪要</p>"
+    args = seen.read_text().splitlines()
+    assert args[:5] == ["-convert", "docx", "-inputencoding", "UTF-8", "-output"] and args[6].endswith(".html")
+    assert not Path(args[6]).exists()  # 临时 HTML 已删
+
+    fake.write_text('#!/bin/sh\necho "坏了" >&2\nexit 3\n')
+    r = client.post(f"/api/meetings/{mid}/docx", json={"html": "<p></p>"})
+    assert r.status_code == 500 and r.json()["detail"] == "坏了"
+
+    monkeypatch.setattr(server, "TEXTUTIL", str(tmp_path / "missing"))
+    r = client.post(f"/api/meetings/{mid}/docx", json={"html": "<p></p>"})
+    assert r.status_code == 500 and r.json()["detail"] == "导出 Word 只支持 macOS"
+    r = client.post(f"/api/meetings/{mid}/docx", json={"html": "<p></p>"}, headers={"X-Tingo-Lang": "en"})
+    assert r.json()["detail"] == "Word export is only available on macOS"
+
+
+# ---------- 猜说话人名字 ----------
+
+
+def test_guess_speakers_endpoint(client, root, monkeypatch):
+    mid = "2026-11-02_1430_周会"
+    url = f"/api/meetings/{mid}/speakers/guess"
+    r = client.post(url)
+    assert r.status_code == 400 and "没有配置 LLM API key" in r.json()["detail"]
+
+    monkeypatch.setenv("TINGO_LLM_API_KEY", "x")
+    prompts = []
+
+    def fake(cfg, prompt, on_token=None, think=True, on_think=None, **kw):
+        prompts.append(prompt)
+        return '```json\n{"suggestions": [{"index": 1, "name": "林舟", "evidence": "[00:01] 说话人2：好的。"}, {"index": 9, "name": "x"}]}\n```'
+
+    monkeypatch.setattr(sm, "_chat", fake)
+    assert client.post(url).json() == {
+        "suggestions": [{"index": 1, "name": "林舟", "evidence": "[00:01] 说话人2：好的。"}]
+    }
+    assert "[00:00] 说话人1：下周五上线。" in prompts[-1]
+    client.post(url, headers={"X-Tingo-Lang": "en"})
+    assert "[00:00] Speaker 1: 下周五上线。" in prompts[-1]
+
+    monkeypatch.setattr(sm, "_chat", lambda cfg, prompt, **kw: "我猜不出来")
+    r = client.post(url)
+    assert r.status_code == 502 and r.json()["detail"] == "The model didn't return a usable result"
+    r = client.post(url, headers={"X-Tingo-Lang": "zh"})
+    assert r.json()["detail"] == "大模型没有给出可用的结果"
+
+    def down(cfg, prompt, **kw):
+        raise RuntimeError("连不上")
+
+    monkeypatch.setattr(sm, "_chat", down)
+    r = client.post(url)
+    assert r.status_code == 502 and r.json()["detail"] == "连不上"
+    (root / mid / "transcript.json").unlink()
+    assert client.post(url).json()["detail"] == "还没有转写"
+
+
+# ---------- 搜索 ----------
+
+
+def _meeting(root, name, sentences, minutes="", names=None):
+    m = root / name
+    m.mkdir()
+    Transcript(str(m / "录音.m4a"), 60000, [Sentence(*s) for s in sentences], names or {}).save(m / "transcript.json")
+    if minutes:
+        (m / "纪要.md").write_text(minutes)
+    return m
+
+
+def test_search_expands_terms_and_fuzzy(client, root):
+    _meeting(
+        root,
+        "2026-11-03_0900_复盘",
+        [(0, 12000, 13000, "历史中单要清理。"), (1, 14000, 15000, "历史工单很多。"), (1, 16000, 17000, "无关的话。")],
+        "# 工单复盘\n\n## 一句话总结\n清理历史工单。\n\n```terms\n"
+        '{"terms": [{"term": "历史工单", "variants": ["历史中单"]}]}\n```\n',
+        {0: "林舟"},
+    )
+    _meeting(
+        root,
+        "2026-11-01_1000_周会",
+        [(0, 1000, 2000, "历史攻单的事下周说。")]
+        + [(1, 3000 + i, 3001 + i, f"历史攻单{i}") for i in range(4)]
+        + [(0, 9000, 9001, "这里有历史工单。")],
+    )
+    _meeting(root, "2026-10-30_1000_老会", [(0, 1000, 2000, "什么都没说。")], "# 老会\n\n提到了历史工单。\n")
+    d = client.get("/api/search", params={"q": " 历史中单 "}).json()
+    assert d["q"] == "历史中单" and d["expanded"] == ["历史工单", "历史中单"]
+    assert [(r["id"], r["minutes_hit"], len(r["hits"])) for r in d["results"]] == [
+        ("2026-11-03_0900_复盘", True, 2),
+        ("2026-11-01_1000_周会", False, 5),  # 精确命中的在前，名额没满再补模糊命中（和"历史中单"只差一个字）
+        ("2026-10-30_1000_老会", True, 0),  # 只有纪要命中
+    ]
+    first = d["results"][0]
+    assert (first["title"], first["date"], first["time"]) == ("工单复盘", "2026-11-03", "09:00")
+    assert first["hits"] == [
+        {"ms": 12000, "speaker": "林舟", "text": "历史中单要清理。", "match": "历史中单"},
+        {"ms": 14000, "speaker": "说话人2", "text": "历史工单很多。", "match": "历史工单"},
+    ]
+    second = d["results"][1]["hits"]
+    assert [h["match"] for h in second] == ["历史工单", "历史攻单", "历史攻单", "历史攻单", "历史攻单"]
+    assert second[0]["ms"] == 9000 and [h["ms"] for h in second[1:]] == [1000, 3000, 3001, 3002]
+    # 英文界面：没改名的说话人叫 Speaker N
+    d = client.get("/api/search", params={"q": "历史工单"}, headers={"X-Tingo-Lang": "en"}).json()
+    assert d["expanded"] == ["历史工单", "历史中单"] and d["results"][0]["hits"][1]["speaker"] == "Speaker 2"
+
+
+def test_search_case_limits_and_empty(client, root):
+    _meeting(root, "2026-11-03_0900_英文", [(0, i * 1000, i * 1000 + 500, f"We use KAFKA here {i}.") for i in range(8)])
+    d = client.get("/api/search", params={"q": "kafka"}).json()
+    assert d["expanded"] == ["kafka"]
+    hits = d["results"][0]["hits"]
+    assert len(hits) == 5 and hits[0]["match"] == "KAFKA" and hits[0]["speaker"] == "说话人1"
+    # 3 个字以内的查询词不做模糊（"验证码"不能命中"验证手"）；代码块里的内容不算纪要命中
+    _meeting(root, "2026-11-04_0900_验证", [(0, 0, 1, "先验证手机号。")])
+    assert client.get("/api/search", params={"q": "验证码"}).json()["results"] == []
+    (root / "2026-11-02_1430_周会" / "纪要.md").write_text('# 周会\n```fishbone\n{"problem": "上限"}\n```\n')
+    d = client.get("/api/search", params={"q": "上限"}).json()
+    assert d["results"] == []
+    # 纪要正文模糊命中也算
+    (root / "2026-11-02_1430_周会" / "纪要.md").write_text("# 周会\n\n清理历史攻单。\n")
+    d = client.get("/api/search", params={"q": "历史工单"}).json()
+    assert [(r["id"], r["minutes_hit"], r["hits"]) for r in d["results"]] == [("2026-11-02_1430_周会", True, [])]
+    for i in range(35):
+        _meeting(root, f"2026-01-{i % 28 + 1:02d}_{1000 + i}_m{i}", [(0, 0, 1, "上线")])
+    d = client.get("/api/search", params={"q": "上线"}).json()
+    assert len(d["results"]) == 30 and d["results"][0]["id"] == "2026-11-02_1430_周会"
+    assert client.get("/api/search", params={"q": "  "}).status_code == 400
+    assert client.get("/api/search").status_code == 400
+
+
+# ---------- 配置：自动结束录音 ----------
+
+
+def test_config_record_fields_and_validation(client, tmp_path):
+    body = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "hotwords": [], "webhook": ""}
+    c = client.get("/api/config").json()
+    assert (c["auto_stop_silence_min"], c["auto_stop_app_quit"]) == (10, True)
+    c = client.put("/api/config", json={**body, "auto_stop_silence_min": 0, "auto_stop_app_quit": False}).json()
+    assert (c["auto_stop_silence_min"], c["auto_stop_app_quit"]) == (0, False)
+    c = client.put("/api/config", json={**body, "auto_stop_silence_min": 240}).json()  # 不传的不改
+    assert (c["auto_stop_silence_min"], c["auto_stop_app_quit"]) == (240, False)
+    assert (
+        (tmp_path / "config.toml")
+        .read_text()
+        .endswith("\n\n[record]\nauto_stop_silence_min = 240\nauto_stop_app_quit = false\n")
+    )
+    for bad in (241, -1, 1.5, "10", True):
+        r = client.put("/api/config", json={**body, "auto_stop_silence_min": bad})
+        assert r.status_code == 400 and "0～240" in r.json()["detail"], bad
+    r = client.put("/api/config", json={**body, "auto_stop_app_quit": "yes"})
+    assert r.status_code == 400
+    assert client.get("/api/config").json()["auto_stop_silence_min"] == 240
+
+
+# ---------- 示例会议 ----------
+
+
+def test_demo_copies_sample_once(client, root):
+    from tingo.server import SAMPLE_DIR
+
+    d = client.post("/api/demo").json()
+    assert d == {"id": "2026-10-28_1400_示例·注册转化复盘"}
+    m = root / d["id"]
+    assert sorted(p.name for p in m.iterdir()) == sorted(["transcript.json", "纪要.md", "录音.m4a"])
+    assert (m / "纪要.md").read_bytes() == (SAMPLE_DIR / "纪要.md").read_bytes()
+    assert (m / "录音.m4a").read_bytes() == (SAMPLE_DIR / "录音.m4a").read_bytes()
+    (m / "纪要.md").write_text("# 改过的\n")
+    assert client.post("/api/demo").json() == d  # 已存在：不覆盖
+    assert (m / "纪要.md").read_text() == "# 改过的\n"
+    detail = client.get(f"/api/meetings/{d['id']}").json()
+    assert detail["has_transcript"] and detail["audio"] and len(detail["speaker_list"]) == 4
+
+    en = client.post("/api/demo", headers={"X-Tingo-Lang": "en"}).json()
+    assert en == {"id": "2026-10-28_1400_Sample_·_Signup_conversion_review"}
+    assert (root / en["id"] / "纪要.md").read_bytes() == (SAMPLE_DIR / "纪要.en.md").read_bytes()
+    assert not (root / en["id"] / "纪要.en.md").exists()
+    ids = [x["id"] for x in client.get("/api/meetings").json()]
+    assert d["id"] in ids and en["id"] in ids
+
+
+def test_demo_into_missing_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("tingo.config.CONFIG_PATH", tmp_path / "config.toml")
+    c = TestClient(create_app(tmp_path / "new" / "root"))
+    d = c.post("/api/demo").json()
+    assert (tmp_path / "new" / "root" / d["id"] / "transcript.json").exists()
+
+
+# ---------- 试录 ----------
+
+
+def test_record_test_endpoint(client, fake_recorder, monkeypatch):
+    from tingo import record
+
+    calls = []
+
+    def probe(seconds):
+        calls.append(seconds)
+        return {"system": "silent", "mic": "ok", "message": ""}
+
+    monkeypatch.setattr(record, "probe_devices", probe)
+    assert client.post("/api/record/test", json={"seconds": 2}).json() == {
+        "system": "silent",
+        "mic": "ok",
+        "message": "系统声音：几乎没声音；麦克风：正常",
+    }
+    r = client.post("/api/record/test", json={}, headers={"X-Tingo-Lang": "en"}).json()
+    assert r["message"] == "System audio: almost silent; microphone: OK" and calls == [2, 3]
+    for bad in (0, 11, "3", True, None):
+        assert client.post("/api/record/test", json={"seconds": bad}).status_code == 400, bad
+    monkeypatch.setattr(record, "probe_devices", lambda s: {"system": "denied", "mic": "error", "message": "没权限"})
+    assert client.post("/api/record/test", json={"seconds": 1}).json()["message"] == "没权限"
+    client.post("/api/record/start", json={"title": "评审"})
+    r = client.post("/api/record/test", json={"seconds": 1}, headers={"X-Tingo-Lang": "zh"})
+    assert r.status_code == 409 and r.json()["detail"] == "正在录音，先结束录音再测试"
+
+
+# ---------- 自动结束录音 ----------
+
+
+def test_recording_job_reports_silence(client, fake_recorder, tmp_path):
+    body = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "hotwords": [], "webhook": ""}
+    client.post("/api/record/start", json={"title": "评审"})
+    rec = client.get("/api/jobs").json()["jobs"][0]
+    assert rec["silent_s"] == 0 and rec["auto_stop_s"] == 600
+    client.post("/api/record/stop")
+    jobs = client.get("/api/jobs").json()["jobs"]
+    assert "silent_s" not in jobs[0] and "auto_stop_s" not in jobs[0]
+    # 关了自动结束：照样给 silent_s，不给 auto_stop_s
+    client.put("/api/config", json={**body, "auto_stop_silence_min": 0})
+    client.post("/api/record/start", json={"title": "评审2"})
+    rec = next(j for j in client.get("/api/jobs").json()["jobs"] if j["state"] == "recording")
+    assert rec["silent_s"] == 0 and "auto_stop_s" not in rec
+
+
+@pytest.fixture
+def fast_watch(monkeypatch):
+    from tingo import record
+
+    monkeypatch.setattr(record, "CHECK_S", 0.02)
+    monkeypatch.setattr(record, "SECONDS_PER_MIN", 0.1)
+    monkeypatch.setattr(record, "KEEP_AFTER_VOICE_S", 1.0)
+
+
+def _wait_recording_done(client, job_id, timeout=5):
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end:
+        job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
+        if job["state"] != "recording":
+            return job
+        time.sleep(0.02)
+    raise AssertionError(job)
+
+
+def test_auto_stop_after_silence_truncates_tracks(client, root, fake_recorder, fast_watch, monkeypatch):
+    import soundfile as sf
+
+    from tingo import record
+
+    body = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "hotwords": [], "webhook": ""}
+    client.put("/api/config", json={**body, "auto_stop_silence_min": 2})
+    monkeypatch.setattr(record, "track_level", lambda path, window_s=0.15: 0.01)  # 低于 0.04：没人说话
+    real_start = record.Recording.start
+
+    def start(self):
+        real_start(self)
+        sf.write(self.out / "mic.wav", np.zeros(48000 * 3, dtype=np.float32), 48000, subtype="FLOAT")
+
+    monkeypatch.setattr(record.Recording, "start", start)
+    job = client.post("/api/record/start", json={"title": "评审"}).json()
+    stopped = _wait_recording_done(client, job["id"])
+    assert stopped["notice"] == "2 分钟没人说话，已自动结束录音"
+    fake_recorder.set()
+    done = wait_all(client)[0]
+    assert done["state"] == "done" and done["notice"] == "2 分钟没人说话，已自动结束录音"
+    assert sf.info(root / job["meeting"] / "mic.wav").frames == 48000  # 截到最后有声 + 1 秒（测试里改小）
+    assert (root / job["meeting"] / "纪要.md").exists()
+
+
+def test_auto_stop_when_meeting_app_quits(client, root, fake_recorder, fast_watch, monkeypatch):
+    from tingo import record
+
+    running = [{"zoom.us"}]
+    monkeypatch.setattr(record, "running_meeting_apps", lambda: running[0])
+    job = client.post("/api/record/start", json={"title": "评审"}).json()
+    import time
+
+    time.sleep(0.1)
+    assert next(j for j in client.get("/api/jobs").json()["jobs"])["state"] == "recording"  # 还开着：不结束
+    running[0] = set()
+    stopped = _wait_recording_done(client, job["id"])
+    assert stopped["notice"] == "会议软件已退出，已自动结束录音"
+    fake_recorder.set()
+    assert wait_all(client)[0]["state"] == "done"
+    # 开始时没有会议软件在运行：不会因为"退出"而结束
+    nxt = client.post("/api/record/start", json={"title": "评审2"}).json()
+    time.sleep(0.1)
+    assert next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == nxt["id"])["state"] == "recording"
+
+
+def test_auto_stop_does_not_touch_next_recording(client, fake_recorder, fast_watch, monkeypatch):
+    """用户手动结束后又开了下一场：上一场的检查线程不能把下一场结束掉"""
+    from tingo import record
+
+    monkeypatch.setattr(record, "SECONDS_PER_MIN", 1000.0)
+    first = client.post("/api/record/start", json={"title": "一"}).json()
+    client.post("/api/record/stop")
+    nxt = client.post("/api/record/start", json={"title": "二"}).json()
+    import time
+
+    time.sleep(0.1)
+    jobs = {j["id"]: j for j in client.get("/api/jobs").json()["jobs"]}
+    assert jobs[nxt["id"]]["state"] == "recording" and jobs[first["id"]]["notice"] == ""

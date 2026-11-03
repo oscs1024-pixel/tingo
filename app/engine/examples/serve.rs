@@ -9,6 +9,8 @@ async fn main() {
         models_dir: a[1].clone().into(),
         recorder_bin: a[2].clone().into(),
         version: env!("CARGO_PKG_VERSION").into(),
+        // 示例会议的素材用仓库里的
+        sample_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/tingo/sample"),
     };
     let port = a.get(3).and_then(|p| p.parse().ok()).unwrap_or(0);
     let (port, server) = tingo_engine::server::serve(opt, port)

@@ -1,10 +1,11 @@
 /* 会议详情：纪要 / 转写两个视图、回听播放器、说话人改名、编辑纪要、重新生成。 */
 
-import { api, type Job, type MeetingDetail, meetingPath, url } from "../api";
+import { api, isIOS, type Job, type MeetingDetail, meetingPath, share, url } from "../api";
 import { $, $$, $maybe, closeModal, color, errorMessage, esc, fmt, ICON, initial, main, openModal, toast, tsToMs } from "../dom";
 import { fishboneToText, turnResolver } from "../fishbone";
 import { renderMarkdown } from "../markdown";
-import { minutesDocument } from "../pdf";
+import { minutesDocument, wordDocument } from "../pdf";
+import type { Config } from "../api";
 import { poll } from "../poll";
 import { refreshMeetings } from "../sidebar";
 import { isBusy, jobOf, minutesProgress, progressOf, S, sectionLabels } from "../state";
@@ -24,8 +25,9 @@ export function stopAudio(): void {
 
 const backLink = () => `<a class="back" href="#/meetings">${ICON.back}${t("会议记录", "Meetings")}</a>`;
 
-export async function renderDetail(id: string, keepTab = false): Promise<void> {
-  if (!keepTab) detailTab = "minutes";
+/** `at`：从搜索结果点进来时要跳到的时间点（毫秒），打开转写并定位到那一句 */
+export async function renderDetail(id: string, keepTab = false, at?: number): Promise<void> {
+  if (!keepTab) detailTab = at === undefined ? "minutes" : "transcript";
   main().innerHTML = `<div class="page">${backLink()}</div>`;
   let d: MeetingDetail;
   try {
@@ -34,7 +36,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
     main().innerHTML = `<div class="page">${backLink()}<div class="empty"><h3>${t("打不开这场会议", "Couldn't open this meeting")}</h3><div>${esc(errorMessage(e))}</div></div></div>`;
     return;
   }
-  if (decodeURIComponent(location.hash.slice(1)) !== `/m/${id}`) return; // 加载期间已经切走
+  if (decodeURIComponent(location.hash.slice(1)).split("?")[0] !== `/m/${id}`) return; // 加载期间已经切走（地址后面可能带 ?t=）
   S.detail = d;
   const jobHere = jobOf(id);
   // 打开会议就算看过结果了：收起这场会议已结束的任务
@@ -49,14 +51,16 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
             d.minutes
               ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}${t("导出", "Export")}${ICON.chevron}</button>
                   <div class="menu" id="exportMenu" hidden>
-                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
-                    <button data-act="obsidian">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
+                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${isIOS() ? t("A4 排版，发给别人或存到「文件」", "A4 layout — send it or save to Files") : t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
+                    <button data-act="docx" class="desk-only">${ICON.edit}<span><b>${t("导出 Word", "Export Word")}</b><small>${t("可以接着改的 .docx", "An editable .docx")}</small></span></button>
+                    <button data-act="srt">${ICON.play}<span><b>${t("导出 SRT 字幕", "Export SRT subtitles")}</b><small>${t("带说话人的逐句字幕", "Line-by-line subtitles with speakers")}</small></span></button>
+                    <button data-act="obsidian" class="desk-only">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
                     <button data-act="copy">${ICON.copy}<span><b>${t("复制为 Markdown", "Copy as Markdown")}</b><small>${t("粘贴到文档、邮件里", "Paste into docs or email")}</small></span></button>
                   </div></div><button class="btn" id="aPush">${ICON.send}${t("推送到群", "Share to chat")}</button>`
               : ""
           }
           ${d.has_transcript && !jobHere ? `<button class="btn" id="aRegen">${ICON.redo}${d.minutes ? t("重新生成", "Regenerate") : t("生成纪要", "Write minutes")}</button>` : ""}
-          <button class="btn ghost" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
+          <button class="btn ghost desk-only" id="aFolder" title="${t("打开文件夹", "Open folder")}">${ICON.folder}</button>
         </div>
       </div>
       <div class="meta">
@@ -89,7 +93,7 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
           ${d.audio ? `<button class="btn primary" id="aProcess">${t("开始转写", "Transcribe")}</button>` : ""}</div></div>`
         }`
       }
-      ${d.audio ? playerHTML : ""}
+      ${d.audio ? playerHTML() : ""}
     </div>`;
 
   $$<HTMLButtonElement>(".seg button").forEach(
@@ -122,6 +126,22 @@ export async function renderDetail(id: string, keepTab = false): Promise<void> {
   if (d.audio) bindPlayer(id);
   if (d.has_transcript) drawPane();
   if (jobHere) updateDetailJob(jobHere, { state: "idle" });
+  if (at !== undefined && d.has_transcript) jumpTo(at);
+}
+
+/** 定位到某个时间点：播放器跳过去（不自动播放），转写里那一句高亮并滚到中间 */
+function jumpTo(ms: number): void {
+  if (audioEl) audioEl.currentTime = ms / 1000;
+  const turns = $$<HTMLElement>(".turn");
+  let hit: HTMLElement | undefined;
+  for (const tn of turns) {
+    if (Number(tn.dataset.ms) <= ms + 200) hit = tn;
+    else break;
+  }
+  if (!hit) return;
+  hit.classList.add("found");
+  hit.scrollIntoView({ block: "center" });
+  setTimeout(() => hit?.classList.remove("found"), 4000);
 }
 
 function drawPane(): void {
@@ -158,6 +178,25 @@ function drawPane(): void {
       }),
   );
   $$<HTMLButtonElement>(".fb-draw", pane).forEach((b) => (b.onclick = toExcalidraw));
+  // 人名与术语：一键加进热词，以后识别、写纪要都按这个写法
+  $$<HTMLButtonElement>(".terms-add", pane).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const words = $$<HTMLElement>(".term", pane).map((x) => x.dataset.term ?? "").filter(Boolean);
+        try {
+          const c = await api<Config>("/api/config");
+          const add = words.filter((w) => !c.hotwords.includes(w));
+          if (!add.length) return toast(t("这些词都已经在热词里了", "These are already in your hotwords"));
+          await api("/api/config", {
+            method: "PUT",
+            json: { base_url: c.base_url, model: c.model, api_key: null, hotwords: [...c.hotwords, ...add], webhook: c.webhook, secret: null },
+          });
+          toast(t(`已加入 ${add.length} 个热词`, `Added ${add.length} hotword${add.length > 1 ? "s" : ""}`));
+        } catch (e) {
+          toast(errorMessage(e), true);
+        }
+      }),
+  );
   // 鱼骨图：点分支展开它引用的原话
   $$<HTMLElement>(".fb-branch[role=button]", pane).forEach((br) => {
     const toggle = () => {
@@ -313,31 +352,53 @@ function bindExportMenu(d: MeetingDetail): void {
   if (!btn || !menu) return;
   const close = () => {
     menu.hidden = true;
-    document.removeEventListener("mousedown", outside);
+    document.removeEventListener("pointerdown", outside);
   };
-  const outside = (e: MouseEvent) => {
+  const outside = (e: PointerEvent) => {
     if (!menu.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
   };
   btn.onclick = () => {
     menu.hidden = !menu.hidden;
-    if (!menu.hidden) document.addEventListener("mousedown", outside);
+    if (!menu.hidden) document.addEventListener("pointerdown", outside);
   };
   $$<HTMLButtonElement>("button", menu).forEach(
     (b) =>
       (b.onclick = () => {
         close();
         if (b.dataset.act === "pdf") toPdf(d);
+        else if (b.dataset.act === "docx") exportFile(d, "/docx", { html: wordDocument(d) });
+        else if (b.dataset.act === "srt") exportFile(d, "/srt");
         else if (b.dataset.act === "obsidian") toObsidian();
         else copyText(fishboneToText(d.minutes));
       }),
   );
 }
 
+/** 导出完：桌面上已经在访达里选中了；iOS 弹系统分享面板 */
+async function exported(path: string): Promise<void> {
+  const name = path.split("/").pop();
+  if (!isIOS()) return toast(t(`已导出 ${name}，已在访达中选中`, `Exported ${name} — shown in Finder`));
+  try {
+    await share(path);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
+async function exportFile(d: MeetingDetail, path: string, json?: unknown): Promise<void> {
+  try {
+    const r = await api<{ path: string }>(meetingPath(d.id, path), json === undefined ? { method: "POST" } : { json });
+    await exported(r.path);
+  } catch (e) {
+    toast(errorMessage(e), true);
+  }
+}
+
 async function toPdf(d: MeetingDetail): Promise<void> {
   toast(t("正在排版 PDF…", "Laying out the PDF…"));
   try {
     const r = await api<{ path: string }>(meetingPath(d.id, "/pdf"), { json: { html: minutesDocument(d) } });
-    toast(t(`已导出 ${r.path.split("/").pop()}，已在访达中选中`, `Exported ${r.path.split("/").pop()} — shown in Finder`));
+    await exported(r.path);
   } catch (e) {
     toast(errorMessage(e), true);
   }
@@ -357,6 +418,7 @@ async function toExcalidraw(): Promise<void> {
   if (!S.detail) return;
   try {
     const r = await api<{ paths: string[] }>(meetingPath(S.detail.id, "/excalidraw"), { method: "POST" });
+    if (isIOS() && r.paths?.[0]) return await share(r.paths[0]);
     const name = r.paths?.[0]?.split("/").pop() ?? "";
     toast(t(`已导出${name}，拖进 excalidraw.com 即可编辑`, `Exported ${name} — drop it into excalidraw.com to edit`));
   } catch (e) {
@@ -412,6 +474,7 @@ function renameSpeakers(): void {
           `<div class="sp-row"><span class="av" style="background:${color(s.index)}">${esc(initial(s.name))}</span><input class="input" data-i="${s.index}" value="${s.custom ? esc(s.name) : ""}" placeholder="${esc(t(`说话人${s.index + 1}`, `Speaker ${s.index + 1}`))}"></div>`,
       )
       .join("")}
+    <div class="sp-guess"><button class="btn" id="spGuess">${ICON.spark}${t("让 AI 根据对话猜名字", "Let AI guess names from the conversation")}</button><span class="test-msg" id="spGuessMsg"></span></div>
     <div class="modal-foot"><button class="btn" data-close>${t("取消", "Cancel")}</button><button class="btn" id="spSave">${t("仅保存", "Save")}</button>${d.minutes ? `<button class="btn primary" id="spRegen">${t("保存并重新生成纪要", "Save & regenerate minutes")}</button>` : ""}</div>`);
   const save = async (regen: boolean) => {
     const names = $$<HTMLInputElement>("#modalBody input").map((x) => x.value.trim());
@@ -427,13 +490,49 @@ function renameSpeakers(): void {
     }
   };
   $("#spSave").onclick = () => save(false);
+  // 大模型按自我介绍、被点名等线索猜名字，只填还空着的框；依据显示在框下面
+  $("#spGuess").onclick = async () => {
+    const btn = $<HTMLButtonElement>("#spGuess");
+    const msg = $("#spGuessMsg");
+    btn.disabled = true;
+    msg.className = "test-msg";
+    msg.textContent = t("大模型在读转写…", "Reading the transcript…");
+    try {
+      const r = await api<{ suggestions: { index: number; name: string; evidence?: string }[] }>(meetingPath(d.id, "/speakers/guess"), {
+        method: "POST",
+      });
+      let filled = 0;
+      for (const sg of r.suggestions) {
+        const input = $maybe<HTMLInputElement>(`#modalBody input[data-i="${sg.index}"]`);
+        if (!input) continue;
+        if (!input.value.trim()) {
+          input.value = sg.name;
+          filled++;
+        }
+        if (sg.evidence) {
+          const row = input.closest(".sp-row");
+          row?.querySelector(".sp-ev")?.remove();
+          row?.insertAdjacentHTML("beforeend", `<small class="sp-ev">${esc(sg.evidence)}</small>`);
+        }
+      }
+      msg.className = "test-msg " + (r.suggestions.length ? "ok" : "");
+      msg.textContent = r.suggestions.length
+        ? t(`猜出 ${r.suggestions.length} 位，填了 ${filled} 个空着的，确认后保存`, `Guessed ${r.suggestions.length}, filled ${filled} empty — check and save`)
+        : t("对话里没有能看出名字的线索", "No clues to anyone's name in the conversation");
+    } catch (e) {
+      msg.className = "test-msg bad";
+      msg.textContent = errorMessage(e);
+    } finally {
+      btn.disabled = false;
+    }
+  };
   const regen = $maybe("#spRegen");
   if (regen) regen.onclick = () => save(true);
 }
 
 /* ---------- 播放器 ---------- */
 
-const playerHTML = `
+const playerHTML = () => `
   <div class="player" id="player">
     <button class="play" id="pPlay" title="${t("播放（空格）", "Play (Space)")}">${ICON.play}</button>
     <span class="p-time" id="pTime">00:00 / --:--</span>
