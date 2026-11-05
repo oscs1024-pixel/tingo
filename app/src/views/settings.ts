@@ -132,6 +132,8 @@ interface AsrModel {
   active: boolean;
   /** 比如会议语言选了英文、当前是只认中文的 Paraformer */
   warning?: string;
+  system?: boolean;
+  available?: boolean;
 }
 
 const delArmed = new Set<string>(); // 删除要点两次
@@ -150,10 +152,12 @@ async function drawAsr(): Promise<void> {
   const job = S.job;
   const dlId = job?.kind === "models" && isBusy(job) ? job.meeting || "paraformer" : "";
   const action = (m: AsrModel) => {
-    if (m.active) return `<span class="asr-badge">${t("使用中", "In use")}</span>`;
+    if (m.system && m.available === false) return `<span class="asr-badge">${t("不可用", "Unavailable")}</span>`;
+    if (m.active && m.ready) return `<span class="asr-badge">${t("使用中", "In use")}</span>`;
     if (m.ready)
-      return `${m.id !== "paraformer" ? `<button class="btn ghost asr-del" data-del="${m.id}">${delArmed.has(m.id) ? t("确认删除", "Confirm") : t("删除", "Delete")}</button>` : ""}<button class="btn" data-use="${m.id}">${t("使用", "Use")}</button>`;
+      return `${m.id !== "paraformer" && !m.system ? `<button class="btn ghost asr-del" data-del="${m.id}">${delArmed.has(m.id) ? t("确认删除", "Confirm") : t("删除", "Delete")}</button>` : ""}<button class="btn" data-use="${m.id}">${t("使用", "Use")}</button>`;
     if (m.id === dlId) return `<div class="asr-prog"><div class="asr-bar"><i id="asrBar"></i></div><small id="asrText">${t("准备下载…", "Starting download…")}</small></div>`;
+    if (m.system) return `<button class="btn" data-dl="${m.id}" ${dlId ? "disabled" : ""}>${t("检查／安装", "Check / install")}</button>`;
     return `<button class="btn" data-dl="${m.id}" ${dlId ? "disabled" : ""}>${ICON.download}${t("下载", "Download")} · ${m.size_mb} MB</button>`;
   };
   box.hidden = false;

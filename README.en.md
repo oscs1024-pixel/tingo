@@ -97,3 +97,7 @@ cd engine && cargo test                    # Rust core
 ```
 
 Issues and PRs are welcome. Licensed under [MIT](LICENSE).
+
+### Apple system speech (macOS 26+)
+
+The desktop app offers **Apple Speech** in Settings → Speech model. Select Chinese or English explicitly, then **Check / install** to prepare system language assets and shared models, or **Use** when ready. Transcription runs on device; macOS manages the language assets. Tingo still uses its speaker model for diarization. Unsupported systems show an explanation and can use the existing engines. This option does not change LLM summarization.

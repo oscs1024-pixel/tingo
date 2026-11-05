@@ -17,6 +17,7 @@ import AVFoundation
 import Foundation
 import ScreenCaptureKit
 import WebKit
+import Speech
 
 final class Track {
     let url: URL
@@ -319,7 +320,59 @@ func exportPDF(_ input: String, _ output: String) -> Never {
     exit(1)
 }
 
+
+// System speech commands share the app identity and never record from the microphone.
+#if compiler(>=6.2)
+@available(macOS 26.0, *)
+func appleSpeech(_ args: [String]) async throws {
+    guard SpeechTranscriber.isAvailable else { throw NSError(domain: "tingo", code: 1, userInfo: [NSLocalizedDescriptionKey: "Apple 系统识别在此设备不可用 / Apple speech is unavailable on this device"]) }
+    let language = args.count > 2 ? args[2] : "zh"
+    guard language == "zh" || language == "en" else { throw NSError(domain: "tingo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Apple 系统识别请明确选择中文或英文 / Select Chinese or English for Apple speech"]) }
+    guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language == "en" ? "en_US" : "zh_CN")) else { throw NSError(domain: "tingo", code: 3, userInfo: [NSLocalizedDescriptionKey: "系统不支持所选语言 / Unsupported speech language"]) }
+    let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+    if args[1] == "speech-status" {
+        let installed = await SpeechTranscriber.installedLocales
+        let data = try JSONSerialization.data(withJSONObject: ["available": true, "ready": installed.contains(locale), "locale": locale.identifier])
+        print(String(decoding: data, as: UTF8.self)); return
+    }
+    if args[1] == "speech-install" {
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) { try await request.downloadAndInstall() }
+        print("OK"); return
+    }
+    guard args.count > 3 else { throw NSError(domain: "tingo", code: 4, userInfo: [NSLocalizedDescriptionKey: "Missing audio file"]) }
+    guard await SpeechTranscriber.installedLocales.contains(locale) else { throw NSError(domain: "tingo", code: 5, userInfo: [NSLocalizedDescriptionKey: "请先在设置中安装系统语音模型 / Install the system speech model in Settings first"]) }
+    let results = Task { () throws -> [[String: Any]] in
+        var rows: [[String: Any]] = []
+        for try await r in transcriber.results {
+            rows.append(["start": r.range.start.seconds, "end": CMTimeRangeGetEnd(r.range).seconds, "text": String(r.text.characters)])
+        }
+        return rows
+    }
+    let analyzer = SpeechAnalyzer(modules: [transcriber])
+    let file = try AVAudioFile(forReading: URL(fileURLWithPath: args[3]))
+    _ = try await analyzer.analyzeSequence(from: file)
+    try await analyzer.finalizeAndFinishThroughEndOfInput()
+    let data = try JSONSerialization.data(withJSONObject: try await results.value)
+    print(String(decoding: data, as: UTF8.self))
+}
+
+#endif
+
 let args = CommandLine.arguments
+if args.count >= 2 && ["speech-status", "speech-install", "speech-transcribe"].contains(args[1]) {
+    #if compiler(>=6.2)
+    if #available(macOS 26.0, *) {
+        Task {
+            do { try await appleSpeech(args); fflush(stdout); exit(0) }
+            catch { fail(error.localizedDescription) }
+        }
+        dispatchMain()
+    } else { fail("Apple 系统识别需要 macOS 26 或更新版本 / Apple speech requires macOS 26 or later") }
+    #else
+    fail("此构建未启用 Apple Speech，请使用新版安装包 / Apple Speech requires a build made with Xcode 26 or later")
+    #endif
+}
+
 if args.count >= 4 && args[1] == "decode" { decode(args[2], args[3]) }
 if args.count >= 4 && args[1] == "pdf" { exportPDF(args[2], args[3]) }
 if args.count >= 3 && args[1] == "trash" {

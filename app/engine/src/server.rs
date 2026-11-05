@@ -193,7 +193,8 @@ impl AppState {
             .map(|n| n.get().clamp(2, 4) as i32)
             .unwrap_or(4);
         *self.engine.lock().unwrap() = None; // 先放掉旧模型的内存
-        let e = Arc::new(Engine::load(&paths, kind, &hot, &lang, threads)?);
+        let e = Engine::load(&paths, kind, &hot, &lang, threads)?;
+        let e = Arc::new(if kind == AsrKind::AppleSpeech { e.with_apple_helper(&self.opt.recorder_bin)? } else { e });
         *self.engine.lock().unwrap() = Some(e.clone());
         Ok(e)
     }
@@ -501,7 +502,7 @@ impl AppState {
         let samples = record::decode(&self.opt.recorder_bin, audio_path)?;
         let tr = transcribe_samples(&engine, &samples, audio_path, |f| {
             self.update(id, |j| j.stage = format!("{:.0}%", f * 100.0))
-        });
+        })?;
         self.update(id, |j| j.stage.clear());
         if tr.sentences.is_empty() {
             return Err(i18n::tr("没有识别出任何语音", "No speech was recognized").into());
@@ -1716,7 +1717,11 @@ fn model_kind(id: &str) -> ApiResult<AsrKind> {
 async fn list_asr_models(State(s): State<Shared>) -> Json<Value> {
     let paths = s.model_paths();
     let active = paths.active();
-    let english_meetings = s.config().asr_language == "en";
+    let language = s.config().asr_language;
+    let english_meetings = language == "en";
+    let bin = s.opt.recorder_bin.clone();
+    let apple = tokio::task::spawn_blocking(move || crate::apple_speech::status(&bin, &language)).await
+        .map_err(|e| e.to_string()).and_then(|r| r);
     let list: Vec<Value> = models::catalog()
         .iter()
         .map(|m| {
@@ -1728,6 +1733,13 @@ async fn list_asr_models(State(s): State<Shared>) -> Json<Value> {
                 "ready": paths.asr_ready(m.kind),
                 "active": m.kind == active,
             });
+            if m.kind == AsrKind::AppleSpeech {
+                v["system"] = true.into();
+                match &apple {
+                    Ok(status) => { v["available"] = status.available.into(); v["ready"] = (status.ready && paths.base_ready()).into(); }
+                    Err(e) => { v["available"] = false.into(); v["ready"] = false.into(); v["warning"] = e.clone().into(); }
+                }
+            }
             if m.kind == AsrKind::Paraformer && english_meetings {
                 v["warning"] = paraformer_warning().into();
             }
@@ -1749,13 +1761,17 @@ fn paraformer_warning() -> &'static str {
 async fn download_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Job>> {
     let kind = model_kind(&id)?;
     let paths = s.model_paths();
-    if paths.base_ready() && paths.asr_ready(kind) {
+    if kind != AsrKind::AppleSpeech && paths.base_ready() && paths.asr_ready(kind) {
         return Err(bad(tr("这个模型已经下载好了", "This model is already downloaded")));
     }
     let job = Job::new("models", kind.id(), "downloading");
     s.start_job(job.clone())?;
     spawn_job(&s, &job.id, move |st, id| {
         let paths = st.model_paths();
+        if kind == AsrKind::AppleSpeech {
+            st.update(id, |j| j.stage = tr("正在检查／安装系统语音模型…", "Checking/installing system speech assets…").into());
+            crate::apple_speech::run(&st.opt.recorder_bin, "speech-install", &st.config().asr_language, None)?;
+        }
         models::ensure_model(&paths, kind, |done, total| {
             st.update(id, |j| {
                 j.stage = format!("{:.0} / {:.0} MB", done as f64 / 1e6, total as f64 / 1e6)
@@ -1772,6 +1788,11 @@ async fn use_model(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Api
     let paths = s.model_paths();
     if !paths.asr_ready(kind) {
         return Err(bad(tr("这个模型还没有下载", "This model isn't downloaded yet")));
+    }
+    if kind == AsrKind::AppleSpeech {
+        let bin = s.opt.recorder_bin.clone(); let lang = s.config().asr_language;
+        let status = tokio::task::spawn_blocking(move || crate::apple_speech::status(&bin, &lang)).await.map_err(|e| bad(e.to_string()))?.map_err(bad)?;
+        if !status.available || !status.ready || !paths.base_ready() { return Err(bad("请先检查／安装模型 / Check and install models first")); }
     }
     paths.set_active(kind).map_err(|e| bad(e.to_string()))?;
     // 下次转写时按新模型加载；正在进行的转写用的还是旧引擎，不受影响
@@ -2006,6 +2027,33 @@ mod tests {
             sample_dir: base.join("sample"),
         });
         (state, root, trash)
+    }
+
+    #[tokio::test]
+    async fn apple_model_status_switch_and_unavailable() {
+        let (s, root, _) = test_state("apple-models");
+        let paths = s.model_paths();
+        for p in paths.base().into_iter().chain(paths.asr_files(AsrKind::Paraformer)) {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "test").unwrap();
+        }
+        std::fs::write(&s.opt.recorder_bin, "#!/bin/sh\necho '{\"available\":true,\"ready\":true}'\n").unwrap();
+        let list = list_asr_models(State(s.clone())).await.0;
+        let apple = list["models"].as_array().unwrap().iter().find(|m| m["id"] == "apple-speech").unwrap();
+        assert_eq!(apple["ready"], true);
+        assert_eq!(apple["system"], true);
+        assert!(use_model(State(s.clone()), UrlPath("apple-speech".into())).await.is_ok());
+        assert_eq!(paths.active(), AsrKind::AppleSpeech);
+        assert!(use_model(State(s.clone()), UrlPath("paraformer".into())).await.is_ok());
+        assert_eq!(paths.active(), AsrKind::Paraformer);
+        assert!(delete_model(State(s.clone()), UrlPath("apple-speech".into())).await.is_err());
+        std::fs::write(&s.opt.recorder_bin, "#!/bin/sh\necho 'ERROR: requires macOS 26'; exit 1\n").unwrap();
+        assert!(use_model(State(s.clone()), UrlPath("apple-speech".into())).await.is_err());
+        assert_eq!(paths.active(), AsrKind::Paraformer);
+        let list = list_asr_models(State(s.clone())).await.0;
+        let apple = list["models"].as_array().unwrap().iter().find(|m| m["id"] == "apple-speech").unwrap();
+        assert_eq!(apple["available"], false);
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 
     fn meeting(root: &Path, id: &str, files: &[(&str, usize)]) -> PathBuf {

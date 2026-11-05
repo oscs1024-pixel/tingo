@@ -69,10 +69,10 @@ impl Chunker {
         Some((chunk, offset))
     }
 
-    pub fn transcribe(&mut self, engine: &Engine, chunk: &[f32], offset_s: f64) -> Vec<Segment> {
-        let segs = engine.transcribe(chunk, (offset_s * 1000.0).round() as u64);
+    pub fn transcribe(&mut self, engine: &Engine, chunk: &[f32], offset_s: f64) -> Result<Vec<Segment>, String> {
+        let segs = engine.transcribe(chunk, (offset_s * 1000.0).round() as u64)?;
         self.segments.extend(segs.iter().cloned());
-        segs
+        Ok(segs)
     }
 
     pub fn duration_ms(&self) -> u64 {
@@ -151,17 +151,17 @@ pub fn transcribe_samples(
     audio: &[f32],
     source: &Path,
     mut progress: impl FnMut(f64),
-) -> Transcript {
+) -> Result<Transcript, String> {
     let total = audio.len() as f64 / SR as f64;
     let mut c = Chunker::default();
     c.feed(audio);
     while let Some((chunk, offset)) = c.next_chunk(false).or_else(|| c.next_chunk(true)) {
-        c.transcribe(engine, &chunk, offset);
+        c.transcribe(engine, &chunk, offset)?;
         if total > 0.0 {
             progress((c.processed_s() / total).min(1.0));
         }
     }
-    c.assemble(source)
+    Ok(c.assemble(source))
 }
 
 /// 录音进行中读取录音组件正在写的音轨，边录边转。
@@ -284,7 +284,7 @@ impl LiveTranscriber {
             let Some((chunk, offset)) = s.chunker.next_chunk(true) else {
                 break;
             };
-            let segs = s.chunker.transcribe(engine, &chunk, offset);
+            let segs = s.chunker.transcribe(engine, &chunk, offset)?;
             s.lines
                 .extend(segs.into_iter().map(|g| (g.start_ms, g.text)));
         }
@@ -301,6 +301,7 @@ impl LiveTranscriber {
 fn step(inner: &Mutex<LiveState>, engine: &Engine, last: bool) -> bool {
     let job = {
         let mut s = inner.lock().unwrap();
+        if s.error.is_some() { return false; }
         s.mix_new(last);
         s.chunker.next_chunk(last)
     };
@@ -310,6 +311,7 @@ fn step(inner: &Mutex<LiveState>, engine: &Engine, last: bool) -> bool {
     // 识别时不持锁：界面取实时文字不用等
     let segs = engine.transcribe(&chunk, (offset * 1000.0).round() as u64);
     let mut s = inner.lock().unwrap();
+    let segs = match segs { Ok(s) => s, Err(e) => { s.error = Some(e); return false; } };
     s.lines
         .extend(segs.iter().map(|g| (g.start_ms, g.text.clone())));
     s.chunker.segments.extend(segs);

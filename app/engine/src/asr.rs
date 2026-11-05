@@ -24,16 +24,18 @@ pub enum AsrKind {
     Paraformer,
     SenseVoice,
     FunAsrNano,
+    AppleSpeech,
 }
 
 impl AsrKind {
-    pub const ALL: [AsrKind; 3] = [AsrKind::Paraformer, AsrKind::SenseVoice, AsrKind::FunAsrNano];
+    pub const ALL: [AsrKind; 4] = [AsrKind::Paraformer, AsrKind::SenseVoice, AsrKind::FunAsrNano, AsrKind::AppleSpeech];
 
     pub fn id(self) -> &'static str {
         match self {
             AsrKind::Paraformer => "paraformer",
             AsrKind::SenseVoice => "sensevoice",
             AsrKind::FunAsrNano => "funasr-nano",
+            AsrKind::AppleSpeech => "apple-speech",
         }
     }
 
@@ -43,12 +45,12 @@ impl AsrKind {
 
     /// 能指定会议语言（[asr] language）；Paraformer 只认中文
     pub fn uses_language(self) -> bool {
-        matches!(self, AsrKind::SenseVoice | AsrKind::FunAsrNano)
+        matches!(self, AsrKind::SenseVoice | AsrKind::FunAsrNano | AsrKind::AppleSpeech)
     }
 
     /// 模型自己会加标点（不用再过 CT-Transformer）。SenseVoice 按 VAD 切出的短段识别时基本不出标点，照样要过
     fn punctuates(self) -> bool {
-        matches!(self, AsrKind::FunAsrNano)
+        matches!(self, AsrKind::FunAsrNano | AsrKind::AppleSpeech)
     }
 }
 
@@ -82,11 +84,13 @@ impl ModelPaths {
             AsrKind::Paraformer => "paraformer",
             AsrKind::SenseVoice => "sensevoice",
             AsrKind::FunAsrNano => "funasr-nano",
+            AsrKind::AppleSpeech => "apple-speech",
         })
     }
     pub fn asr_files(&self, kind: AsrKind) -> Vec<PathBuf> {
         let d = self.asr_dir(kind);
         match kind {
+            AsrKind::AppleSpeech => vec![],
             AsrKind::Paraformer => vec![self.paraformer(), self.tokens()],
             AsrKind::SenseVoice => vec![d.join("model.int8.onnx"), d.join("tokens.txt")],
             AsrKind::FunAsrNano => vec![
@@ -143,7 +147,8 @@ pub struct Engine {
     pub hotwords: Vec<String>,
     /// 加载时定下的会议语言（zh | en | auto；Paraformer 不用，为空。语言变了要重新加载）
     pub language: String,
-    rec: OfflineRecognizer,
+    rec: Option<OfflineRecognizer>,
+    apple_bin: Option<PathBuf>,
     punct: Option<OfflinePunctuation>,
     spk: SpeakerEmbeddingExtractor,
     vad: VadModelConfig,
@@ -187,9 +192,11 @@ impl Engine {
         }
         let mut cfg = OfflineRecognizerConfig::default();
         cfg.model_config.num_threads = threads;
+        let rec = if kind == AsrKind::AppleSpeech { None } else {
         let [first, second, ..] = &models.asr_files(kind)[..] else { unreachable!() };
         let dir = models.asr_dir(kind);
         match kind {
+            AsrKind::AppleSpeech => unreachable!(),
             AsrKind::Paraformer => {
                 cfg.model_config.paraformer.model = path_str(first);
                 cfg.model_config.tokens = path_str(second);
@@ -217,7 +224,8 @@ impl Engine {
                 }
             }
         }
-        let rec = OfflineRecognizer::create(&cfg).ok_or(tr("识别模型加载失败", "Couldn't load the speech recognition model"))?;
+        Some(OfflineRecognizer::create(&cfg).ok_or(tr("识别模型加载失败", "Couldn't load the speech recognition model"))?)
+        };
 
         let punct = if kind.punctuates() {
             None
@@ -255,6 +263,7 @@ impl Engine {
             hotwords: if kind == AsrKind::FunAsrNano { hotwords.to_vec() } else { Vec::new() },
             language: if kind.uses_language() { language.to_string() } else { String::new() },
             rec,
+            apple_bin: None,
             punct,
             spk,
             vad,
@@ -264,10 +273,28 @@ impl Engine {
 
     /// 识别一段 16 kHz 单声道音频。`offset_ms` 是这段在整场会议里的起点。
     /// 除了 Fun-ASR-Nano，识别模型都不支持热词；热词在生成纪要时作为术语表交给大模型纠正。
-    pub fn transcribe(&self, samples: &[f32], offset_ms: u64) -> Vec<Segment> {
+    pub fn with_apple_helper(mut self, bin: &Path) -> Result<Self, String> {
+        let status = crate::apple_speech::status(bin, &self.language)?;
+        if !status.available || !status.ready { return Err("请先检查／安装系统语音模型 / Install the system speech model first".into()); }
+        self.apple_bin = Some(bin.to_owned());
+        Ok(self)
+    }
+
+    pub fn transcribe(&self, samples: &[f32], offset_ms: u64) -> Result<Vec<Segment>, String> {
         let _guard = self.lock.lock().unwrap();
+        if self.kind == AsrKind::AppleSpeech {
+            let bin = self.apple_bin.as_ref().ok_or("Apple speech helper is not configured")?;
+            let spans = crate::apple_speech::transcribe(bin, &self.language, samples)?;
+            return Ok(spans.into_iter().filter(|s| !s.text.trim().is_empty()).map(|s| {
+                let a = ((s.start * SR as f64) as usize).min(samples.len());
+                let b = ((s.end * SR as f64) as usize).min(samples.len());
+                Segment { start_ms: offset_ms + (s.start * 1000.0) as u64, end_ms: offset_ms + (s.end * 1000.0) as u64,
+                    text: s.text, embeddings: windows(b-a).filter_map(|(x,y)| self.embed(&samples[a+x..a+y])).collect() }
+            }).collect());
+        }
+        let rec = self.rec.as_ref().ok_or("Speech recognizer is not loaded")?;
         let Some(vad) = VoiceActivityDetector::create(&self.vad, 120.0) else {
-            return Vec::new();
+            return Err("Voice activity detector failed to load".into());
         };
         for chunk in samples.chunks(512) {
             vad.accept_waveform(chunk);
@@ -278,9 +305,9 @@ impl Engine {
             let audio = seg.samples();
             let start = offset_ms + seg.start() as u64 * 1000 / SR as u64;
             let end = start + audio.len() as u64 * 1000 / SR as u64;
-            let stream = self.rec.create_stream();
+            let stream = rec.create_stream();
             stream.accept_waveform(SR as i32, audio);
-            self.rec.decode(&stream);
+            rec.decode(&stream);
             let raw = stream.get_result().map(|r| r.text).unwrap_or_default();
             let raw = raw.trim();
             if !raw.is_empty() {
@@ -300,7 +327,7 @@ impl Engine {
             }
             vad.pop();
         }
-        out
+        Ok(out)
     }
 
     fn embed(&self, audio: &[f32]) -> Option<Vec<f32>> {
@@ -334,6 +361,17 @@ pub fn windows(len: usize) -> impl Iterator<Item = (usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apple_selection_survives_without_onnx_files() {
+        let dir = std::env::temp_dir().join(format!("tingo-apple-choice-{}", std::process::id()));
+        let paths = ModelPaths::new(&dir);
+        let kind = AsrKind::from_id("apple-speech").expect("Apple engine in catalog");
+        paths.set_active(kind).unwrap();
+        assert_eq!(paths.active(), kind);
+        assert!(paths.asr_files(kind).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn windows_cover_segment() {

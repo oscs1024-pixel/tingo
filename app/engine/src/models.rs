@@ -37,8 +37,10 @@ pub struct ModelInfo {
     pub size: u64,
 }
 
-pub fn catalog() -> [ModelInfo; 3] {
+pub fn catalog() -> [ModelInfo; 4] {
     [
+        ModelInfo { kind: AsrKind::AppleSpeech, name: "Apple Speech",
+            desc: tr("macOS 26+ 系统本地识别；请明确选择中文或英文。系统管理语言模型，仍需基础声纹模型", "On-device system speech on macOS 26+. Select Chinese or English. Language assets are system-managed; shared speaker models are still needed"), size: 0 },
         ModelInfo {
             kind: AsrKind::Paraformer,
             name: "Paraformer-large",
@@ -72,7 +74,7 @@ pub fn catalog() -> [ModelInfo; 3] {
 /// 可选模型的发布包（sherpa-onnx 打包好的，解压即用）
 fn archive(kind: AsrKind) -> Option<&'static str> {
     match kind {
-        AsrKind::Paraformer => None,
+        AsrKind::Paraformer | AsrKind::AppleSpeech => None,
         AsrKind::SenseVoice => Some("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"),
         AsrKind::FunAsrNano => Some("sherpa-onnx-funasr-nano-int8-2025-12-30"),
     }
@@ -111,6 +113,13 @@ pub fn total_size() -> u64 {
 
 /// 下载一个识别模型（连同还没下载的基础模型）。`progress(已下载字节, 总字节)`。
 pub fn ensure_model(paths: &ModelPaths, kind: AsrKind, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
+    if kind == AsrKind::AppleSpeech {
+        let list = base_downloads();
+        fetch_all(paths, &list, &mut progress)?;
+        if !paths.punct().is_file() { extract_punct(&paths.dir.join("download/punct.tar.bz2"), paths.punct().parent().unwrap())?; }
+        cleanup(paths, &list);
+        return if paths.base_ready() { Ok(()) } else { Err("Shared speech models are incomplete".into()) };
+    }
     let Some(name) = archive(kind) else { return ensure(paths, progress) };
     if paths.base_ready() && paths.asr_ready(kind) {
         return Ok(());
@@ -141,7 +150,7 @@ pub fn ensure_model(paths: &ModelPaths, kind: AsrKind, mut progress: impl FnMut(
 
 /// 删除一个可选的识别模型（默认的 Paraformer 不删）
 pub fn remove_model(paths: &ModelPaths, kind: AsrKind) -> Result<(), String> {
-    if kind == AsrKind::Paraformer {
+    if matches!(kind, AsrKind::Paraformer | AsrKind::AppleSpeech) {
         return Err(tr("默认模型不能删除", "The default model can't be deleted").into());
     }
     fs::remove_dir_all(paths.asr_dir(kind)).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e.to_string()) })

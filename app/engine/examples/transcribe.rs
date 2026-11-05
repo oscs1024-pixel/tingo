@@ -12,10 +12,13 @@ fn main() {
     let engine = asr::Engine::load(&asr::ModelPaths::new(&args[1]), kind.unwrap_or(asr::AsrKind::Paraformer), &hot, "zh", 4)
         .expect("加载模型");
     eprintln!("加载 {:.2}s", t.elapsed().as_secs_f64());
+    let engine = if engine.kind == asr::AsrKind::AppleSpeech {
+        engine.with_apple_helper(Path::new(&std::env::var("TINGO_RECORDER_BIN").expect("Set TINGO_RECORDER_BIN for Apple speech"))).expect("Apple speech unavailable")
+    } else { engine };
     let wav = Path::new(&args[2]);
     let samples = audio::read_wav16k(wav).expect("读 wav");
     let t = Instant::now();
-    let tr = chunked::transcribe_samples(&engine, &samples, wav, |_| {});
+    let tr = chunked::transcribe_samples(&engine, &samples, wav, |_| {}).expect("transcription failed");
     let secs = samples.len() as f64 / asr::SR as f64;
     let el = t.elapsed().as_secs_f64();
     eprintln!(
