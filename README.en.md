@@ -22,11 +22,20 @@ Tingo records Tencent Meeting / Feishu / Zoom audio plus your mic, transcribes i
 - **Built for Chinese.** Uses Alibaba DAMO's FunASR models, which handle Chinese punctuation, numbers and names far better than English-first stacks. Relative dates ("next Wednesday", "end of month") are resolved against the meeting date.
 - **Every claim has a source.** Each line of the minutes carries a timestamp that jumps to that second of the recording. The fishbone diagram counts how much original speech backs each branch and flags the ones with **no evidence** — so hand-waving is visible at a glance.
 - **English and Chinese.** The app, the minutes and every export work in both languages. English meetings are recognized with SenseVoice, and a Chinese meeting can get English minutes (and vice versa).
-- **12 MB desktop app.** Tauri + Rust, no Python or ffmpeg needed. A live recording is fully transcribed seconds after you hit stop; a 76-minute file imports in about 3.5 minutes on an M1 Pro.
+- **About 13 MB to download.** Tauri + Rust, no Python or ffmpeg needed. A live recording is fully transcribed seconds after you hit stop; a 76-minute file imports in about 3.5 minutes on an M1 Pro.
 
 Looking for a **free, open-source, local alternative to Otter.ai, Granola, Fireflies.ai or Fathom** — an AI meeting note taker that never uploads your audio? That's what Tingo is for.
 
 > The meetings, names and numbers in the screenshots are fictional demo data.
+
+## v0.5.0: signed and notarized
+
+- Official DMGs are signed with Apple Developer ID, notarized by Apple, and include a stapled ticket. Drag Tingo into Applications; no manual signing or quarantine-removal commands.
+- Previous minutes are retained on regeneration and edits. Browse, delete, export, copy or share a selected version.
+- Cleaner exports preserve fishbone content without evidence details; PDF and Word omit the names & terms appendix.
+- AI speaker-name suggestions show elapsed time and preserve names you have already entered.
+
+[Download v0.5.0](https://github.com/tancheng33/tingo/releases/tag/v0.5.0). Upgrading preserves meetings, history and settings.
 
 ## Highlights
 
@@ -42,11 +51,13 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 **Less busywork.** Let AI guess who's who from how people address each other (each guess comes with evidence). Recording stops by itself when the meeting app quits or after 10 minutes of silence, and the silent tail is trimmed.
 
-**Export & share.** A4 PDF, editable Word, SRT subtitles (fishbone quotes expanded on paper), Obsidian notes with properties and an embedded Excalidraw drawing (optionally automatic), Feishu / DingTalk / WeCom group bots, or plain Markdown.
+**Export & share.** A4 PDF, editable Word, SRT subtitles, Obsidian notes with properties and an embedded Excalidraw drawing (optionally automatic), Feishu / DingTalk / WeCom group bots, or plain Markdown. Fishbone exports omit evidence details, and PDF/Word omit the names & terms appendix. In-app evidence and terminology remain available.
 
-<p align="center"><img src="docs/screenshots/pdf.png" width="820" alt="PDF export"></p>
+<p align="center"><img src="docs/screenshots/pdf.png" width="820" alt="PDF export layout preview; current exports omit evidence details and terms"></p>
 
-**Stay organized.** Tag meetings by project or type and filter the list by tag; archive finished ones (they stay searchable). Select several meetings to tag, archive or delete them at once, and rename any meeting. Deleting always moves things to the Trash, so nothing is lost by accident. Settings → Storage shows what takes space and can drop old recordings (optionally archived ones only) while keeping transcripts and minutes.
+**Minutes history.** Regeneration and manual edits preserve the previous minutes; failed generation leaves the current version intact. Choose a version in the history browser to preview, export, copy or share it. Historical PDF, Word and Obsidian exports use separate filenames; SRT always uses the meeting transcript. Deleting a historical version is permanent and leaves current minutes unchanged. Previously overwritten content cannot be recovered.
+
+**Stay organized.** Tag meetings by project or type and filter the list by tag; archive finished ones (they stay searchable). Select several meetings to tag, archive or delete them at once, and rename any meeting. Deleting meetings and recordings moves them to the Trash, so nothing is lost by accident. Settings → Storage shows what takes space and can drop old recordings (optionally archived ones only) while keeping transcripts and minutes.
 
 **Swappable ASR models.** Paraformer-large (default, fast and accurate for Chinese), SenseVoice (mixed Chinese / English / Japanese / Korean / Cantonese) or Fun-ASR-Nano (most accurate, applies your hotwords during recognition) — downloaded and switched in Settings, all running locally.
 
@@ -54,11 +65,9 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 **Desktop app:** download `Tingo_x.y.z_aarch64.dmg` from [Releases](https://github.com/tancheng33/tingo/releases/latest) (Apple Silicon, macOS 13+; recording system audio needs macOS 15+). On first launch it downloads ~330 MB of models, then works offline.
 
-The app is not notarized yet. On first launch, right-click Tingo in Applications → **Open**, or run:
+**Official releases from v0.5.0 are Developer ID-signed and Apple-notarized.** Open the DMG and drag Tingo into Applications. No manual signing, right-click workaround or `xattr` command is needed. Ad-hoc builds made from source are not notarized release packages.
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Tingo.app
-```
+Quit the old app before replacing it; meetings, history and settings are preserved. Microphone and screen/system-audio permissions are still required. If recording permissions stop working after upgrading from an older ad-hoc build, grant them again in System Settings → Privacy & Security.
 
 **Command line** (Python + FunASR; needs Python 3.11+ and ffmpeg):
 
@@ -95,6 +104,8 @@ uv sync && uv run pytest -m "not slow"     # Python backend / CLI
 cd app && pnpm install && pnpm tauri dev   # desktop app (Tauri + Rust)
 cd engine && cargo test                    # Rust core
 ```
+
+Official release signing and notarization are documented in [the macOS release guide](app/scripts/README.md). Regular source builds do not need a distribution certificate.
 
 Issues and PRs are welcome. Licensed under [MIT](LICENSE).
 
