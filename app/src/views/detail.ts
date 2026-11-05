@@ -14,6 +14,59 @@ import { isBusy, jobOf, minutesProgress, progressOf, S, sectionLabels } from "..
 import { speakerName, t } from "../i18n";
 import { dismissJob } from "../tasks";
 
+type SpeakerSuggestion = { index: number; name: string; evidence?: string };
+type SpeakerGuess = { started: number; elapsed?: number; suggestions?: SpeakerSuggestion[]; error?: string };
+const speakerGuesses = new Map<string, SpeakerGuess>();
+
+function isCurrentMeeting(id: string): boolean {
+  return S.detail?.id === id && decodeURIComponent(location.hash.slice(1)).split("?")[0] === `/m/${id}`;
+}
+
+function updateSpeakerGuess(id: string): void {
+  if (!isCurrentMeeting(id)) return;
+  const button = $maybe<HTMLButtonElement>("#aGuess");
+  const status = $maybe("#speakerGuessStatus");
+  if (!button || !status) return;
+  const guess = speakerGuesses.get(id);
+  const pending = !!guess && guess.elapsed === undefined;
+  button.disabled = pending;
+  button.innerHTML = ICON.spark + (pending ? t("正在猜名字…", "Guessing names…") : guess?.suggestions?.length ? t("查看 AI 猜名结果", "Review AI names") : t("让 AI 根据对话猜名字", "Let AI guess names from the conversation"));
+  status.hidden = !guess;
+  status.classList.toggle("bad", !!guess?.error);
+  status.classList.toggle("pending", pending);
+  status.textContent = !guess ? "" : pending
+    ? t(`正在分析对话 · 已用 ${fmt(Date.now() - guess.started)} · 耗时取决于模型`, `Analyzing conversation · Elapsed ${fmt(Date.now() - guess.started)} · Time depends on the model`)
+    : guess.error ? guess.error
+    : t(`已完成 · 用时 ${fmt(guess.elapsed!)} · ${guess.suggestions?.length ? "请确认猜名结果" : "未找到名字线索"}`, `Finished in ${fmt(guess.elapsed!)} · ${guess.suggestions?.length ? "Review the suggested names" : "No name clues found"}`);
+}
+
+async function guessSpeakers(): Promise<void> {
+  const d = S.detail;
+  if (!d) return;
+  const existing = speakerGuesses.get(d.id);
+  if (existing && existing.elapsed === undefined) return;
+  if (existing?.suggestions?.length) {
+    renameSpeakers(existing.suggestions);
+    return;
+  }
+  const guess: SpeakerGuess = { started: Date.now() };
+  speakerGuesses.set(d.id, guess);
+  updateSpeakerGuess(d.id);
+  const timer = window.setInterval(() => updateSpeakerGuess(d.id), 1000);
+  try {
+    const result = await api<{ suggestions: SpeakerSuggestion[] }>(meetingPath(d.id, "/speakers/guess"), { method: "POST" });
+    guess.suggestions = result.suggestions;
+    // 不打断其他会议或正在编辑的弹窗；结果保留在这场会议的按钮里。
+    if (isCurrentMeeting(d.id) && $("#modal").hidden && result.suggestions.length) renameSpeakers(result.suggestions);
+  } catch (e) {
+    guess.error = errorMessage(e);
+  } finally {
+    window.clearInterval(timer);
+    guess.elapsed = Date.now() - guess.started;
+    updateSpeakerGuess(d.id);
+  }
+}
+
 let audioEl: HTMLAudioElement | null = null;
 let detailTab: "minutes" | "transcript" = "minutes";
 
@@ -82,7 +135,7 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
           <span class="speakers">${d.speaker_list
             .map((s) => `<span class="chip"><span class="dot" style="background:${color(s.index)}"></span>${esc(speakerName(s.name))}</span>`)
             .join("")}
-          <button class="btn" id="aRename">${ICON.people}${t("改名", "Rename")}</button></span>`
+          <span class="speaker-actions"><button class="btn" id="aRename">${ICON.people}${t("改名", "Rename")}</button><button class="btn" id="aGuess">${ICON.spark}${t("让 AI 根据对话猜名字", "Let AI guess names from the conversation")}</button></span><span id="speakerGuessStatus" class="speaker-guess-status" hidden></span></span>`
             : ""
         }
       </div>
@@ -92,6 +145,7 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
         <div class="tabs-row">
           <div class="seg"><button data-tab="minutes">${t("纪要", "Minutes")}</button><button data-tab="transcript">${t("转写", "Transcript")}</button></div>
           <span class="grow"></span>
+          <button class="btn ghost" id="aHistory">${ICON.file}${t("历史版本", "Version history")}</button>
           <button class="btn ghost" id="aEdit" ${detailTab === "minutes" && d.minutes ? "" : "hidden"}>${ICON.edit}${t("编辑", "Edit")}</button>
         </div>
         <div class="card" id="pane"></div>`
@@ -139,8 +193,11 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
   });
   bindExportMenu(d);
   on("#aRegen", regenerate);
-  on("#aRename", renameSpeakers);
+  on("#aRename", () => renameSpeakers());
+  on("#aGuess", guessSpeakers);
+  updateSpeakerGuess(id);
   on("#aEdit", editMinutes);
+  on("#aHistory", showMinutesHistory);
   on("#aFolder", () => api(meetingPath(id, "/reveal"), { method: "POST" }));
   on("#aProcess", async () => {
     try {
@@ -354,6 +411,88 @@ export function updateDetailJob(job: Job, prev: Job): void {
   }
 }
 
+async function showMinutesHistory(): Promise<void> {
+  const d = S.detail;
+  if (!d) return;
+  openModal(`<h3>${t("纪要历史版本", "Minutes history")}</h3><p class="hint" id="historyLoading">${t("正在读取…", "Loading…")}</p><div class="modal-foot"><button class="btn" data-close>${t("关闭", "Close")}</button></div>`);
+  const loading = $("#historyLoading");
+  try {
+    const result = await api<{ versions: { id: string; saved_at: number; text: string }[] }>(meetingPath(d.id, "/minutes/history"));
+    if (!loading.isConnected || $("#modal").hidden || !isCurrentMeeting(d.id)) return;
+    let versions = result.versions;
+    openModal(`<h3>${t("纪要历史版本", "Minutes history")}</h3>
+      <p class="hint">${t("自动保留每次修改前的纪要，可随时回看。", "Previous minutes are saved automatically for you to revisit.")}</p>
+      <div class="history-layout">
+        <nav class="history-sidebar" aria-label="${t("历史版本", "Version history")}"><div class="history-list-label">${t("已保存的版本", "Saved versions")}</div><div id="historyList"></div></nav>
+        <section class="history-content"><div class="history-preview-head"><span id="historyDate"></span><span class="history-readonly">${t("只读预览", "Read-only")}</span></div><div id="historyPreview" class="md history-preview"></div></section>
+      </div>
+      <div class="modal-foot"><span class="test-msg" id="historyMessage" role="status"></span><button class="btn" id="historyDelete">${t("删除此版本", "Delete this version")}</button><button class="btn" data-close>${t("关闭", "Close")}</button></div>`);
+    const list = $("#historyList");
+    let selected: string | undefined = versions[0]?.id;
+    let deleting = false;
+    const preview = $("#historyPreview");
+    const remove = $<HTMLButtonElement>("#historyDelete");
+    const message = $("#historyMessage");
+    let confirming = false;
+    const draw = () => {
+      confirming = false;
+      remove.textContent = t("删除此版本", "Delete this version");
+      remove.hidden = !versions.length;
+      const version = versions.find(v => v.id === selected);
+      $("#historyDate").textContent = version ? new Date(version.saved_at).toLocaleString() : t("暂无历史", "No history");
+      $$<HTMLButtonElement>(".history-version", list).forEach(button => {
+        const active = button.dataset.version === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-current", String(active));
+      });
+      preview.innerHTML = version ? renderMarkdown(version.text) : `<p class="hint">${t("暂无历史版本，下次重新生成或编辑保存后会自动保留。", "No history yet. Previous minutes will be kept after the next regeneration or edit.")}</p>`;
+      preview.scrollTop = 0;
+      message.textContent = "";
+    };
+    const options = () => {
+      if (!versions.some(v => v.id === selected)) selected = versions[0]?.id;
+      list.innerHTML = versions.map((v, i) => {
+        const date = new Date(v.saved_at);
+        return `<button class="history-version" data-version="${esc(v.id)}"><span class="history-version-title">${esc(date.toLocaleDateString())}${i === 0 ? `<span class="history-latest">${t("最近", "Latest")}</span>` : ""}</span><span class="history-version-time">${esc(date.toLocaleTimeString())}</span></button>`;
+      }).join("") || `<p class="hint history-list-empty">${t("还没有旧版本", "No saved versions")}</p>`;
+      $$<HTMLButtonElement>(".history-version", list).forEach(button => button.onclick = () => {
+        if (deleting) return;
+        selected = button.dataset.version;
+        draw();
+      });
+      draw();
+    };
+    remove.onclick = async () => {
+      if (!confirming) {
+        confirming = true;
+        remove.textContent = t("确认删除", "Confirm deletion");
+        message.textContent = t("删除后无法恢复，再点一次确认。", "This cannot be undone. Click again to confirm.");
+        return;
+      }
+      const id = selected;
+      if (!id) return;
+      remove.disabled = true;
+      deleting = true;
+      $$<HTMLButtonElement>(".history-version", list).forEach(button => button.disabled = true);
+      try {
+        await api(meetingPath(d.id, `/minutes/history/${encodeURIComponent(id)}`), { method: "DELETE" });
+        versions = versions.filter(v => v.id !== id);
+        options();
+        message.textContent = t("已删除历史版本", "Version deleted");
+      } catch (e) {
+        message.textContent = errorMessage(e);
+      } finally {
+        remove.disabled = false;
+        deleting = false;
+        $$<HTMLButtonElement>(".history-version", list).forEach(button => button.disabled = false);
+      }
+    };
+    options();
+  } catch (e) {
+    if (loading.isConnected) loading.textContent = errorMessage(e);
+  }
+}
+
 async function regenerate(): Promise<void> {
   if (!S.detail) return;
   try {
@@ -538,7 +677,7 @@ function editMinutes(): void {
   };
 }
 
-function renameSpeakers(): void {
+function renameSpeakers(suggestions: SpeakerSuggestion[] = []): void {
   const d = S.detail;
   if (!d) return;
   openModal(`
@@ -550,12 +689,13 @@ function renameSpeakers(): void {
           `<div class="sp-row"><span class="av" style="background:${color(s.index)}">${esc(initial(s.name))}</span><input class="input" data-i="${s.index}" value="${s.custom ? esc(s.name) : ""}" placeholder="${esc(t(`说话人${s.index + 1}`, `Speaker ${s.index + 1}`))}"></div>`,
       )
       .join("")}
-    <div class="sp-guess"><button class="btn" id="spGuess">${ICON.spark}${t("让 AI 根据对话猜名字", "Let AI guess names from the conversation")}</button><span class="test-msg" id="spGuessMsg"></span></div>
+    ${suggestions.length ? `<p class="hint">${t("AI 猜测仅供参考，已命名的说话人保持原名。请核对后保存。", "AI suggestions may be inaccurate. Existing names are preserved. Review before saving.")}</p>` : ""}
     <div class="modal-foot"><button class="btn" data-close>${t("取消", "Cancel")}</button><button class="btn" id="spSave">${t("仅保存", "Save")}</button>${d.minutes ? `<button class="btn primary" id="spRegen">${t("保存并重新生成纪要", "Save & regenerate minutes")}</button>` : ""}</div>`);
   const save = async (regen: boolean) => {
     const names = $$<HTMLInputElement>("#modalBody input").map((x) => x.value.trim());
     try {
       S.detail = await api<MeetingDetail>(meetingPath(d.id, "/speakers"), { method: "PUT", json: { names } });
+      if (speakerGuesses.get(d.id)?.elapsed !== undefined) speakerGuesses.delete(d.id);
       closeModal();
       await renderDetail(d.id, true);
       refreshMeetings();
@@ -566,42 +706,12 @@ function renameSpeakers(): void {
     }
   };
   $("#spSave").onclick = () => save(false);
-  // 大模型按自我介绍、被点名等线索猜名字，只填还空着的框；依据显示在框下面
-  $("#spGuess").onclick = async () => {
-    const btn = $<HTMLButtonElement>("#spGuess");
-    const msg = $("#spGuessMsg");
-    btn.disabled = true;
-    msg.className = "test-msg";
-    msg.textContent = t("大模型在读转写…", "Reading the transcript…");
-    try {
-      const r = await api<{ suggestions: { index: number; name: string; evidence?: string }[] }>(meetingPath(d.id, "/speakers/guess"), {
-        method: "POST",
-      });
-      let filled = 0;
-      for (const sg of r.suggestions) {
-        const input = $maybe<HTMLInputElement>(`#modalBody input[data-i="${sg.index}"]`);
-        if (!input) continue;
-        if (!input.value.trim()) {
-          input.value = sg.name;
-          filled++;
-        }
-        if (sg.evidence) {
-          const row = input.closest(".sp-row");
-          row?.querySelector(".sp-ev")?.remove();
-          row?.insertAdjacentHTML("beforeend", `<small class="sp-ev">${esc(sg.evidence)}</small>`);
-        }
-      }
-      msg.className = "test-msg " + (r.suggestions.length ? "ok" : "");
-      msg.textContent = r.suggestions.length
-        ? t(`猜出 ${r.suggestions.length} 位，填了 ${filled} 个空着的，确认后保存`, `Guessed ${r.suggestions.length}, filled ${filled} empty — check and save`)
-        : t("对话里没有能看出名字的线索", "No clues to anyone's name in the conversation");
-    } catch (e) {
-      msg.className = "test-msg bad";
-      msg.textContent = errorMessage(e);
-    } finally {
-      btn.disabled = false;
-    }
-  };
+  for (const sg of suggestions) {
+    const input = $maybe<HTMLInputElement>(`#modalBody input[data-i="${sg.index}"]`);
+    if (!input || input.value.trim()) continue;
+    input.value = sg.name;
+    if (sg.evidence) input.closest(".sp-row")?.insertAdjacentHTML("beforeend", `<small class="sp-ev">${esc(sg.evidence)}</small>`);
+  }
   const regen = $maybe("#spRegen");
   if (regen) regen.onclick = () => save(true);
 }

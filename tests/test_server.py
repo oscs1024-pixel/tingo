@@ -89,6 +89,9 @@ def test_summarize_job_streams_and_saves(client, root, monkeypatch):
     assert job["state"] == "done", job
     text = (root / "2026-11-02_1430_周会" / "纪要.md").read_text()
     assert text.startswith("# 新标题\n\n- 日期：2026-11-02（星期一）")
+    versions = client.get("/api/meetings/2026-11-02_1430_周会/minutes/history").json()["versions"]
+    assert len(versions) == 1
+    assert "定了上线时间" in versions[0]["text"]
 
 
 MID = "2026-11-02_1430_周会"
@@ -433,7 +436,8 @@ def test_excalidraw_export(client, root, opened):
 
     drawing = json.loads((root / mid / "鱼骨图.excalidraw").read_text())
     texts = [e["text"] for e in drawing["elements"] if e["type"] == "text"]
-    assert "为什么延期？" in texts and "依据很少 · 引用 1 段 · 6 字" in texts and "无原文依据" in texts
+    assert "为什么延期？" in texts and "上线定了" in texts
+    assert "依据很少 · 引用 1 段 · 6 字" not in texts and "无原文依据" not in texts
 
 
 def test_obsidian_vaults_endpoint(client, tmp_path, monkeypatch):
@@ -584,8 +588,9 @@ def test_excalidraw_export_english_minutes(client, root, opened):
     assert [p.rsplit("/", 1)[1] for p in d["paths"]] == ["fishbone.excalidraw", "fishbone2.excalidraw"]
     drawing = json.loads((root / MID / "fishbone.excalidraw").read_text())
     texts = [e["text"] for e in drawing["elements"] if e["type"] == "text"]
-    assert "Thin evidence · 1 quote(s) · 6 chars" in texts and "No evidence" in texts
-    assert "00:00 Speaker 1: 下周五上线。" in texts
+    assert "上线定了" in texts
+    assert "Thin evidence · 1 quote(s) · 6 chars" not in texts and "No evidence" not in texts
+    assert "00:00 Speaker 1: 下周五上线。" not in texts
 
 
 def test_meeting_card_reads_english_summary(client, root):
@@ -993,3 +998,28 @@ def test_auto_stop_does_not_touch_next_recording(client, fake_recorder, fast_wat
     time.sleep(0.1)
     jobs = {j["id"]: j for j in client.get("/api/jobs").json()["jobs"]}
     assert jobs[nxt["id"]]["state"] == "recording" and jobs[first["id"]]["notice"] == ""
+
+
+def test_minutes_history_edit_and_delete(client):
+    base = f"/api/meetings/{MID}/minutes"
+    assert client.get(base + "/history").json() == {"versions": []}
+    assert client.put(base, json={"text": "新版"}).status_code == 200
+    assert client.put(base, json={"text": "新版"}).status_code == 200
+    versions = client.get(base + "/history").json()["versions"]
+    assert len(versions) == 1
+    assert "定了上线时间" in versions[0]["text"]
+    assert client.delete(base + "/history/not-valid").status_code == 400
+    assert client.delete(base + "/history/" + versions[0]["id"]).status_code == 200
+    assert client.get(base + "/history").json() == {"versions": []}
+    assert client.get(f"/api/meetings/{MID}").json()["minutes"] == "新版\n"
+
+
+def test_minutes_history_archive_failure_preserves_current(tmp_path):
+    from tingo import minutes_history
+
+    minutes_history.save(tmp_path, "原文")
+    (tmp_path / "minutes-history").write_text("blocked")
+    with pytest.raises(OSError):
+        minutes_history.save(tmp_path, "新文")
+    assert (tmp_path / "纪要.md").read_text() == "原文"
+    assert not (tmp_path / ".minutes-new.tmp").exists()

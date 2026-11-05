@@ -10,6 +10,7 @@ pub mod config;
 pub mod fishbone;
 pub mod i18n;
 pub mod meetings;
+pub mod minutes_history;
 pub mod models;
 pub mod obsidian;
 pub mod push;

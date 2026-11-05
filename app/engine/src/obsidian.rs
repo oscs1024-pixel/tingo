@@ -3,7 +3,7 @@
 //! 笔记里程序加的文字（标签、转写一节、画板文件名）跟纪要的语言走；报错跟界面语言走。
 
 use crate::config::ObsidianConfig;
-use crate::fishbone::{self, fmt_ms, Level};
+use crate::fishbone::{self, fmt_ms};
 use crate::i18n::{doc_lang, tr, Lang};
 use crate::meetings::{self, MINUTES, TRANSCRIPT_JSON};
 use crate::transcript::Transcript;
@@ -111,13 +111,9 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
         drawings.push(path);
         body.push_str(&format!("![[{draw_name}.excalidraw]]\n\n**{}**\n", spec.problem));
         let colon = lang.pick("：", ": ");
-        for (b, g) in spec.branches.iter().zip(&grounds) {
+        for b in &spec.branches {
             let detail = if b.detail.is_empty() { String::new() } else { format!("{colon}{}", b.detail) };
-            let mark = if g.level == Level::None { " ⚠️" } else { "" };
-            body.push_str(&format!("- **{}**{detail} · {}{mark}\n", b.title, g.label(lang)));
-            for q in &g.quotes {
-                body.push_str(&format!("    - `{}` {}{colon}{}\n", fmt_ms(q.ms), q.speaker, q.text));
-            }
+            body.push_str(&format!("- **{}**{detail}\n", b.title));
         }
     }
     body.push_str(&minutes[last..]);
@@ -189,8 +185,8 @@ mod tests {
         assert!(note.starts_with("---\ntitle: \"发布评审会\"\ndate: 2026-11-02\n"));
         assert!(note.contains("speakers: [\"李经理\", \"小张\"]"));
         assert!(note.contains("![[2026-11-02 发布评审 鱼骨图.excalidraw]]"));
-        assert!(note.contains("- **猜的** · 无原文依据 ⚠️"));
-        assert!(note.contains("    - `00:09` 小张：支付模块"));
+        assert!(note.contains("- **猜的**"));
+        assert!(!note.contains("    - `00:09` 小张：支付模块"));
         assert!(note.contains("> [!quote]- 转写全文（00:52，2 人）"));
         assert!(!note.contains("```fishbone") && !note.contains("```terms")); // 术语表不进笔记
         assert!(out.drawings[0].ends_with("2026-11-02 发布评审 鱼骨图.excalidraw.md"));
@@ -224,8 +220,8 @@ mod tests {
         assert!(note.contains("tags: [meeting-notes]"));
         assert!(note.contains("speakers: [\"Lin\", \"Speaker 2\"]"));
         assert!(note.contains("![[2026-11-02 Release_review fishbone.excalidraw]]"));
-        assert!(note.contains("- **Payment bugs**: two left · 1 quote(s) · 33 chars\n    - `00:09` Speaker 2: Payments"));
-        assert!(note.contains("- **Guess** · No evidence ⚠️"));
+        assert!(note.contains("- **Payment bugs**: two left\n"));
+        assert!(note.contains("- **Guess**"));
         assert!(note.contains("\n## Transcript\n\n> [!quote]- Full transcript (00:52, 2 speakers)\n"));
         assert!(note.contains("> **Speaker 2** `00:09`"));
         assert!(out.drawings[0].ends_with("2026-11-02 Release_review fishbone.excalidraw.md"));

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import fishbone, meetings, terms
 from .config import ObsidianConfig
-from .fishbone import NONE, fmt_ms
+from .fishbone import fmt_ms
 from .i18n import doc_is_en
 from .i18n import tr as _t
 from .meetings import MINUTES, TRANSCRIPT_JSON
@@ -123,12 +123,9 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
             raise ExportError(str(e)) from e
         drawings.append(path)
         body.append(f"![[{draw_name}.excalidraw]]\n\n**{spec.problem}**\n")
-        for b, g in zip(spec.branches, grounds, strict=True):
+        for b in spec.branches:
             detail = f"{colon}{b.detail}" if b.detail else ""
-            mark = " ⚠️" if g.level == NONE else ""
-            body.append(f"- **{b.title}**{detail} · {g.label(en)}{mark}\n")
-            for q in g.quotes:
-                body.append(f"    - `{fmt_ms(q.ms)}` {q.speaker}{colon}{q.text}\n")
+            body.append(f"- **{b.title}**{detail}\n")
     body.append(minutes[last:])
 
     title = meetings.minutes_title(minutes) or topic

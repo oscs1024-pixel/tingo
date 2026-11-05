@@ -130,9 +130,7 @@ export function fishboneToText(md: string): string {
     return [
       `**${fb.problem}**`,
       ...fb.branches.map((b) => {
-        const refs = (b.refs ?? []).join("、");
-        if (en) return `- ${b.title}${b.detail ? `: ${b.detail}` : ""}${refs ? ` (${refs.replace(/、/g, ", ")})` : " (no evidence)"}`;
-        return `- ${b.title}${b.detail ? `：${b.detail}` : ""}${refs ? `（${refs}）` : "（无原文依据）"}`;
+        return `- ${b.title}${b.detail ? `${en ? ": " : "："}${b.detail}` : ""}`;
       }),
     ].join("\n");
   });

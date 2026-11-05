@@ -13,7 +13,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from . import __version__, config
+from . import __version__, config, minutes_history
 from .log import get as get_logger
 from .meetings import (
     AUDIO,
@@ -139,7 +139,7 @@ def _summarize_and_save(tr, out_dir: Path, meeting_date: date, push: bool) -> No
         _fail(f"生成纪要失败：{e}\n转写已保存，配置好后可运行 `tingo summarize {out_dir}` 重试")
     console.print()
     path = out_dir / MINUTES
-    path.write_text(minutes, encoding="utf-8")
+    minutes_history.save(out_dir, minutes)
     console.print(f"[green]✓[/green] 纪要 → {path}")
     if push:
         _push(minutes, cfg)

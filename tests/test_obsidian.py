@@ -43,9 +43,9 @@ def test_exports_note_with_drawing_and_transcript(tmp_path):
         'speakers: ["李经理", "小张"]\ntags: [会议纪要]\ntingo: "2026-11-02_1030_发布评审"\n---\n# 发布评审会' in note
     )
     assert "![[2026-11-02 发布评审 鱼骨图.excalidraw]]\n\n**为什么延期？**\n" in note
-    assert "- **支付有问题** · 引用 1 段 · 21 字\n" in note
-    assert "- **猜的** · 无原文依据 ⚠️" in note
-    assert "    - `00:09` 小张：支付模块" in note
+    assert "- **支付有问题**\n" in note
+    assert "- **猜的**" in note
+    assert "    - `00:09` 小张：支付模块" not in note
     assert "> [!quote]- 转写全文（00:52，2 人）\n>\n> **李经理** `00:00`\n> 今天讨论发布。\n" in note
     assert "```fishbone" not in note
     assert out.drawings == [vault / "会议纪要" / "2026-11-02 发布评审 鱼骨图.excalidraw.md"]
@@ -113,12 +113,12 @@ def test_english_minutes_note_labels(tmp_path):
     note = out.note.read_text(encoding="utf-8")
     assert 'speakers: ["Lin", "Speaker 2"]\ntags: [meeting-notes]\n' in note
     assert "![[2026-11-02 发布评审 fishbone.excalidraw]]\n\n**Why late?**\n" in note
-    assert "- **Payments**: two bugs · 1 quote(s) · 21 chars\n    - `00:09` Speaker 2: 支付模块" in note
-    assert "- **Guess** · No evidence ⚠️" in note
+    assert "- **Payments**: two bugs\n" in note
+    assert "- **Guess**" in note
     assert "\n## Transcript\n\n> [!quote]- Full transcript (00:52, 2 speakers)\n>\n> **Lin** `00:00`" in note
     assert "> **Speaker 2** `00:09`" in note and "说话人" not in note
     assert out.drawings == [vault / "会议纪要" / "2026-11-02 发布评审 fishbone.excalidraw.md"]
-    assert "No evidence ^jy" in out.drawings[0].read_text(encoding="utf-8")
+    assert "No evidence ^jy" not in out.drawings[0].read_text(encoding="utf-8")
 
 
 def test_export_errors_follow_ui_language(tmp_path):

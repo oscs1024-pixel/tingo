@@ -473,7 +473,7 @@ impl AppState {
                 on_think: &mut |n| self.update(id, |j| j.thinking = n as u64),
             },
         )?;
-        std::fs::write(dir.join(MINUTES), &text).map_err(|e| e.to_string())?;
+        crate::minutes_history::save(dir, &text).map_err(|e| e.to_string())?;
         self.update(id, |j| j.minutes = text);
         if cfg.obsidian.auto && !cfg.obsidian.vault.trim().is_empty() {
             // 自动存进 Obsidian；失败不影响纪要本身，只提示一下
@@ -1014,8 +1014,17 @@ async fn put_minutes(
     Json(r): Json<MinutesReq>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    std::fs::write(dir.join(MINUTES), format!("{}\n", r.text.trim_end()))
+    crate::minutes_history::save(&dir, &format!("{}\n", r.text.trim_end()))
         .map_err(|e| bad(e.to_string()))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn get_minutes_history(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let versions = crate::minutes_history::list(&s.folder(&id)?).map_err(|e| bad(e.to_string()))?;
+    Ok(Json(json!({"versions": versions})))
+}
+async fn delete_minutes_history(State(s): State<Shared>, UrlPath((id, version)): UrlPath<(String, String)>) -> ApiResult<Json<Value>> {
+    crate::minutes_history::delete(&s.folder(&id)?, &version).map_err(|e| bad(e.to_string()))?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -1943,6 +1952,8 @@ pub fn router(state: Shared) -> Router {
         .route("/api/storage/cleanup", post(post_cleanup))
         .route("/api/meetings/{id}/speakers", put(put_speakers))
         .route("/api/meetings/{id}/minutes", put(put_minutes))
+        .route("/api/meetings/{id}/minutes/history", get(get_minutes_history))
+        .route("/api/meetings/{id}/minutes/history/{version}", delete(delete_minutes_history))
         .route("/api/meetings/{id}/summarize", post(post_summarize))
         .route("/api/meetings/{id}/process", post(post_process))
         .route("/api/meetings/{id}/push", post(post_push))

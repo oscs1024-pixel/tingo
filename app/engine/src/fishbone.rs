@@ -182,14 +182,6 @@ fn wrap(s: &str, size: f64, max: f64) -> String {
     out
 }
 
-fn clip(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.into()
-    } else {
-        format!("{}…", s.chars().take(n).collect::<String>())
-    }
-}
-
 struct Canvas {
     elements: Vec<Value>,
     seed: u64,
@@ -255,8 +247,8 @@ impl Canvas {
 }
 
 /// 画一张经典鱼骨图：主骨水平，问题在鱼头（右侧），分支上下交替斜插在主骨上，
-/// 每个分支下面写着引用统计和引用的原话；没有原文依据的分支画成红色。
-pub fn excalidraw(spec: &Spec, grounds: &[Grounding], lang: Lang) -> Value {
+/// 导出仅包含标题和说明；没有原文依据的分支画成红色。
+pub fn excalidraw(spec: &Spec, grounds: &[Grounding], _lang: Lang) -> Value {
     const COL: f64 = 300.0; // 每对分支占的宽度
     const RISE: f64 = 150.0; // 斜骨的高度
     const SLANT: f64 = 110.0;
@@ -272,15 +264,10 @@ pub fn excalidraw(spec: &Spec, grounds: &[Grounding], lang: Lang) -> Value {
         let tip = (attach.0 - SLANT, if up { -RISE } else { RISE });
         c.line(tip, attach, color(g.level), 2.0);
 
-        // 文字块：标题、补充、引用统计、原话
+        // 导出仅保留标题和补充说明
         let mut parts: Vec<(String, f64, &str)> = vec![(wrap(&b.title, 20.0, TEXT_W), 20.0, color(g.level))];
         if !b.detail.is_empty() {
             parts.push((wrap(&b.detail, 14.0, TEXT_W), 14.0, MUTED));
-        }
-        parts.push((g.label(lang), 13.0, color(g.level)));
-        for q in g.quotes.iter().take(3) {
-            let s = format!("{} {}{}{}", fmt_ms(q.ms), q.speaker, lang.pick("：", ": "), clip(&q.text, 28));
-            parts.push((wrap(&s, 12.0, TEXT_W), 12.0, MUTED));
         }
         let gap = 6.0;
         let height: f64 = parts.iter().map(|(s, size, _)| s.lines().count() as f64 * size * 1.25 + gap).sum();
@@ -359,11 +346,11 @@ mod tests {
         let els = d["elements"].as_array().unwrap();
         let texts: Vec<&str> = els.iter().filter_map(|e| e["text"].as_str()).collect();
         assert!(texts.contains(&"为什么延期？"));
-        assert!(texts.contains(&"无原文依据"));
-        assert!(texts.iter().any(|t| t.starts_with("00:09 小张：")));
+        assert!(!texts.contains(&"无原文依据"));
+        assert!(!texts.iter().any(|t| t.starts_with("00:09 小张：")));
         // 无依据的分支画红色
         let red = els.iter().filter(|e| e["strokeColor"] == "#e03131").count();
-        assert!(red >= 3);
+        assert!(red >= 2);
         let ids: std::collections::HashSet<_> = els.iter().map(|e| e["id"].as_str().unwrap()).collect();
         assert_eq!(ids.len(), els.len());
         let md = excalidraw_md(&d);
@@ -383,8 +370,8 @@ mod tests {
         let g: Vec<_> = spec.branches.iter().map(|b| ground(b, &t, 52000)).collect();
         let d = excalidraw(&spec, &g, Lang::En);
         let texts: Vec<&str> = d["elements"].as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
-        assert!(texts.contains(&"No evidence"));
-        assert!(texts.iter().any(|t| t.starts_with("00:09 小张: ")));
+        assert!(!texts.contains(&"No evidence"));
+        assert!(!texts.iter().any(|t| t.starts_with("00:09 小张: ")));
     }
 
     #[test]

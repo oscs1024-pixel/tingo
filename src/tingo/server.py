@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, config, i18n, meetings, terms
+from . import __version__, config, i18n, meetings, minutes_history, terms
 from .log import get as get_logger
 from .meetings import AUDIO, MINUTES, TRANSCRIPT_JSON
 from .summarize import anthropic_models, is_ollama
@@ -464,7 +464,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             on_think=on_think,
             language=cfg.minutes_language,
         )
-        (out / MINUTES).write_text(text, encoding="utf-8")
+        minutes_history.save(out, text)
         job.minutes = text
         log.info("%s 纪要完成：模型 %s，%.0f 秒", out.name, cfg.llm.model, time.time() - t)
         if cfg.obsidian.auto and cfg.obsidian.vault.strip():
@@ -963,7 +963,21 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.put("/api/meetings/{meeting_id}/minutes")
     def put_minutes(meeting_id: str, req: MinutesRequest) -> dict:
         path = folder(meeting_id)
-        (path / MINUTES).write_text(req.text.rstrip() + "\n", encoding="utf-8")
+        minutes_history.save(path, req.text.rstrip() + "\n")
+        return {"ok": True}
+
+    @app.get("/api/meetings/{meeting_id}/minutes/history")
+    def get_minutes_history(meeting_id: str) -> dict:
+        return {"versions": minutes_history.versions(folder(meeting_id))}
+
+    @app.delete("/api/meetings/{meeting_id}/minutes/history/{version}")
+    def delete_minutes_history(meeting_id: str, version: str) -> dict:
+        try:
+            minutes_history.delete(folder(meeting_id), version)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except FileNotFoundError as e:
+            raise HTTPException(404, "Version not found") from e
         return {"ok": True}
 
     @app.post("/api/meetings/{meeting_id}/summarize")

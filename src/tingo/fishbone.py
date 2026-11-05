@@ -218,7 +218,7 @@ class _Canvas:
 
 def excalidraw(spec: Spec, grounds: list[Grounding], en: bool = False) -> dict:
     """画一张经典鱼骨图：主骨水平，问题在鱼头（右侧），分支上下交替斜插在主骨上，
-    每个分支下面写着引用统计和引用的原话；没有原文依据的分支画成红色。en：纪要是英文的。"""
+    导出仅保留标题和说明；没有原文依据的分支画成红色。en：纪要是英文的。"""
     col_w, rise, slant, text_w = 300.0, 150.0, 110.0, 270.0  # 每对分支占的宽度、斜骨高度
     c = _Canvas()
     cols = float(max(math.ceil(len(spec.branches) / 2), 1))
@@ -231,14 +231,10 @@ def excalidraw(spec: Spec, grounds: list[Grounding], en: bool = False) -> dict:
         tip = (attach[0] - slant, -rise if up else rise)
         c.line(tip, attach, color, 2.0)
 
-        # 文字块：标题、补充、引用统计、原话
+        # 导出仅保留标题和补充说明
         parts = [(_wrap(b.title, 20.0, text_w), 20.0, color)]
         if b.detail:
             parts.append((_wrap(b.detail, 14.0, text_w), 14.0, MUTED))
-        parts.append((g.label(en), 13.0, color))
-        sep = ": " if en else "："
-        for q in g.quotes[:3]:
-            parts.append((_wrap(f"{fmt_ms(q.ms)} {q.speaker}{sep}{_clip(q.text, 28)}", 12.0, text_w), 12.0, MUTED))
         gap = 6.0
         height = sum(len(_lines(s)) * size * 1.25 + gap for s, size, _ in parts)
         x = tip[0] - 40.0
