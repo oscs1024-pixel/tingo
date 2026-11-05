@@ -65,6 +65,10 @@ pub struct Exported {
 }
 
 pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
+    export_version(cfg, dir, None)
+}
+
+pub fn export_version(cfg: &ObsidianConfig, dir: &Path, version: Option<&str>) -> Result<Exported, String> {
     let vault = PathBuf::from(cfg.vault.trim());
     if cfg.vault.trim().is_empty() || !vault.is_dir() {
         return Err(tr(
@@ -73,7 +77,7 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
         )
         .into());
     }
-    let minutes = std::fs::read_to_string(dir.join(MINUTES))
+    let minutes = if let Some(id) = version { crate::minutes_history::read(dir, id).map(|v| v.text) } else { std::fs::read_to_string(dir.join(MINUTES)) }
         .map_err(|_| tr("这场会议还没有纪要", "This meeting has no minutes yet").to_string())?;
     // 术语表只给搜索用，笔记里不要
     let minutes = crate::terms::strip(&minutes);
@@ -84,7 +88,8 @@ pub fn export(cfg: &ObsidianConfig, dir: &Path) -> Result<Exported, String> {
     let date = meetings::meeting_date(dir);
     // 用会议文件夹的标题命名（重新生成纪要标题会变，文件名不跟着变，避免同一场会出现多篇）
     let topic = id.splitn(3, '_').nth(2).unwrap_or(&id);
-    let name = safe_name(&format!("{} {}", date.format("%Y-%m-%d"), topic));
+    let suffix = version.map(|v| format!("-history-{v}")).unwrap_or_default();
+    let name = safe_name(&format!("{} {}{suffix}", date.format("%Y-%m-%d"), topic));
     let folder = vault.join(cfg.folder.trim().trim_matches('/'));
     std::fs::create_dir_all(&folder).map_err(|e| {
         let f = folder.display();
@@ -191,6 +196,15 @@ mod tests {
         assert!(!note.contains("```fishbone") && !note.contains("```terms")); // 术语表不进笔记
         assert!(out.drawings[0].ends_with("2026-11-02 发布评审 鱼骨图.excalidraw.md"));
         assert_eq!(uri(Path::new("/a b/会")), "obsidian://open?path=/a%20b/%E4%BC%9A");
+        let old_note = note.clone();
+        crate::minutes_history::save(&dir, "# 最新纪要\n新的内容").unwrap();
+        let versions = crate::minutes_history::list(&dir).unwrap();
+        let current = export(&cfg, &dir).unwrap();
+        let historical = export_version(&cfg, &dir, Some(&versions[0].id)).unwrap();
+        assert_ne!(current.note, historical.note);
+        assert!(std::fs::read_to_string(&current.note).unwrap().contains("最新纪要"));
+        assert_eq!(std::fs::read_to_string(&historical.note).unwrap().replace(&format!("-history-{}", versions[0].id), ""), old_note);
+        assert!(export_version(&cfg, &dir, Some("999")).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -1053,9 +1053,23 @@ async fn post_process(
     Ok(Json(job))
 }
 
+#[derive(Deserialize, Default)]
+struct VersionQuery { version: Option<String> }
+impl VersionQuery {
+    fn minutes(&self, dir: &Path) -> ApiResult<String> {
+        match &self.version {
+            Some(id) => crate::minutes_history::read(dir, id).map(|v| v.text)
+                .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string())),
+            None => std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes())),
+        }
+    }
+    fn suffix(&self) -> String { self.version.as_ref().map(|v| format!("-history-{v}")).unwrap_or_default() }
+}
+
 async fn post_push(
     State(s): State<Shared>,
     UrlPath(id): UrlPath<String>,
+    Query(version): Query<VersionQuery>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
     let cfg = s.config();
@@ -1065,7 +1079,7 @@ async fn post_push(
             "No group bot webhook configured yet. Add one in Settings",
         )));
     }
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes()))?;
+    let minutes = version.minutes(&dir)?;
     let platform = tokio::task::spawn_blocking(move || {
         push::send(&cfg.webhook, &minutes, &cfg.webhook_secret)
     })
@@ -1092,11 +1106,13 @@ struct OpenReq {
 async fn post_obsidian(
     State(s): State<Shared>,
     UrlPath(id): UrlPath<String>,
+    Query(version): Query<VersionQuery>,
     body: Option<Json<OpenReq>>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
+    version.minutes(&dir)?;
     let cfg = s.config().obsidian;
-    let out = tokio::task::spawn_blocking(move || obsidian::export(&cfg, &dir))
+    let out = tokio::task::spawn_blocking(move || obsidian::export_version(&cfg, &dir, version.version.as_deref()))
         .await
         .map_err(|e| bad(e.to_string()))?
         .map_err(bad)?;
@@ -1156,12 +1172,13 @@ struct PdfReq {
 async fn post_pdf(
     State(s): State<Shared>,
     UrlPath(id): UrlPath<String>,
+    Query(version): Query<VersionQuery>,
     Json(r): Json<PdfReq>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    let minutes = std::fs::read_to_string(dir.join(MINUTES)).map_err(|_| bad(no_minutes()))?;
+    let minutes = version.minutes(&dir)?;
     let title = meetings::minutes_title(&minutes).unwrap_or_else(|| id.splitn(3, '_').nth(2).unwrap_or(&id).to_string());
-    let out = dir.join(format!("{}.pdf", obsidian::safe_name(&title)));
+    let out = dir.join(format!("{}{}.pdf", obsidian::safe_name(&title), version.suffix()));
     let bin = s.opt.recorder_bin.clone();
     let target = out.clone();
     tokio::task::spawn_blocking(move || record::html_to_pdf(&bin, &r.html, &target))
@@ -1198,10 +1215,15 @@ async fn post_srt(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiR
 async fn post_docx(
     State(s): State<Shared>,
     UrlPath(id): UrlPath<String>,
+    Query(version): Query<VersionQuery>,
     Json(r): Json<PdfReq>,
 ) -> ApiResult<Json<Value>> {
     let dir = s.folder(&id)?;
-    let out = dir.join(format!("{}.docx", export_stem(&dir, &id)));
+    let stem = if version.version.is_some() {
+        let minutes = version.minutes(&dir)?;
+        obsidian::safe_name(&meetings::minutes_title(&minutes).unwrap_or_else(|| id.clone()))
+    } else { export_stem(&dir, &id) };
+    let out = dir.join(format!("{}{}.docx", stem, version.suffix()));
     let target = out.clone();
     tokio::task::spawn_blocking(move || record::html_to_docx(&r.html, &target))
         .await

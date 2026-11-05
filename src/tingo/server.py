@@ -1014,8 +1014,26 @@ def create_app(root: Path | None = None) -> FastAPI:
         threading.Thread(target=run_process, args=(job, audio, path, []), daemon=True).start()
         return reply
 
+    def selected_minutes(path: Path, version: str | None) -> str:
+        try:
+            return (
+                minutes_history.read(path, version)["text"]
+                if version is not None
+                else (path / MINUTES).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as e:
+            raise HTTPException(404, "Minutes version not found") from e
+
+    def version_stem(path: Path, version: str | None) -> str:
+        if version is None:
+            return export_stem(path)
+        from .obsidian import safe_name
+
+        text = selected_minutes(path, version)
+        return safe_name(meetings.minutes_title(text) or path.name) + f"-history-{version}"
+
     @app.post("/api/meetings/{meeting_id}/push")
-    def post_push(meeting_id: str) -> dict:
+    def post_push(meeting_id: str, version: str | None = None) -> dict:
         from .push import detect, send
 
         path = folder(meeting_id)
@@ -1029,8 +1047,9 @@ def create_app(root: Path | None = None) -> FastAPI:
             )
         if not (path / MINUTES).exists():
             raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
+        text = selected_minutes(path, version)
         try:
-            send(cfg.webhook, (path / MINUTES).read_text(encoding="utf-8"), cfg.webhook_secret)
+            send(cfg.webhook, text, cfg.webhook_secret)
         except Exception as e:
             raise HTTPException(502, i18n.tr(f"推送失败：{e}", f"Push failed: {e}")) from e
         platform_id = detect(cfg.webhook)
@@ -1052,13 +1071,13 @@ def create_app(root: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/meetings/{meeting_id}/obsidian")
-    def post_obsidian(meeting_id: str, req: OpenRequest | None = None) -> dict:
+    def post_obsidian(meeting_id: str, req: OpenRequest | None = None, version: str | None = None) -> dict:
         """存进 Obsidian；open=true 时顺便用 Obsidian 打开这篇笔记"""
         from . import obsidian
 
         path = folder(meeting_id)
         try:
-            out = obsidian.export(config.load().obsidian, path)
+            out = obsidian.export(config.load().obsidian, path, version)
         except Exception as e:
             raise HTTPException(400, str(e)) from e
         uri = obsidian.uri(out.note)
@@ -1097,14 +1116,14 @@ def create_app(root: Path | None = None) -> FastAPI:
         return {"ok": True, "paths": paths}
 
     @app.post("/api/meetings/{meeting_id}/pdf")
-    def post_pdf(meeting_id: str, req: PdfRequest) -> dict:
+    def post_pdf(meeting_id: str, req: PdfRequest, version: str | None = None) -> dict:
         """导出 PDF：界面排好版的 HTML 交给录音组件，用系统 WebKit 转成 A4 PDF，存进会议文件夹并在访达里选中。"""
         from . import record
 
         path = folder(meeting_id)
         if not (path / MINUTES).exists():
             raise HTTPException(400, i18n.tr("还没有纪要", "No minutes yet"))
-        out = path / f"{export_stem(path)}.pdf"
+        out = path / f"{version_stem(path, version)}.pdf"
         try:
             record.html_to_pdf(req.html, out)
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
@@ -1131,12 +1150,12 @@ def create_app(root: Path | None = None) -> FastAPI:
         return {"ok": True, "path": str(out)}
 
     @app.post("/api/meetings/{meeting_id}/docx")
-    def post_docx(meeting_id: str, req: PdfRequest) -> dict:
+    def post_docx(meeting_id: str, req: PdfRequest, version: str | None = None) -> dict:
         """导出 Word：界面排好版的 HTML 交给 macOS 自带的 textutil 转成 .docx，存进会议文件夹并在访达里选中。"""
         path = folder(meeting_id)
         if not Path(TEXTUTIL).exists():
             raise HTTPException(500, i18n.tr("导出 Word 只支持 macOS", "Word export is only available on macOS"))
-        out = path / f"{export_stem(path)}.docx"
+        out = path / f"{version_stem(path, version)}.docx"
         try:
             out.unlink(missing_ok=True)
             with tempfile.TemporaryDirectory(prefix="tingo-docx-") as tmp:

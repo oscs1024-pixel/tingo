@@ -726,3 +726,8 @@ a.tag-chip.sm:hover { color: var(--blue); }
   .history-content { border-left: 0; border-top: 1px solid var(--line); }
   .history-preview { padding: 16px; }
 }
+
+.history-export summary { list-style: none; cursor: pointer; }
+.history-export summary::-webkit-details-marker { display: none; }
+.history-export .menu { top: auto; bottom: calc(100% + 8px); max-height: min(420px, 65dvh); overflow-y: auto; }
+.modal-foot:has(.history-export) #historyMessage { flex-basis: 100%; }

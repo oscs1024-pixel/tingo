@@ -29,6 +29,10 @@ fn version_path(dir: &Path, id: &str) -> io::Result<std::path::PathBuf> {
     }
     Ok(dir.join(HISTORY).join(format!("{id}.json")))
 }
+pub fn read(dir: &Path, id: &str) -> io::Result<Version> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(serde_json::from_slice(&fs::read(version_path(dir, id)?)?)?)
+}
 pub fn save(dir: &Path, text: &str) -> io::Result<()> {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let current = dir.join(MINUTES);

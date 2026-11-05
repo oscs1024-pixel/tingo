@@ -1023,3 +1023,35 @@ def test_minutes_history_archive_failure_preserves_current(tmp_path):
         minutes_history.save(tmp_path, "新文")
     assert (tmp_path / "纪要.md").read_text() == "原文"
     assert not (tmp_path / ".minutes-new.tmp").exists()
+
+
+def test_history_exports_and_push_use_selected_version(client, root, opened, tmp_path, monkeypatch):
+    from tingo import config, record
+
+    path = root / MID
+    old = (path / "纪要.md").read_text()
+    client.put(f"/api/meetings/{MID}/minutes", json={"text": "# 当前新版\n新内容"})
+    version = client.get(f"/api/meetings/{MID}/minutes/history").json()["versions"][0]["id"]
+    base = f"/api/meetings/{MID}"
+    cfg = config.load()
+    cfg.webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+    cfg.obsidian.vault = str(tmp_path / "vault")
+    Path(cfg.obsidian.vault).mkdir()
+    config.save(cfg)
+    sent = []
+    monkeypatch.setattr("tingo.push.send", lambda webhook, text, secret: sent.append(text))
+    assert client.post(base + f"/push?version={version}").status_code == 200
+    assert sent == [old]
+    assert client.post(base + "/push?version=999").status_code == 404
+    assert sent == [old]
+    monkeypatch.setattr(record, "html_to_pdf", lambda html, out: out.write_text(html))
+    pdf = client.post(base + f"/pdf?version={version}", json={"html": "old pdf"}).json()
+    assert f"-history-{version}.pdf" in pdf["path"]
+    assert Path(pdf["path"]).read_text() == "old pdf"
+    assert client.post(base + "/pdf?version=bad", json={"html": "bad"}).status_code == 404
+    current_note = client.post(base + "/obsidian").json()["path"]
+    old_note = client.post(base + f"/obsidian?version={version}").json()["path"]
+    assert current_note != old_note and f"-history-{version}" in old_note
+    assert "当前新版" in Path(current_note).read_text()
+    assert "定了上线时间" in Path(old_note).read_text()
+    assert "当前新版" in (path / "纪要.md").read_text()

@@ -50,3 +50,8 @@ def versions(folder: Path) -> list[dict]:
 def delete(folder: Path, version: str) -> None:
     with _LOCK:
         _path(folder, version).unlink()
+
+
+def read(folder: Path, version: str) -> dict:
+    with _LOCK:
+        return json.loads(_path(folder, version).read_text(encoding="utf-8"))

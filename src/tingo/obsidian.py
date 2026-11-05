@@ -10,7 +10,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import fishbone, meetings, terms
+from . import fishbone, meetings, minutes_history, terms
 from .config import ObsidianConfig
 from .fishbone import fmt_ms
 from .i18n import doc_is_en
@@ -73,7 +73,7 @@ class Exported:
     drawings: list[Path] = field(default_factory=list)
 
 
-def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
+def export(cfg: ObsidianConfig, meeting_dir: Path, version: str | None = None) -> Exported:
     vault = Path(cfg.vault.strip())
     if not cfg.vault.strip() or not vault.is_dir():
         raise ExportError(
@@ -83,7 +83,11 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
             )
         )
     try:
-        minutes = terms.remove((meeting_dir / MINUTES).read_text(encoding="utf-8"))  # 术语表不进笔记
+        minutes = terms.remove(
+            minutes_history.read(meeting_dir, version)["text"]
+            if version is not None
+            else (meeting_dir / MINUTES).read_text(encoding="utf-8")
+        )  # 术语表不进笔记
     except OSError:
         raise ExportError(_t("这场会议还没有纪要", "This meeting has no minutes yet")) from None
     try:
@@ -95,7 +99,8 @@ def export(cfg: ObsidianConfig, meeting_dir: Path) -> Exported:
     # 用会议文件夹的标题命名（重新生成纪要标题会变，文件名不跟着变，避免同一场会出现多篇）
     parts = meeting_id.split("_", 2)
     topic = parts[2] if len(parts) == 3 else meeting_id
-    name = safe_name(f"{date} {topic}")
+    suffix = f"-history-{version}" if version is not None else ""
+    name = safe_name(f"{date} {topic}{suffix}")
     folder = vault / cfg.folder.strip().strip("/")
     try:
         folder.mkdir(parents=True, exist_ok=True)

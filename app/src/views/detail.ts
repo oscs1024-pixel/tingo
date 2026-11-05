@@ -106,11 +106,7 @@ export async function renderDetail(id: string, keepTab = false, at?: number): Pr
             d.minutes
               ? `<div class="menu-wrap"><button class="btn" id="aExport">${ICON.download}${t("导出", "Export")}${ICON.chevron}</button>
                   <div class="menu" id="exportMenu" hidden>
-                    <button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
-                    <button data-act="docx">${ICON.edit}<span><b>${t("导出 Word", "Export Word")}</b><small>${t("可以接着改的 .docx", "An editable .docx")}</small></span></button>
-                    <button data-act="srt">${ICON.play}<span><b>${t("导出 SRT 字幕", "Export SRT subtitles")}</b><small>${t("带说话人的逐句字幕", "Line-by-line subtitles with speakers")}</small></span></button>
-                    <button data-act="obsidian">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
-                    <button data-act="copy">${ICON.copy}<span><b>${t("复制为 Markdown", "Copy as Markdown")}</b><small>${t("粘贴到文档、邮件里", "Paste into docs or email")}</small></span></button>
+                    ${exportMenuItems()}
                   </div></div><button class="btn" id="aPush">${ICON.send}${t("推送到群", "Share to chat")}</button>`
               : ""
           }
@@ -426,18 +422,60 @@ async function showMinutesHistory(): Promise<void> {
         <nav class="history-sidebar" aria-label="${t("历史版本", "Version history")}"><div class="history-list-label">${t("已保存的版本", "Saved versions")}</div><div id="historyList"></div></nav>
         <section class="history-content"><div class="history-preview-head"><span id="historyDate"></span><span class="history-readonly">${t("只读预览", "Read-only")}</span></div><div id="historyPreview" class="md history-preview"></div></section>
       </div>
-      <div class="modal-foot"><span class="test-msg" id="historyMessage" role="status"></span><button class="btn" id="historyDelete">${t("删除此版本", "Delete this version")}</button><button class="btn" data-close>${t("关闭", "Close")}</button></div>`);
+      <div class="modal-foot"><span class="test-msg" id="historyMessage" role="status"></span><button class="btn" id="historyDelete">${t("删除此版本", "Delete this version")}</button><details class="menu-wrap history-export" id="historyExport"><summary class="btn">${ICON.download}${t("导出", "Export")}${ICON.chevron}</summary><div class="menu">${exportMenuItems()}</div></details><button class="btn" id="historyPush">${ICON.send}${t("推送到群", "Share to chat")}</button><button class="btn" data-close>${t("关闭", "Close")}</button></div>`);
     const list = $("#historyList");
     let selected: string | undefined = versions[0]?.id;
     let deleting = false;
     const preview = $("#historyPreview");
     const remove = $<HTMLButtonElement>("#historyDelete");
     const message = $("#historyMessage");
+    const exportMenu = $<HTMLDetailsElement>("#historyExport");
+    const push = $<HTMLButtonElement>("#historyPush");
+    const setBusy = (busy: boolean) => {
+      deleting = busy;
+      remove.disabled = busy;
+      push.disabled = busy;
+      $$<HTMLButtonElement>(".history-version", list).forEach(button => button.disabled = busy);
+      $$<HTMLButtonElement>("button", exportMenu).forEach(button => button.disabled = busy);
+    };
+    const act = async (action: string) => {
+      const version = versions.find(v => v.id === selected);
+      exportMenu.open = false;
+      if (!version || deleting) return;
+      const snapshot = { ...d, minutes: version.text };
+      const suffix = `?version=${encodeURIComponent(version.id)}`;
+      setBusy(true);
+      message.textContent = t("正在处理所选版本…", "Processing selected version…");
+      try {
+        if (action === "copy") {
+          await copyText(fishboneToText(version.text));
+        } else {
+          const path = action === "srt" ? "/srt" : `/${action}${suffix}`;
+          const json = action === "pdf" ? { html: minutesDocument(snapshot) }
+            : action === "docx" ? { html: wordDocument(snapshot) }
+            : action === "obsidian" ? { open: true } : undefined;
+          const result = await api<{ path?: string; message?: string }>(meetingPath(d.id, path), { method: "POST", json });
+          if (result.path) toast(t(`已导出 ${result.path.split("/").pop()}`, `Exported ${result.path.split("/").pop()}`));
+          if (result.message) toast(result.message);
+        }
+        message.textContent = t("已完成", "Done");
+      } catch (e) {
+        message.textContent = errorMessage(e);
+      } finally {
+        setBusy(false);
+      }
+    };
+    $$<HTMLButtonElement>("button[data-act]", exportMenu).forEach(button => button.onclick = () => act(button.dataset.act!));
+    push.onclick = () => act("push");
+    $('[data-act="srt"] small', exportMenu).textContent = t("整场会议的转写，不随纪要版本变化", "Meeting transcript, shared across minutes versions");
     let confirming = false;
     const draw = () => {
       confirming = false;
       remove.textContent = t("删除此版本", "Delete this version");
       remove.hidden = !versions.length;
+      exportMenu.hidden = !versions.length;
+      exportMenu.open = false;
+      push.hidden = !versions.length;
       const version = versions.find(v => v.id === selected);
       $("#historyDate").textContent = version ? new Date(version.saved_at).toLocaleString() : t("暂无历史", "No history");
       $$<HTMLButtonElement>(".history-version", list).forEach(button => {
@@ -471,9 +509,7 @@ async function showMinutesHistory(): Promise<void> {
       }
       const id = selected;
       if (!id) return;
-      remove.disabled = true;
-      deleting = true;
-      $$<HTMLButtonElement>(".history-version", list).forEach(button => button.disabled = true);
+      setBusy(true);
       try {
         await api(meetingPath(d.id, `/minutes/history/${encodeURIComponent(id)}`), { method: "DELETE" });
         versions = versions.filter(v => v.id !== id);
@@ -482,9 +518,7 @@ async function showMinutesHistory(): Promise<void> {
       } catch (e) {
         message.textContent = errorMessage(e);
       } finally {
-        remove.disabled = false;
-        deleting = false;
-        $$<HTMLButtonElement>(".history-version", list).forEach(button => button.disabled = false);
+        setBusy(false);
       }
     };
     options();
@@ -571,6 +605,14 @@ function bindMoreMenu(d: MeetingDetail): void {
       toast(errorMessage(e), true);
     }
   });
+}
+
+function exportMenuItems(): string {
+  return `<button data-act="pdf">${ICON.file}<span><b>${t("导出 PDF", "Export PDF")}</b><small>${t("A4 排版，存进会议文件夹", "A4 layout, saved in the meeting folder")}</small></span></button>
+                    <button data-act="docx">${ICON.edit}<span><b>${t("导出 Word", "Export Word")}</b><small>${t("可以接着改的 .docx", "An editable .docx")}</small></span></button>
+                    <button data-act="srt">${ICON.play}<span><b>${t("导出 SRT 字幕", "Export SRT subtitles")}</b><small>${t("带说话人的逐句字幕", "Line-by-line subtitles with speakers")}</small></span></button>
+                    <button data-act="obsidian">${ICON.vault}<span><b>${t("存到 Obsidian", "Save to Obsidian")}</b><small>${t("存进笔记库并打开", "Save to your vault and open it")}</small></span></button>
+                    <button data-act="copy">${ICON.copy}<span><b>${t("复制为 Markdown", "Copy as Markdown")}</b><small>${t("粘贴到文档、邮件里", "Paste into docs or email")}</small></span></button>`;
 }
 
 function bindExportMenu(d: MeetingDetail): void {
