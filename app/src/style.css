@@ -272,8 +272,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .s-note { font-size: 12.5px; color: var(--muted); padding: 4px 8px; }
 .turn.found { background: #fff7d6; border-radius: 10px; transition: background 0.6s; }
 .sp-guess { display: flex; align-items: center; gap: 10px; margin: 12px 0 4px; flex-wrap: wrap; }
-.sp-row { flex-wrap: wrap; }
-.sp-ev { flex-basis: 100%; padding-left: 44px; font-size: 11.5px; color: var(--muted); margin-top: -2px; }
+.sp-ev { grid-column: 2; min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; color: var(--muted); margin-top: -2px; }
 .terms { margin: 22px 0 4px; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 12px; }
 .terms-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }
 .terms-head b { font-weight: 600; color: var(--muted); }
@@ -670,7 +669,7 @@ a.tag-chip.sm:hover { color: var(--blue); }
 .modal-body h3 { margin: 0 0 4px; font-size: 18px; font-weight: 500; }
 .modal-body .hint { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
-.sp-row { display: grid; grid-template-columns: 26px 1fr; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sp-row { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 10px; margin-bottom: 10px; }
 .sp-row .av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 600; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
