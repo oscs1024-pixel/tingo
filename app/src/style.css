@@ -664,11 +664,11 @@ a.tag-chip.sm:hover { color: var(--blue); }
 
 .modal { position: fixed; inset: 0; background: rgba(15, 18, 30, 0.28); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 40; animation: fade 0.2s; }
 .modal[hidden] { display: none; }
-.modal-card { width: min(460px, 92vw); background: var(--card); border-radius: 20px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.35); animation: pop 0.25s var(--ease); }
-.modal-body { padding: 24px; }
+.modal-card { width: min(460px, 92vw); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; background: var(--card); border-radius: 20px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.35); animation: pop 0.25s var(--ease); }
+.modal-body { padding: 24px; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .modal-body h3 { margin: 0 0 4px; font-size: 18px; font-weight: 500; }
 .modal-body .hint { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.modal-foot { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 24px 24px; background: var(--card); border-top: 1px solid var(--line); }
 .sp-row { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 10px; margin-bottom: 10px; }
 .sp-row .av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 600; }
 @keyframes fade { from { opacity: 0; } }

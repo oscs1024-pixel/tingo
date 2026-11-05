@@ -83,7 +83,14 @@ export function toast(msg: string, error = false): void {
 export const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export function openModal(html: string): void {
-  $("#modalBody").innerHTML = html;
+  const body = $("#modalBody");
+  const card = body.parentElement!;
+  card.querySelector(":scope > .modal-foot")?.remove();
+  body.innerHTML = html;
+  // Keep actions outside the scrolling content, including when AI adds long evidence.
+  const footer = body.querySelector(".modal-foot");
+  if (footer) card.append(footer);
+  body.scrollTop = 0;
   $("#modal").hidden = false;
   $$("[data-close]", $("#modal")).forEach((b) => (b.onclick = closeModal));
   $maybe<HTMLInputElement>("#modalBody input")?.focus();
