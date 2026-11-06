@@ -28,14 +28,14 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 > The meetings, names and numbers in the screenshots are fictional demo data.
 
-## v0.5.0: signed and notarized
+## v0.5.1: choose your meeting folder
 
-- Official DMGs are signed with Apple Developer ID, notarized by Apple, and include a stapled ticket. Drag Tingo into Applications; no manual signing or quarantine-removal commands.
-- Previous minutes are retained on regeneration and edits. Browse, delete, export, copy or share a selected version.
-- Cleaner exports preserve fishbone content without evidence details; PDF and Word omit the names & terms appendix.
-- AI speaker-name suggestions show elapsed time and preserve names you have already entered.
+- Choose a meeting folder in **Settings → Storage** using the system folder picker. Changes take effect without restarting.
+- Copy recordings, transcripts, minutes and history with progress and file verification before switching. Original files are kept.
+- Copying requires an empty destination and no active tasks. You can also switch without copying, then switch back to the original library. Speech models stay in place.
+- Official DMGs remain Developer ID-signed and Apple-notarized. Drag Tingo into Applications to install.
 
-[Download v0.5.0](https://github.com/tancheng33/tingo/releases/tag/v0.5.0). Upgrading preserves meetings, history and settings.
+[Download v0.5.1](https://github.com/tancheng33/tingo/releases/tag/v0.5.1). Upgrading preserves meetings, history and settings.
 
 ## Highlights
 
@@ -57,7 +57,7 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 **Minutes history.** Regeneration and manual edits preserve the previous minutes; failed generation leaves the current version intact. Choose a version in the history browser to preview, export, copy or share it. Historical PDF, Word and Obsidian exports use separate filenames; SRT always uses the meeting transcript. Deleting a historical version is permanent and leaves current minutes unchanged. Previously overwritten content cannot be recovered.
 
-**Stay organized.** Tag meetings by project or type and filter the list by tag; archive finished ones (they stay searchable). Select several meetings to tag, archive or delete them at once, and rename any meeting. Deleting meetings and recordings moves them to the Trash, so nothing is lost by accident. Settings → Storage shows what takes space and can drop old recordings (optionally archived ones only) while keeping transcripts and minutes.
+**Stay organized.** Tag meetings by project or type and filter the list by tag; archive finished ones (they stay searchable). Select several meetings to tag, archive or delete them at once, and rename any meeting. Deleting meetings and recordings moves them to the Trash, so nothing is lost by accident. On desktop, **Settings → Storage** also lets you choose a meeting folder without restarting. By default, recordings, transcripts, minutes and history are copied to a new empty folder and verified, with progress shown and originals kept. You can also switch without copying and switch back to view the old library. Finish active tasks before switching; speech models stay in place. Settings → Storage shows what takes space and can drop old recordings (optionally archived ones only) while keeping transcripts and minutes.
 
 **Swappable ASR models.** Paraformer-large (default, fast and accurate for Chinese), SenseVoice (mixed Chinese / English / Japanese / Korean / Cantonese) or Fun-ASR-Nano (most accurate, applies your hotwords during recognition) — downloaded and switched in Settings, all running locally.
 

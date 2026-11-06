@@ -31,6 +31,10 @@ pub fn default_root() -> PathBuf {
     if let Some(p) = crate::config::env_var("ROOT") {
         return PathBuf::from(p);
     }
+    let cfg = crate::config::load(&crate::config::default_path());
+    if !cfg.storage_root.is_empty() {
+        return PathBuf::from(cfg.storage_root);
+    }
     let docs = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default()
