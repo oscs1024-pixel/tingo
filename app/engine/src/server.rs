@@ -158,6 +158,16 @@ impl AppState {
         })
     }
 
+    /// Keep requests from starting new work between the idle check and application restart.
+    pub fn prepare_app_update(self: &Arc<Self>) -> Result<tokio::sync::OwnedRwLockWriteGuard<()>, String> {
+        let guard = self.storage_gate.clone().try_write_owned()
+            .map_err(|_| "正在处理请求或切换目录，请稍后再更新 / Work is in progress; try again shortly".to_string())?;
+        if self.jobs.lock().unwrap().iter().any(Job::busy) {
+            return Err("请先结束录音，并等待转写、纪要及下载任务完成 / Finish recording and wait for active tasks before updating".into());
+        }
+        Ok(guard)
+    }
+
     fn root(&self) -> PathBuf {
         self.root.lock().unwrap().clone()
     }
@@ -1953,20 +1963,30 @@ async fn download_models(State(s): State<Shared>) -> ApiResult<Json<Job>> {
 const UPDATE_TTL: Duration = Duration::from_secs(6 * 3600);
 
 /// 最新 Release；6 小时内查过就用上次的结果
-fn latest_release(s: &AppState) -> Result<update::Release, String> {
+fn latest_release(s: &AppState, force: bool) -> Result<update::Release, String> {
+    latest_release_with(s, force, || update::fetch_latest(&s.opt.version))
+}
+
+fn latest_release_with(s: &AppState, force: bool, fetch: impl FnOnce() -> Result<update::Release, String>) -> Result<update::Release, String> {
     if let Some((at, r)) = s.update.lock().unwrap().as_ref() {
-        if at.elapsed() < UPDATE_TTL {
+        if !force && at.elapsed() < UPDATE_TTL {
             return Ok(r.clone());
         }
     }
-    let r = update::fetch_latest(&s.opt.version)?;
+    let r = fetch()?;
     *s.update.lock().unwrap() = Some((Instant::now(), r.clone()));
     Ok(r)
 }
 
-async fn get_update(State(s): State<Shared>) -> Json<Value> {
+#[derive(Deserialize, Default)]
+struct UpdateQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn get_update(State(s): State<Shared>, Query(query): Query<UpdateQuery>) -> Json<Value> {
     let s2 = s.clone();
-    let r = tokio::task::spawn_blocking(move || latest_release(&s2))
+    let r = tokio::task::spawn_blocking(move || latest_release(&s2, query.force))
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
@@ -1980,7 +2000,7 @@ async fn get_update(State(s): State<Shared>) -> Json<Value> {
 /// 下载新版安装包到「下载」文件夹，校验 sha256 后打开（自动挂载，在访达里显示）
 async fn download_update(State(s): State<Shared>) -> ApiResult<Json<Job>> {
     let s2 = s.clone();
-    let r = tokio::task::spawn_blocking(move || latest_release(&s2))
+    let r = tokio::task::spawn_blocking(move || latest_release(&s2, false))
         .await
         .map_err(|e| bad(e.to_string()))?
         .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
@@ -2101,9 +2121,16 @@ pub async fn serve(
     opt: Options,
     port: u16,
 ) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
+    serve_state(AppState::new(opt), port).await
+}
+
+pub async fn serve_state(
+    state: Arc<AppState>,
+    port: u16,
+) -> std::io::Result<(u16, impl std::future::Future<Output = ()>)> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
-    let app = router(AppState::new(opt));
+    let app = router(state);
     Ok((port, async move {
         let _ = axum::serve(listener, app).await;
     }))
@@ -2146,6 +2173,36 @@ mod tests {
             sample_dir: base.join("sample"),
         });
         (state, root, trash)
+    }
+
+    #[tokio::test]
+    async fn update_install_excludes_active_jobs_and_new_requests() {
+        let (s, root, _) = test_state("install-update");
+        mark_busy(&s, "meeting");
+        assert!(s.prepare_app_update().is_err());
+        s.jobs.lock().unwrap().clear();
+        let read = s.storage_gate.read().await;
+        assert!(s.prepare_app_update().is_err());
+        drop(read);
+        let install = s.prepare_app_update().unwrap();
+        assert!(s.storage_gate.try_read().is_err());
+        assert!(s.prepare_app_update().is_err());
+        drop(install);
+        assert!(s.storage_gate.try_read().is_ok());
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn manual_update_check_bypasses_backend_cache() {
+        let (s, root, _) = test_state("update-cache");
+        let old = update::Release { latest: "0.5.0".into(), ..Default::default() };
+        *s.update.lock().unwrap() = Some((Instant::now(), old.clone()));
+        assert_eq!(latest_release_with(&s, false, || panic!("automatic checks should use cache")).unwrap(), old);
+        let new = update::Release { latest: "0.5.1".into(), ..Default::default() };
+        assert_eq!(latest_release_with(&s, true, || Ok(new.clone())).unwrap(), new);
+        assert_eq!(latest_release_with(&s, false, || panic!("fresh result should be cached")).unwrap(), new);
+        assert!(latest_release_with(&s, true, || Err("offline".into())).is_err());
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

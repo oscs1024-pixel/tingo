@@ -28,14 +28,14 @@ Looking for a **free, open-source, local alternative to Otter.ai, Granola, Firef
 
 > The meetings, names and numbers in the screenshots are fictional demo data.
 
-## v0.5.1: choose your meeting folder
+## v0.5.2: in-app updates
 
-- Choose a meeting folder in **Settings → Storage** using the system folder picker. Changes take effect without restarting.
-- Copy recordings, transcripts, minutes and history with progress and file verification before switching. Original files are kept.
-- Copying requires an empty destination and no active tasks. You can also switch without copying, then switch back to the original library. Speech models stay in place.
-- Official DMGs remain Developer ID-signed and Apple-notarized. Drag Tingo into Applications to install.
+- Download and verify an update, then click **Restart and update** to replace and reopen the app automatically. Meetings, settings and speech models are kept.
+- See download and verification progress, and install later if preferred. Installation waits until recording and other active tasks are finished.
+- Manual update checks now bypass stale backend results.
+- Developer ID-signed and Apple-notarized apps; update packages also carry a signature bound to the release version.
 
-[Download v0.5.1](https://github.com/tancheng33/tingo/releases/tag/v0.5.1). Upgrading preserves meetings, history and settings.
+[Download v0.5.2](https://github.com/tancheng33/tingo/releases/tag/v0.5.2). Users of v0.5.1 and earlier must install this update manually once; later releases can be installed from within v0.5.2. For Apple silicon Macs.
 
 ## Highlights
 

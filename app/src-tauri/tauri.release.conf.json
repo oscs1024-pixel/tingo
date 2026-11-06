@@ -3,6 +3,7 @@
     "macOS": {
       "signingIdentity": "Developer ID Application: Cheng Tan (9YJL5M4BY8)",
       "hardenedRuntime": true
-    }
+    },
+    "createUpdaterArtifacts": true
   }
 }
