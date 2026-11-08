@@ -82,7 +82,8 @@ export interface Job {
   elapsed?: number;
   model_loaded?: boolean;
   levels?: Record<string, number>;
-  live?: { start_ms: number; text: string }[];
+  /** 边录边转最近几句；speaker 是录音中的临时编号（结束后整场重新区分说话人） */
+  live?: { start_ms: number; speaker?: number | null; text: string }[];
   notice?: string;
   /** 推理模型已经思考了多少字 */
   thinking?: number;

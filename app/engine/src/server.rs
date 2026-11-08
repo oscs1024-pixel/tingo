@@ -1572,8 +1572,8 @@ fn stop_recording(s: &Shared, only: Option<&str>, notice: Option<String>, keep_s
         match result {
             Some(Ok((tr, t))) if !tr.sentences.is_empty() => {
                 eprintln!(
-                    "结束录音后转写：剩余 {:.1}s，{} 段，聚类 {:.2}s",
-                    t.tail_s, t.segments, t.cluster_s
+                    "结束录音后转写：剩余 {:.1}s，{} 段，聚类 {:.2}s；边录边转说完到出字平均 {:.1}s、最长 {:.1}s",
+                    t.tail_s, t.segments, t.cluster_s, t.live_lag_avg_s, t.live_lag_max_s
                 );
                 meetings::save_transcript(&tr, &dir).map_err(|e| e.to_string())?;
                 // 合成录音和生成纪要同时进行
@@ -1794,7 +1794,7 @@ fn job_json(s: &AppState, job: &Job) -> Value {
                 .map(|l| {
                     l.recent(8)
                         .into_iter()
-                        .map(|(t, x)| json!({"start_ms": t, "text": x}))
+                        .map(|l| json!({"start_ms": l.start_ms, "speaker": l.speaker, "text": l.text}))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()

@@ -1,9 +1,9 @@
 /* 首页：录音表单 → 录音中（计时、电平、实时文字）→ 结束后立刻回到录音表单，转写和生成纪要在后台进行，
    进度显示在玻璃面板下方和侧边栏。第一次使用时玻璃面板里下载识别模型。另含拖拽导入。 */
 
-import { t } from "../i18n";
+import { speakerName, t } from "../i18n";
 import { api, type Job } from "../api";
-import { $, $$, $maybe, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
+import { $, $$, $maybe, color, errorMessage, esc, fmt, ICON, main, toast } from "../dom";
 import { poll } from "../poll";
 import { isBusy, needsModels, S } from "../state";
 import { dismissJob, renderTasks } from "../tasks";
@@ -83,12 +83,17 @@ function updateRecording(job: Job, aurora: HTMLElement): void {
     : t("正在准备识别模型…", "Preparing the speech model…");
   const lines = job.live ?? [];
   const box = $("#liveLines");
-  const key = lines.map((l) => l.start_ms).join(",");
+  const key = lines.map((l) => `${l.start_ms}:${l.speaker ?? ""}`).join(",");
   if (box.dataset.key !== key) {
     box.dataset.key = key;
     box.innerHTML = lines.length
-      ? lines.map((l) => `<div><span class="lt">${fmt(l.start_ms)}</span>${esc(l.text)}</div>`).join("")
-      : `<div class="lw">${t("说话内容会在这里实时出现（约十几秒一批）", "What people say will appear here live (in batches of ~15 seconds)")}</div>`;
+      ? lines
+          .map((l) => {
+            const who = l.speaker == null ? "" : `<span class="ls" style="--c:${color(l.speaker)}">${esc(speakerName(t(`说话人${l.speaker + 1}`, `Speaker ${l.speaker + 1}`)))}</span>`;
+            return `<div><span class="lt">${fmt(l.start_ms)}</span>${who}${esc(l.text)}</div>`;
+          })
+          .join("")
+      : `<div class="lw">${t("说话内容会在这里实时出现，一句说完一两秒内就能看到", "What people say appears here live, a second or two after each sentence")}</div>`;
     box.scrollTop = box.scrollHeight;
   }
 }
