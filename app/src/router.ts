@@ -2,6 +2,7 @@ import { $$, main } from "./dom";
 import { S } from "./state";
 import { renderDetail, stopAudio } from "./views/detail";
 import { renderHome } from "./views/home";
+import { leaveRecording } from "./views/recording";
 import { renderMeetings } from "./views/meetings";
 import { renderSettings } from "./views/settings";
 import { renderWelcome } from "./views/welcome";
@@ -9,6 +10,7 @@ import { renderWelcome } from "./views/welcome";
 export function route(): void {
   const h = decodeURIComponent(location.hash.slice(1) || "/");
   stopAudio();
+  leaveRecording();
   S.detail = null;
   let nav = "home";
   if (h.startsWith("/m/")) {

@@ -403,6 +403,12 @@ impl LiveTranscriber {
         s.lines[s.lines.len().saturating_sub(n)..].to_vec()
     }
 
+    /// 从第 `from` 句起的全部句子和总句数：界面只取新增的，长会议也不用每次传整场
+    pub fn lines_from(&self, from: usize) -> (Vec<LiveLine>, usize) {
+        let s = self.inner.lock().unwrap();
+        (s.lines[from.min(s.lines.len())..].to_vec(), s.lines.len())
+    }
+
     /// 到目前为止识别出了多少句（有没有新出文字，自动结束录音时用来判断有没有人说话）。
     pub fn line_count(&self) -> usize {
         let s = self.inner.lock().unwrap();

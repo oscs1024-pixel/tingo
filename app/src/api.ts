@@ -55,6 +55,8 @@ export interface MeetingDetail extends MeetingSummary {
   speaker_list: SpeakerInfo[];
   audio: boolean;
   path: string;
+  /** 录音中标记的重点时刻（毫秒） */
+  marks?: number[];
 }
 
 export type JobState =
@@ -79,6 +81,8 @@ export interface Job {
   minutes?: string;
   stage?: string;
   sources?: string[];
+  /** 开始时间（Unix 秒） */
+  started_at?: number;
   elapsed?: number;
   model_loaded?: boolean;
   levels?: Record<string, number>;
