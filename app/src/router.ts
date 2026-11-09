@@ -31,5 +31,6 @@ export function route(): void {
   }
   $$<HTMLAnchorElement>(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.nav === nav));
   $$<HTMLAnchorElement>("#recentList a").forEach((a) => a.classList.toggle("active", h.split("?")[0] === `/m/${a.dataset.id}`));
-  main().scrollTop = 0;
+  if (nav === "settings") main().scrollTo({ top: 0, behavior: "instant" });
+  else main().scrollTop = 0;
 }

@@ -277,7 +277,11 @@ impl LiveState {
         let Some(vad) = &self.vad else { return self.chunker.next_chunk(false) };
         let c = &mut self.chunker;
         let total = c.drained + c.pending.len();
-        for part in c.pending[self.vad_fed.saturating_sub(c.drained).min(c.pending.len())..].chunks(512) {
+        // 静音检测也看放大后的声音：新来的音频连同前面约 1 秒一起算增益，只喂新的部分
+        let new_from = self.vad_fed.saturating_sub(c.drained).min(c.pending.len());
+        let ctx = new_from.saturating_sub(SR);
+        let leveled = crate::audio::agc(&c.pending[ctx..]);
+        for part in leveled[new_from - ctx..].chunks(512) {
             vad.accept_waveform(part);
         }
         self.vad_fed = total;
